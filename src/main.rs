@@ -1,8 +1,10 @@
 use anyhow::Result;
+use argon2::password_hash::SaltString;
 use mcmanager::database::objects::{DbObject, Session, User, World};
 use mcmanager::database::types::{Id, Token};
 use mcmanager::database::{Database, objects};
 use mcmanager::util;
+use rand::rngs::OsRng;
 use std::path::Path;
 
 fn main() -> Result<()> {
@@ -11,7 +13,6 @@ fn main() -> Result<()> {
     let database = Database { conn };
     database.init().expect("Failed to init database");
 
-    
     let miguel = User {
         id: Default::default(),
         name: "MHanak".to_string(),
@@ -24,7 +25,7 @@ fn main() -> Result<()> {
         is_privileged: false,
         enabled: true,
     };
-    
+
     let dingus = User {
         id: Default::default(),
         name: "Dingus".to_string(),
@@ -37,16 +38,16 @@ fn main() -> Result<()> {
         is_privileged: false,
         enabled: true,
     };
-    
+
     database.insert(&miguel)?;
     database.insert(&dingus)?;
-    
+
     let miguel_token = Token::new(4);
     let dingus_token = Token::new(4);
-    
+
     println!("miguel token: {}", miguel_token);
     println!("dingus token: {}", dingus_token);
-    
+
     database.insert(&Session {
         user_id: miguel.id,
         token: miguel_token,
@@ -89,8 +90,7 @@ fn main() -> Result<()> {
     database.insert(&fabric)?;
     database.insert(&forge1122)?;
     database.insert(&fabric1214)?;
-    
-    
+
     database.insert(&World {
         id: Default::default(),
         owner_id: miguel.id,

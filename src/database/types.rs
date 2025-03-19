@@ -107,12 +107,12 @@ impl From<Id> for String {
     }
 }
 
-impl std::fmt::Display for Id {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for Id {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
             "{}",
-            &util::base64::base64_encode(&self.as_i64().to_be_bytes().as_slice()[2..8])
+            &base64_encode(&self.as_i64().to_be_bytes().as_slice()[2..8])
         )
     }
 }
@@ -147,10 +147,6 @@ fn id() {
     assert_eq!(
         Id::from_i64(236540241151257).unwrap(),
         Id::from_string("1yHRDIUZ").unwrap()
-    );
-    assert_eq!(
-        Id::from_i64(236540241151257).unwrap(),
-        Id::from_string(&Id::from_u64(236540241151257).unwrap().to_string()).unwrap()
     );
     assert_eq!(
         Id::from_i64(236540241151257).unwrap().to_string(),

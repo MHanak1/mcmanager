@@ -158,7 +158,7 @@ pub struct User {
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Password {
     pub user_id: Id,
-    pub salt: argon2::password_hash::SaltString,
+    pub salt: SaltString,
     pub hash: String,
 }
 

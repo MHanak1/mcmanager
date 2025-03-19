@@ -10,7 +10,6 @@ edition = "2024"
 [dependencies]
 anyhow = "1.0.97"
 argon2 = "0.5.3"
-base64 = "0.22.1"
 chrono = "0.4.40"
 rand = "0.9.0"
 rusqlite = { version = "0.34.0", features = ["bundled", "chrono"] }
@@ -21,4 +20,3 @@ tokio = { version = "1.44.1", features = ["rt", "rt-multi-thread", "macros"] }
 warp = "0.3.7"
 log = "0.4.26"
 warp-sessions = "1.0.19"
-async-session = "3.0.0"

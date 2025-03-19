@@ -66,7 +66,7 @@ impl Database {
     }
     /*
     pub fn get_page<T: DbObject>(&self, page: u32) -> rusqlite::Result<Vec<T>> {
-        
+
     }
      */
 }
