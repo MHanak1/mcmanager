@@ -486,6 +486,23 @@ impl DbObject for User {
     }
 }
 
+impl Default for User {
+    fn default() -> Self {
+        Self {
+            id: Default::default(),
+            name: "".to_string(),
+            avatar_id: None,
+            memory_limit: None,
+            player_limit: None,
+            world_limit: None,
+            active_world_limit: None,
+            storage_limit: None,
+            is_privileged: false,
+            enabled: true,
+        }
+    }
+}
+
 impl DbObject for Password {
     fn get_id(&self) -> Id {
         self.user_id

@@ -1,3 +1,5 @@
+use anyhow::anyhow;
+use argon2::{Argon2, PasswordHasher};
 use crate::database::objects::DbObject;
 use crate::database::objects::{
     InviteLink, Mod, ModLoader, Password, Session, User, Version, World,
@@ -5,6 +7,8 @@ use crate::database::objects::{
 use crate::database::types::{Id, Token};
 use argon2::password_hash::SaltString;
 use argon2::password_hash::rand_core::OsRng;
+use serde_json::to_string;
+use warp::any;
 
 pub mod objects;
 pub mod types;
@@ -69,6 +73,27 @@ impl Database {
 
     }
      */
+
+    pub fn create_user(&self, username: String, password: String) -> anyhow::Result<User> {
+        println!("username: {}, password: {}", username, password);
+        let user = User {
+            name: username,
+            ..Default::default()
+        };
+        self.insert(&user)?;
+
+        let salt = SaltString::generate(&mut OsRng);
+        let argon = Argon2::default();
+
+        println!("salt: {}", salt);
+        self.insert(&Password {
+            user_id: user.id,
+            hash: argon.hash_password(password.as_bytes(), &salt).unwrap().to_string(),
+            salt,
+        })?;
+
+        Ok(user)
+    }
 }
 
 #[rustfmt::skip]

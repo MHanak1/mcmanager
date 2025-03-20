@@ -1,4 +1,4 @@
-use crate::rejections::InvalidBearerToken;
+use mcmanager::api::util::rejections::InvalidBearerToken;
 use log::error;
 use mcmanager::database::Database;
 use mcmanager::database::objects::{DbObject, Session, User};
@@ -9,6 +9,7 @@ use std::path::Path;
 use std::string::String;
 use std::sync::{Arc, Mutex};
 use warp::{Filter, Rejection};
+use mcmanager::api::util::rejections;
 
 #[tokio::main]
 async fn main() {
@@ -26,6 +27,14 @@ async fn run(database: Database) {
     let db_mutex = Arc::new(Mutex::new(database));
 
     //let header = warp::header::optional::<String>("user_token");
+
+    let login = warp::post()
+        .and(warp::path!("api" / "login"))
+        .and(warp::path::end())
+        .and(with_db(db_mutex.clone()))
+        .and(warp::body::content_length_limit(1024 * 16))
+        .and(warp::body::json())
+        .and_then(api::handlers::user_auth);
 
     let list_mods = warp::get()
         .and(warp::path!("api" / "mods"))
@@ -52,7 +61,10 @@ async fn run(database: Database) {
 
     warp::serve(
         //set_cookie
-        list_mods.or(get_mod).or(list_worlds),
+        login
+            .or(list_mods)
+            .or(get_mod)
+            .or(list_worlds),
     )
     //  .or(set_cookie)
     .run(([127, 0, 0, 1], 3030))
@@ -74,7 +86,6 @@ fn with_bearer_token() -> impl Filter<Extract = (String,), Error = Rejection> + 
         }
     })
 }
-
 fn with_auth(
     database: Arc<Mutex<Database>>,
 ) -> impl Filter<Extract = (User,), Error = Rejection> + Clone {
@@ -130,18 +141,3 @@ fn with_auth(
         })
 }
 
-mod rejections {
-    use warp::reject::Reject;
-
-    #[derive(Debug)]
-    pub struct InternalServerError;
-    impl Reject for InternalServerError {}
-
-    #[derive(Debug)]
-    pub struct InvalidBearerToken;
-    impl Reject for InvalidBearerToken {}
-
-    #[derive(Debug)]
-    pub struct Unauthorized;
-    impl Reject for Unauthorized {}
-}

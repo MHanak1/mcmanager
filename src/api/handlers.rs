@@ -4,6 +4,8 @@ use crate::database::types::Id;
 use log::error;
 use std::sync::{Arc, Mutex};
 use warp::http::StatusCode;
+use crate::api::auth;
+use crate::api::util;
 
 //in theory the user filter should be done within the sql query, but for the sake of simplicity we do that when collecting the results
 pub async fn list_mods(
@@ -104,3 +106,24 @@ pub async fn list_worlds(
         },
     )
 }
+
+pub async fn user_auth(
+    db_mutex: Arc<Mutex<Database>>,
+    credentials: util::data_types::LoginCredentials,
+) -> Result<impl warp::Reply, warp::Rejection> {
+    db_mutex.lock().map_or_else(
+        |_| Err(warp::reject::custom(util::rejections::InternalServerError)),
+        |database| {
+            match auth::try_user_auth(credentials.username, credentials.password, &database) {
+                Ok(session) => {
+                    Ok(warp::reply::with_status(warp::reply::with_header(warp::reply::json(&session.token), "set-cookie", format!("auth={}; Path=/; HttpOnly; Max-Age=1209600", session.token)), StatusCode::OK))
+                }
+                Err(err) => {
+                    Err(warp::reject::custom(util::rejections::Unauthorized))
+                }
+            }
+        }
+
+    )
+}
+

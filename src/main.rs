@@ -1,10 +1,8 @@
 use anyhow::Result;
-use argon2::password_hash::SaltString;
 use mcmanager::database::objects::{DbObject, Session, User, World};
 use mcmanager::database::types::{Id, Token};
 use mcmanager::database::{Database, objects};
 use mcmanager::util;
-use rand::rngs::OsRng;
 use std::path::Path;
 
 fn main() -> Result<()> {
@@ -13,55 +11,8 @@ fn main() -> Result<()> {
     let database = Database { conn };
     database.init().expect("Failed to init database");
 
-    let miguel = User {
-        id: Default::default(),
-        name: "MHanak".to_string(),
-        avatar_id: None,
-        memory_limit: None,
-        player_limit: None,
-        world_limit: None,
-        active_world_limit: None,
-        storage_limit: None,
-        is_privileged: false,
-        enabled: true,
-    };
-
-    let dingus = User {
-        id: Default::default(),
-        name: "Dingus".to_string(),
-        avatar_id: None,
-        memory_limit: None,
-        player_limit: None,
-        world_limit: None,
-        active_world_limit: None,
-        storage_limit: None,
-        is_privileged: false,
-        enabled: true,
-    };
-
-    database.insert(&miguel)?;
-    database.insert(&dingus)?;
-
-    let miguel_token = Token::new(4);
-    let dingus_token = Token::new(4);
-
-    println!("miguel token: {}", miguel_token);
-    println!("dingus token: {}", dingus_token);
-
-    database.insert(&Session {
-        user_id: miguel.id,
-        token: miguel_token,
-        created: Default::default(),
-        expires: false,
-    })?;
-
-    database.insert(&Session {
-        user_id: dingus.id,
-        token: dingus_token,
-        created: Default::default(),
-        expires: false,
-    })?;
-
+    let miguel = database.create_user("MHanak".parse()?, "Password".parse()?)?;
+    
     let forge = objects::ModLoader {
         id: Id::new_random(),
         name: "Forge".to_string(),
@@ -113,7 +64,7 @@ fn main() -> Result<()> {
 
     database.insert(&World {
         id: Default::default(),
-        owner_id: dingus.id,
+        owner_id: miguel.id,
         name: "Dingusland".to_string(),
         icon_id: None,
         allocated_memory: 1,
