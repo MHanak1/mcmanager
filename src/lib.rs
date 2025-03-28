@@ -3,6 +3,7 @@
 pub mod api;
 pub mod database;
 pub mod util;
+pub mod config;
 //man that was a waste of time
 
 /*

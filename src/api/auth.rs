@@ -2,6 +2,7 @@ use crate::database::objects::{DbObject, Password, Session, User};
 use crate::database::types::Token;
 use anyhow::{Result, anyhow};
 use argon2::PasswordHasher;
+use chrono::DateTime;
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use crate::database;
@@ -29,7 +30,7 @@ pub fn try_user_auth(username: String, password: String, database: &Database) ->
     let new_session = Session {
         user_id: user.id,
         token: Token::new(4),
-        created: Default::default(),
+        created: chrono::offset::Utc::now(),
         expires: false,
     };
     

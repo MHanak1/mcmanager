@@ -111,6 +111,7 @@ pub struct Mod {
     pub name: String,
     pub description: String,
     pub icon_id: Option<Id>,
+    pub owner_id: Id,
     pub hidden: bool,
 }
 
@@ -183,8 +184,8 @@ impl DbObject for Mod {
         self.id
     }
 
-    fn is_accessible(&self, _user: &User) -> bool {
-        true
+    fn is_accessible(&self, user: &User) -> bool {
+        user.id == self.owner_id || user.is_privileged
     }
 
     fn from_row(row: &Row) -> rusqlite::Result<Self>
@@ -197,7 +198,8 @@ impl DbObject for Mod {
             name: row.get(2)?,
             description: row.get(3)?,
             icon_id: row.get(4)?,
-            hidden: row.get(5)?,
+            owner_id: row.get(5)?,
+            hidden: row.get(6)?,
         })
     }
 
@@ -214,6 +216,7 @@ impl DbObject for Mod {
             ("name", "TEXT NOT NULL"),
             ("description", "TEXT NOT NULL"),
             ("icon_id", "UNSIGNED BIGINT"),
+            ("owner_id", "UNSIGNED BIGINT NOT NULL REFERENCES users(id)"),
             ("hidden", "BOOLEAN NOT NULL DEFAULT false"),
         ]
     }
@@ -227,6 +230,7 @@ impl DbObject for Mod {
                 self.name,
                 self.description,
                 self.icon_id,
+                self.owner_id,
                 self.hidden,
             ],
         )
@@ -241,6 +245,7 @@ impl DbObject for Mod {
                 self.name,
                 self.description,
                 self.icon_id,
+                self.owner_id,
                 self.hidden,
             ],
         )
@@ -585,11 +590,8 @@ impl DbObject for Session {
 
     fn columns() -> Vec<(&'static str, &'static str)> {
         vec![
-            (
-                "user_id",
-                "UNSIGNED INTEGER PRIMARY KEY REFERENCES users(id)",
-            ),
-            ("token", "TEXT NOT NULL"),
+            ("user_id", "UNSIGNED INTEGER REFERENCES users(id)",),
+            ("token", "TEXT  PRIMARY KEY"),
             ("created", "DATETIME NOT NULL"),
             ("expires", "BOOLEAN NOT NULL DEFAULT TRUE"),
         ]
@@ -645,7 +647,7 @@ impl DbObject for InviteLink {
     fn insert_self(&self, conn: &Connection) -> rusqlite::Result<usize> {
         self.insert_self_with_params(
             conn,
-            params![self.id, self.invite_token, self.creator_id, self.created,],
+            params![self.id, self.invite_token, self.creator_id, self.created],
         )
     }
 

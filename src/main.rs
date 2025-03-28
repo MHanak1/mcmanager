@@ -22,7 +22,7 @@ fn main() -> Result<()> {
     let fabric = objects::ModLoader {
         id: Id::new_random(),
         name: "Fabric".to_string(),
-        can_load_mods: false,
+        can_load_mods: true,
     };
 
     let fabric1214 = objects::Version {
@@ -78,6 +78,7 @@ fn main() -> Result<()> {
         name: "Fabric API".to_string(),
         description: "Lightweight and modular API providing common hooks and intercompatibility measures utilized by mods using the Fabric toolchain.".to_string(),
         icon_id: None,
+        owner_id: miguel.id,
         hidden: false,
     })?;
 
@@ -87,6 +88,7 @@ fn main() -> Result<()> {
         name: "Sodium".to_string(),
         description: "The fastest and most compatible rendering optimization mod for Minecraft. Now available for both NeoForge and Fabric!".to_string(),
         icon_id: None,
+        owner_id: miguel.id,
         hidden: false,
     })?;
 
@@ -96,6 +98,7 @@ fn main() -> Result<()> {
         name: "Cloth Config API".to_string(),
         description: "Configuration Library for Minecraft Mods".to_string(),
         icon_id: None,
+        owner_id: miguel.id,
         hidden: false,
     })?;
 
@@ -105,6 +108,7 @@ fn main() -> Result<()> {
         name: "Iris Shaders".to_string(),
         description: "A modern shader pack loader for Minecraft intended to be compatible with existing OptiFine shader packs".to_string(),
         icon_id: None,
+        owner_id: miguel.id,
         hidden: false,
     })?;
 
@@ -114,6 +118,7 @@ fn main() -> Result<()> {
         name: "Just Enough Items (JEI)".to_string(),
         description: "View Items and Recipes".to_string(),
         icon_id: None,
+        owner_id: miguel.id,
         hidden: false,
     })?;
 
@@ -124,13 +129,14 @@ fn main() -> Result<()> {
         description: "A 3D animation library for entities, blocks, items, armor, and more!"
             .to_string(),
         icon_id: None,
+        owner_id: miguel.id,
         hidden: false,
     };
 
     database.insert(&geckolib)?;
     let mut stmt = database
         .conn
-        .prepare("SELECT id, version_id, name, description, icon_id, hidden FROM mods")?;
+        .prepare("SELECT * FROM mods")?;
     let mods_iter = stmt.query_map([], objects::Mod::from_row)?;
 
     for mcmod in mods_iter {

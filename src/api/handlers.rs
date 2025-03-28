@@ -4,6 +4,7 @@ use crate::database::types::Id;
 use log::error;
 use std::sync::{Arc, Mutex};
 use warp::http::StatusCode;
+use warp::{reject, Rejection};
 use crate::api::auth;
 use crate::api::util;
 
@@ -29,7 +30,7 @@ pub async fn list_mods(
                 Err(err) => {
                     error!("{:?}", err);
                     Ok(warp::reply::with_status(
-                        warp::reply::json(&err.to_string()),
+                        warp::reply::json(&"internal server error".to_string()),
                         StatusCode::INTERNAL_SERVER_ERROR,
                     ))
                 }
@@ -98,7 +99,7 @@ pub async fn list_worlds(
                 Err(err) => {
                     error!("{:?}", err);
                     Ok(warp::reply::with_status(
-                        warp::reply::json(&err.to_string()),
+                        warp::reply::json(&"internal server error".to_string()),
                         StatusCode::INTERNAL_SERVER_ERROR,
                     ))
                 }
@@ -116,14 +117,28 @@ pub async fn user_auth(
         |database| {
             match auth::try_user_auth(credentials.username, credentials.password, &database) {
                 Ok(session) => {
-                    Ok(warp::reply::with_status(warp::reply::with_header(warp::reply::json(&session.token), "set-cookie", format!("auth={}; Path=/; HttpOnly; Max-Age=1209600", session.token)), StatusCode::OK))
+                    Ok(warp::reply::with_status(warp::reply::with_header(warp::reply::json(&session.token), "set-cookie", format!("auth={}; Path=/; HttpOnly; Max-Age=1209600", session.token)), StatusCode::CREATED))
                 }
-                Err(err) => {
-                    Err(warp::reject::custom(util::rejections::Unauthorized))
+                Err(error) => {
+                    match error.downcast_ref::<rusqlite::Error>() {
+                        Some(error) => {
+                            match error {
+                                rusqlite::Error::QueryReturnedNoRows => {
+                                    Err(warp::reject::custom(util::rejections::Unauthorized))
+                                }
+                                _ => {
+                                    println!("Error: {:?}", error);
+                                    Err(warp::reject::custom(util::rejections::InternalServerError))
+                                }
+                            }
+                        }
+                        None => {
+                            Err(warp::reject::custom(util::rejections::Unauthorized))
+                        }
+                    }
                 }
             }
         }
 
     )
 }
-
