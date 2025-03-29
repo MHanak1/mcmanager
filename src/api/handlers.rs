@@ -4,7 +4,6 @@ use crate::database::types::Id;
 use log::error;
 use std::sync::{Arc, Mutex};
 use warp::http::StatusCode;
-use warp::{reject, Rejection};
 use crate::api::auth;
 use crate::api::util;
 

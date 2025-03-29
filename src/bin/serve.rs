@@ -20,6 +20,7 @@ async fn main() {
     run(database).await;
 }
 
+/// This is a piece of shit.
 async fn run(database: Database) {
     // GET /hello/warp => 200 OK with body "Hello, warp!"
     util::dirs::init_dirs().expect("Failed to initialize the data directory");
@@ -119,14 +120,14 @@ fn with_auth(
                                     Ok(user) => Ok(user),
                                     Err(_) => {
                                         error!(
-                                            "Orphaned session found, token: {}, user: {}. deleting",
+                                            "Orphaned session found, token: {}, user: {}. deleting (note: this should never happen because of SQLite foreign key requirement",
                                             session.token, session.user_id
                                         );
                                         match database.remove(&session) {
                                             Ok(_) => {}
                                             Err(error) => {
                                                 error!(
-                                                    "Failed to remove orphaned session: {}",
+                                                    "Failed to remove orphaned session: {}\n(what the fuck)",
                                                     error
                                                 );
                                             }

@@ -1,14 +1,11 @@
-use anyhow::anyhow;
 use argon2::{Argon2, PasswordHasher};
 use crate::database::objects::DbObject;
 use crate::database::objects::{
     InviteLink, Mod, ModLoader, Password, Session, User, Version, World,
 };
-use crate::database::types::{Id, Token};
+use crate::database::types::{Id};
 use argon2::password_hash::SaltString;
 use argon2::password_hash::rand_core::OsRng;
-use serde_json::to_string;
-use warp::any;
 
 pub mod objects;
 pub mod types;
@@ -22,13 +19,13 @@ pub struct Database {
 impl Database {
     #[rustfmt::skip]
     pub fn init(&self) -> rusqlite::Result<()> {
-        self.conn.execute(&format!("CREATE TABLE IF NOT EXISTS {} ({});", ModLoader::table_name(), ModLoader::database_descriptor()), ())?;
-        self.conn.execute(&format!("CREATE TABLE IF NOT EXISTS {} ({});", Version::table_name(), Version::database_descriptor()), ())?;
-        self.conn.execute(&format!("CREATE TABLE IF NOT EXISTS {} ({});", Mod::table_name(), Mod::database_descriptor()), ())?;
-        self.conn.execute(&format!("CREATE TABLE IF NOT EXISTS {} ({});", User::table_name(), User::database_descriptor()), ())?;
-        self.conn.execute(&format!("CREATE TABLE IF NOT EXISTS {} ({});", Password::table_name(), Password::database_descriptor()), ())?;
-        self.conn.execute(&format!("CREATE TABLE IF NOT EXISTS {} ({});", World::table_name(), World::database_descriptor()), ())?;
-        self.conn.execute(&format!("CREATE TABLE IF NOT EXISTS {} ({});", Session::table_name(), Session::database_descriptor()), ())?;
+        self.conn.execute(&format!("CREATE TABLE IF NOT EXISTS {} ({});", ModLoader::table_name(),  ModLoader::database_descriptor()), ())?;
+        self.conn.execute(&format!("CREATE TABLE IF NOT EXISTS {} ({});", Version::table_name(),    Version::database_descriptor()), ())?;
+        self.conn.execute(&format!("CREATE TABLE IF NOT EXISTS {} ({});", Mod::table_name(),        Mod::database_descriptor()), ())?;
+        self.conn.execute(&format!("CREATE TABLE IF NOT EXISTS {} ({});", User::table_name(),       User::database_descriptor()), ())?;
+        self.conn.execute(&format!("CREATE TABLE IF NOT EXISTS {} ({});", Password::table_name(),   Password::database_descriptor()), ())?;
+        self.conn.execute(&format!("CREATE TABLE IF NOT EXISTS {} ({});", World::table_name(),      World::database_descriptor()), ())?;
+        self.conn.execute(&format!("CREATE TABLE IF NOT EXISTS {} ({});", Session::table_name(),    Session::database_descriptor()), ())?;
         self.conn.execute(&format!("CREATE TABLE IF NOT EXISTS {} ({});", InviteLink::table_name(), InviteLink::database_descriptor()), ())?;
 
         Ok(())
@@ -68,11 +65,6 @@ impl Database {
             })
             .collect::<Vec<T>>())
     }
-    /*
-    pub fn get_page<T: DbObject>(&self, page: u32) -> rusqlite::Result<Vec<T>> {
-
-    }
-     */
 
     pub fn create_user(&self, username: String, password: String) -> anyhow::Result<User> {
         println!("username: {}, password: {}", username, password);
