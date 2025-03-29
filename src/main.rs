@@ -43,7 +43,7 @@ fn main() -> Result<()> {
     database.insert(&fabric1214)?;
 
     database.insert(&World {
-        id: Default::default(),
+        id: Id::default(),
         owner_id: miguel.id,
         name: "Miguel's world".to_string(),
         icon_id: None,
@@ -53,7 +53,7 @@ fn main() -> Result<()> {
     })?;
 
     database.insert(&World {
-        id: Default::default(),
+        id: Id::default(),
         owner_id: miguel.id,
         name: "Fucky Wucky world".to_string(),
         icon_id: None,
@@ -63,7 +63,7 @@ fn main() -> Result<()> {
     })?;
 
     database.insert(&World {
-        id: Default::default(),
+        id: Id::default(),
         owner_id: miguel.id,
         name: "Dingusland".to_string(),
         icon_id: None,

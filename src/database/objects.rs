@@ -495,7 +495,7 @@ impl Default for User {
     fn default() -> Self {
         Self {
             id: Default::default(),
-            name: "".to_string(),
+            name: String::new(),
             avatar_id: None,
             memory_limit: None,
             player_limit: None,

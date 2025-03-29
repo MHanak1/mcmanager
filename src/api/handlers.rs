@@ -121,14 +121,11 @@ pub async fn user_auth(
                 Err(error) => {
                     match error.downcast_ref::<rusqlite::Error>() {
                         Some(error) => {
-                            match error {
-                                rusqlite::Error::QueryReturnedNoRows => {
-                                    Err(warp::reject::custom(util::rejections::Unauthorized))
-                                }
-                                _ => {
-                                    println!("Error: {:?}", error);
-                                    Err(warp::reject::custom(util::rejections::InternalServerError))
-                                }
+                            if let rusqlite::Error::QueryReturnedNoRows = error {
+                                Err(warp::reject::custom(util::rejections::Unauthorized))
+                            } else {
+                                println!("Error: {error:?}");
+                                Err(warp::reject::custom(util::rejections::InternalServerError))
                             }
                         }
                         None => {

@@ -14,7 +14,7 @@ pub(crate) const ID_MAX_VALUE: i64 = 281_474_976_710_655;
 ///
 /// It should be used in the numeric form in in the low level in the backend (eg. database fields), and in the string form everywhere else (like `JSON` fields).
 ///
-/// Default::default() generates a random Id
+/// `Default::default()` generates a random Id
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Id {
     id: i64,
@@ -46,18 +46,18 @@ impl Id {
         let mut id = 0i64;
         for i in id_slice {
             id <<= 8;
-            id |= i as i64;
+            id |= i64::from(i);
         }
 
         Ok(Self { id })
     }
 
-    pub fn new_random() -> Self {
+    #[must_use] pub fn new_random() -> Self {
         let val = rand::random_range(0..ID_MAX_VALUE);
         Self::from_i64(val).unwrap()
     }
 
-    pub fn as_i64(self) -> i64 {
+    #[must_use] pub fn as_i64(self) -> i64 {
         self.id
     }
 }
@@ -164,7 +164,7 @@ pub struct Token {
 
 // A base64 encoded auth token. By default it has the length of 4 (giving 32 bytes)
 impl Token {
-    pub fn new(size: usize) -> Self {
+    #[must_use] pub fn new(size: usize) -> Self {
         let mut rng = rand::rngs::OsRng;
 
         let token = (0..size)

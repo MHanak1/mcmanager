@@ -116,24 +116,21 @@ fn with_auth(
                                     }
                                     _ => Err(warp::reject::custom(rejections::InternalServerError)),
                                 },
-                                |session| match database.get_one::<User>(session.user_id) {
-                                    Ok(user) => Ok(user),
-                                    Err(_) => {
-                                        error!(
-                                            "Orphaned session found, token: {}, user: {}. deleting (note: this should never happen because of SQLite foreign key requirement",
-                                            session.token, session.user_id
-                                        );
-                                        match database.remove(&session) {
-                                            Ok(_) => {}
-                                            Err(error) => {
-                                                error!(
-                                                    "Failed to remove orphaned session: {}\n(what the fuck)",
-                                                    error
-                                                );
-                                            }
+                                |session| if let Ok(user) = database.get_one::<User>(session.user_id) { Ok(user) } else {
+                                    error!(
+                                        "Orphaned session found, token: {}, user: {}. deleting (note: this should never happen because of SQLite foreign key requirement",
+                                        session.token, session.user_id
+                                    );
+                                    match database.remove(&session) {
+                                        Ok(_) => {}
+                                        Err(error) => {
+                                            error!(
+                                                "Failed to remove orphaned session: {}\n(what the fuck)",
+                                                error
+                                            );
                                         }
-                                        Err(warp::reject::custom(rejections::InternalServerError))
                                     }
+                                    Err(warp::reject::custom(rejections::InternalServerError))
                                 },
                             )
                     },

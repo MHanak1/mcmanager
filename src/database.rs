@@ -10,6 +10,9 @@ use argon2::password_hash::rand_core::OsRng;
 pub mod objects;
 pub mod types;
 
+#[cfg(test)]
+use crate::database::types::Token;
+
 #[derive(Debug)]
 pub struct Database {
     pub conn: rusqlite::Connection,
@@ -67,7 +70,7 @@ impl Database {
     }
 
     pub fn create_user(&self, username: String, password: String) -> anyhow::Result<User> {
-        println!("username: {}, password: {}", username, password);
+        println!("username: {username}, password: {password}");
         let user = User {
             name: username,
             ..Default::default()
@@ -77,7 +80,7 @@ impl Database {
         let salt = SaltString::generate(&mut OsRng);
         let argon = Argon2::default();
 
-        println!("salt: {}", salt);
+        println!("salt: {salt}");
         self.insert(&Password {
             user_id: user.id,
             hash: argon.hash_password(password.as_bytes(), &salt).unwrap().to_string(),
