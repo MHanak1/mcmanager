@@ -2,10 +2,7 @@ use crate::database::objects::{DbObject, Password, Session, User};
 use crate::database::types::Token;
 use anyhow::{Result, anyhow};
 use argon2::PasswordHasher;
-use chrono::DateTime;
 use rusqlite::{Connection, params};
-use serde::{Deserialize, Serialize};
-use crate::database;
 use crate::database::Database;
 
 pub fn try_user_auth(username: String, password: String, database: &Database) -> Result<Session> {
@@ -46,7 +43,7 @@ pub fn get_user(token: String, conn: &Connection) -> Result<User> {
         Session::from_row,
     )?;
 
-    match User::get_from_db(&conn, session.user_id) {
+    match User::get_from_db(conn, session.user_id) {
         Ok(user) => Ok(user),
         Err(_) => Err(anyhow!("User not found")),
     }
