@@ -70,17 +70,18 @@ impl Database {
     }
 
     pub fn create_user(&self, username: String, password: String) -> anyhow::Result<User> {
-        println!("username: {username}, password: {password}");
         let user = User {
             name: username,
             ..Default::default()
         };
+        self.create_user_from(user, password)
+    }
+    pub fn create_user_from(&self, user: User, password: String) -> anyhow::Result<User> {
         self.insert(&user)?;
 
         let salt = SaltString::generate(&mut OsRng);
         let argon = Argon2::default();
 
-        println!("salt: {salt}");
         self.insert(&Password {
             user_id: user.id,
             hash: argon

@@ -471,7 +471,7 @@ impl DbObject for User {
     fn columns() -> Vec<(&'static str, &'static str)> {
         vec![
             ("id", "UNSIGNED BIGINT PRIMARY KEY"),
-            ("name", "TEXT NOT NULL"),
+            ("name", "TEXT NOT NULL UNIQUE"),
             ("avatar_id", "UNSIGNED BIGINT"),
             ("memory_limit", "UNSIGNED INTEGER"),
             ("player_limit", "UNSIGNED INTEGER"),
@@ -687,7 +687,7 @@ impl DbObject for InviteLink {
     fn columns() -> Vec<(&'static str, &'static str)> {
         vec![
             ("id", "UNSIGNED BIGINT PRIMARY KEY"),
-            ("invite_token", "TEXT NOT NULL"),
+            ("invite_token", "TEXT NOT NULL UNIQUE"),
             ("creator_id", "INTEGER NOT NULL REFERENCES users(id)"),
             ("created", "DATETIME NOT NULL"),
         ]

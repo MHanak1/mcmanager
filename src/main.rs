@@ -1,5 +1,5 @@
 use anyhow::Result;
-use mcmanager::database::objects::{DbObject, World};
+use mcmanager::database::objects::World;
 use mcmanager::database::types::Id;
 use mcmanager::database::{Database, objects};
 use mcmanager::util;
@@ -134,20 +134,6 @@ fn main() -> Result<()> {
     };
 
     database.insert(&geckolib)?;
-    let mut stmt = database.conn.prepare("SELECT * FROM mods")?;
-    let mods_iter = stmt.query_map([], objects::Mod::from_row)?;
-
-    for mcmod in mods_iter {
-        let mcmod = mcmod?;
-
-        let version = objects::Version::get_from_db(&database.conn, mcmod.version_id)?;
-        let mod_loader = objects::ModLoader::get_from_db(&database.conn, version.mod_loader_id);
-        println!("{} ({:b})", mcmod.name, mcmod.id.as_i64());
-        println!("    {}", mcmod.description);
-        println!("    {} {}", mod_loader?.name, version.minecraft_version);
-        //println!("{}", serde_json::to_string_pretty(&mcmod)?);
-        //println!("{mcmod:#?}");
-    }
 
     Ok(())
 }

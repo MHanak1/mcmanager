@@ -91,7 +91,7 @@ impl<'de> Deserialize<'de> for Id {
         let s = String::deserialize(deserializer)?;
         match Self::from_string(s.as_str()) {
             Ok(id) => Ok(id),
-            Err(error) => Err(Error::custom(error.to_string())),
+            Err(err) => Err(Error::custom(err.to_string())),
         }
     }
 }

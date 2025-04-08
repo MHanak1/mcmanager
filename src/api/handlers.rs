@@ -1,17 +1,18 @@
-use crate::api::auth;
 use crate::api::util;
 use crate::api::util::rejections;
+use crate::api::{auth, filters};
 use crate::database::Database;
 use crate::database::objects::{
     DbObject, InviteLink, Mod, ModLoader, Session, User, Version, World,
 };
-use crate::database::types::{Id, Token};
-use chrono::DateTime;
-use log::error;
+use crate::database::types::Id;
+use crate::{api, database};
 use rusqlite::Error;
+use serde::Deserialize;
+use serde::de::DeserializeOwned;
 use std::sync::{Arc, Mutex};
-use warp::Rejection;
 use warp::http::StatusCode;
+use warp::{Filter, Rejection, Reply};
 
 pub trait ApiList: DbObject
 where
@@ -19,7 +20,7 @@ where
     Self: serde::Serialize,
 {
     //in theory the user filter should be done within the sql query, but for the sake of simplicity we do that when collecting the results
-    async fn api_list(
+    fn api_list(
         db_mutex: Arc<Mutex<Database>>,
         user: User,
     ) -> Result<impl warp::Reply, warp::Rejection> {
@@ -39,7 +40,7 @@ where
                                 StatusCode::OK,
                             )),
                             _ => {
-                                error!("{:?}", err);
+                                eprintln!("{:?}", err);
                                 Err(warp::reject::custom(rejections::InternalServerError))
                             }
                         }
@@ -48,13 +49,25 @@ where
             },
         )
     }
+
+    fn list_filter(
+        db_mutex: Arc<Mutex<Database>>,
+    ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
+        warp::get()
+            .and(warp::path("api"))
+            .and(warp::path(Self::table_name()))
+            .and(warp::path::end())
+            .and(filters::with_db(db_mutex.clone()))
+            .and(filters::with_auth(db_mutex.clone()))
+            .and_then(|db_mutex, user| async move { Self::api_list(db_mutex, user) })
+    }
 }
 pub trait ApiGet: DbObject
 where
     Self: std::marker::Sized,
     Self: serde::Serialize,
 {
-    async fn api_get(
+    fn api_get(
         id: String,
         db_mutex: Arc<Mutex<Database>>,
         user: User,
@@ -89,6 +102,19 @@ where
             },
         )
     }
+
+    fn get_filter(
+        db_mutex: Arc<Mutex<Database>>,
+    ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
+        warp::get()
+            .and(warp::path("api"))
+            .and(warp::path(Self::table_name()))
+            .and(warp::path::param::<String>())
+            .and(warp::path::end())
+            .and(filters::with_db(db_mutex.clone()))
+            .and(filters::with_auth(db_mutex.clone()))
+            .and_then(|id, db_mutex, user| async move { Self::api_get(id, db_mutex, user) })
+    }
 }
 
 pub trait ApiCreate: DbObject
@@ -96,11 +122,11 @@ where
     Self: std::marker::Sized,
     Self: serde::Serialize,
 {
-    type JsonFrom;
+    type JsonFrom: Clone + DeserializeOwned + Send;
 
     fn from_json(data: Self::JsonFrom, user: User) -> Self;
     //async fn api_create(db_mutex: Arc<Mutex<Database>>, user: User, data: Self::JsonFrom) -> Result<impl warp::Reply, warp::Rejection>;
-    async fn api_create(
+    fn api_create(
         db_mutex: Arc<Mutex<Database>>,
         user: User,
         data: Self::JsonFrom,
@@ -116,8 +142,8 @@ where
                             warp::reply::json(&new),
                             warp::http::StatusCode::CREATED,
                         )),
-                        Err(error) => {
-                            error!("{:?}", error);
+                        Err(err) => {
+                            eprintln!("{:?}", err);
                             Ok(warp::reply::with_status(
                                 warp::reply::json(&"internal server error"),
                                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -133,6 +159,20 @@ where
             ))
         }
     }
+
+    fn create_filter(
+        db_mutex: Arc<Mutex<Database>>,
+    ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
+        warp::post()
+            .and(warp::path("api"))
+            .and(warp::path(Self::table_name()))
+            .and(warp::path("create"))
+            .and(warp::path::end())
+            .and(filters::with_db(db_mutex.clone()))
+            .and(filters::with_auth(db_mutex.clone()))
+            .and(warp::body::json())
+            .and_then(|db_mutex, user, data| async move { Self::api_create(db_mutex, user, data) })
+    }
 }
 
 /*
@@ -145,70 +185,69 @@ pub trait ApiUpdate : DbObject where Self: std::marker::Sized, Self: serde::Seri
 }
  */
 
-pub mod json_fields {
+mod json_fields {
     use crate::api::util::rejections::BadRequest;
     use crate::database::types::{Id, Token};
     use argon2::password_hash::SaltString;
     use chrono::{DateTime, Utc};
     use serde::{Deserialize, Serialize};
 
-    #[derive(Debug, Deserialize)]
+    #[derive(Debug, Clone, Deserialize)]
     pub struct Login {
         pub username: String,
         pub password: String,
     }
 
-    #[derive(Debug, Deserialize)]
+    #[derive(Debug, Clone, Deserialize)]
     pub struct Mod {
         pub version_id: Id,
         pub name: String,
-        pub description: String,
+        pub description: Option<String>,
         pub icon_id: Option<Id>,
     }
 
     #[allow(clippy::struct_field_names)]
-    #[derive(Debug, Deserialize)]
+    #[derive(Debug, Clone, Deserialize)]
     pub struct Version {
         pub minecraft_version: String,
         pub mod_loader_id: Id,
     }
 
-    #[derive(Debug, Deserialize)]
+    #[derive(Debug, Clone, Deserialize)]
     pub struct ModLoader {
         pub name: String,
         pub can_load_mods: bool,
     }
 
-    #[derive(Debug, Deserialize)]
+    #[derive(Debug, Clone, Deserialize)]
     pub struct World {
         pub name: String,
         pub icon_id: Option<Id>,
-        pub allocated_memory: u32,
+        pub allocated_memory: Option<u32>,
         pub version_id: Id,
-        pub enabled: bool,
+        pub enabled: Option<bool>,
     }
 
-    #[derive(Debug, Deserialize)]
+    #[derive(Debug, Clone, Deserialize)]
     pub struct User {
-        pub name: String,
+        pub username: String,
+        pub password: String,
         pub avatar_id: Option<Id>,
         pub memory_limit: Option<u32>,
         pub player_limit: Option<u32>,
         pub world_limit: Option<u32>,
         pub active_world_limit: Option<u32>,
         pub storage_limit: Option<u32>,
-        pub is_privileged: bool,
-        pub enabled: bool,
+        pub is_privileged: Option<bool>,
+        pub enabled: Option<bool>,
     }
 
-    #[derive(Debug, Deserialize)]
+    #[derive(Debug, Clone, Deserialize)]
     pub struct Session {
-        pub user_id: Id,
-        pub token: Token,
-        pub expires: bool,
+        pub expires: Option<bool>,
     }
 
-    #[derive(Debug, Deserialize)]
+    #[derive(Debug, Clone, Deserialize)]
     pub struct InviteLink {}
 }
 
@@ -236,7 +275,7 @@ impl ApiCreate for Mod {
             id: Default::default(),
             version_id: data.version_id,
             name: data.name,
-            description: data.description,
+            description: data.description.unwrap_or("".into()),
             icon_id: data.icon_id,
             owner_id: user.id,
         }
@@ -275,7 +314,7 @@ impl ApiCreate for World {
             owner_id: user.id,
             name: data.name,
             icon_id: None,
-            allocated_memory: data.allocated_memory,
+            allocated_memory: data.allocated_memory.unwrap_or(1024),
             version_id: data.version_id,
             enabled: false,
         }
@@ -288,15 +327,62 @@ impl ApiCreate for User {
     fn from_json(data: Self::JsonFrom, user: User) -> Self {
         Self {
             id: Default::default(),
-            name: data.name,
+            name: data.username,
             avatar_id: data.avatar_id,
             memory_limit: data.memory_limit,
             player_limit: data.player_limit,
             world_limit: data.world_limit,
             active_world_limit: data.active_world_limit,
             storage_limit: data.storage_limit,
-            is_privileged: data.is_privileged,
-            enabled: data.enabled,
+            is_privileged: data.is_privileged.unwrap_or(false),
+            enabled: data.enabled.unwrap_or(true),
+        }
+    }
+
+    fn api_create(
+        db_mutex: Arc<Mutex<Database>>,
+        user: User,
+        data: Self::JsonFrom,
+    ) -> Result<impl warp::Reply, warp::Rejection> {
+        if Self::can_create(&user) {
+            db_mutex.lock().map_or_else(
+                |_| Err(warp::reject::custom(rejections::InternalServerError)),
+                |database| match database
+                    .create_user_from(Self::from_json(data.clone(), user), data.password)
+                {
+                    Ok(new) => Ok(warp::reply::with_status(
+                        warp::reply::json(&new),
+                        warp::http::StatusCode::CREATED,
+                    )),
+                    Err(err) => match err.downcast_ref::<rusqlite::Error>() {
+                        Some(err) => match err {
+                            Error::SqliteFailure(err, ..) => match *err {
+                                rusqlite::ffi::Error {
+                                    code: rusqlite::ErrorCode::ConstraintViolation,
+                                    ..
+                                } => Ok(warp::reply::with_status(
+                                    warp::reply::json(&"username already taken"),
+                                    StatusCode::CONFLICT,
+                                )),
+                                _ => {
+                                    eprintln!("{:?}", err);
+                                    Err(warp::reject::custom(rejections::InternalServerError))
+                                }
+                            },
+                            _ => {
+                                eprintln!("{:?}", err);
+                                Err(warp::reject::custom(rejections::InternalServerError))
+                            }
+                        },
+                        _ => Err(warp::reject::custom(rejections::InternalServerError)),
+                    },
+                },
+            )
+        } else {
+            Ok(warp::reply::with_status(
+                warp::reply::json(&"Unauthorized"),
+                StatusCode::UNAUTHORIZED,
+            ))
         }
     }
 }
@@ -308,7 +394,20 @@ impl ApiCreate for Session {
             user_id: user.id,
             token: Default::default(),
             created: chrono::offset::Utc::now(),
-            expires: data.expires,
+            expires: data.expires.unwrap_or(true),
+        }
+    }
+}
+
+impl ApiCreate for InviteLink {
+    type JsonFrom = json_fields::InviteLink;
+
+    fn from_json(data: Self::JsonFrom, user: User) -> Self {
+        Self {
+            id: Default::default(),
+            invite_token: Default::default(),
+            creator_id: user.id,
+            created: chrono::offset::Utc::now(),
         }
     }
 }
@@ -330,12 +429,12 @@ pub async fn user_auth(
                 ),
                 StatusCode::CREATED,
             )),
-            Err(error) => match error.downcast_ref::<rusqlite::Error>() {
-                Some(error) => {
-                    if let rusqlite::Error::QueryReturnedNoRows = error {
+            Err(err) => match err.downcast_ref::<rusqlite::Error>() {
+                Some(err) => {
+                    if let rusqlite::Error::QueryReturnedNoRows = err {
                         Err(warp::reject::custom(util::rejections::BadRequest))
                     } else {
-                        println!("Error: {error:?}");
+                        eprintln!("Error: {err:?}");
                         Err(warp::reject::custom(util::rejections::InternalServerError))
                     }
                 }
