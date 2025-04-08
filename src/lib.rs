@@ -1,9 +1,9 @@
 //use proc_macro::{Delimiter, Punct, TokenStream, TokenTree};
 
 pub mod api;
+pub mod config;
 pub mod database;
 pub mod util;
-pub mod config;
 //man that was a waste of time
 
 /*

@@ -10,7 +10,10 @@ use std::fmt::Debug;
 pub trait DbObject {
     fn get_id(&self) -> Id;
 
-    fn is_accessible(&self, user: &User) -> bool;
+    fn can_access(&self, user: &User) -> bool;
+    fn can_update(&self, user: &User) -> bool;
+    fn can_create(user: &User) -> bool;
+
     fn from_row(row: &Row) -> rusqlite::Result<Self>
     where
         Self: Sized;
@@ -112,7 +115,6 @@ pub struct Mod {
     pub description: String,
     pub icon_id: Option<Id>,
     pub owner_id: Id,
-    pub hidden: bool,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
@@ -184,8 +186,15 @@ impl DbObject for Mod {
         self.id
     }
 
-    fn is_accessible(&self, user: &User) -> bool {
-        user.id == self.owner_id || user.is_privileged
+    fn can_access(&self, user: &User) -> bool {
+        user.enabled && (user.id == self.owner_id || user.is_privileged)
+    }
+
+    fn can_update(&self, user: &User) -> bool {
+        user.enabled && (user.id == self.owner_id || user.is_privileged)
+    }
+    fn can_create(user: &User) -> bool {
+        user.enabled
     }
 
     fn from_row(row: &Row) -> rusqlite::Result<Self>
@@ -199,7 +208,6 @@ impl DbObject for Mod {
             description: row.get(3)?,
             icon_id: row.get(4)?,
             owner_id: row.get(5)?,
-            hidden: row.get(6)?,
         })
     }
 
@@ -217,7 +225,6 @@ impl DbObject for Mod {
             ("description", "TEXT NOT NULL"),
             ("icon_id", "UNSIGNED BIGINT"),
             ("owner_id", "UNSIGNED BIGINT NOT NULL REFERENCES users(id)"),
-            ("hidden", "BOOLEAN NOT NULL DEFAULT false"),
         ]
     }
 
@@ -231,7 +238,6 @@ impl DbObject for Mod {
                 self.description,
                 self.icon_id,
                 self.owner_id,
-                self.hidden,
             ],
         )
     }
@@ -246,7 +252,6 @@ impl DbObject for Mod {
                 self.description,
                 self.icon_id,
                 self.owner_id,
-                self.hidden,
             ],
         )
     }
@@ -256,8 +261,14 @@ impl DbObject for Version {
     fn get_id(&self) -> Id {
         self.id
     }
-    fn is_accessible(&self, _user: &User) -> bool {
+    fn can_access(&self, _user: &User) -> bool {
         true
+    }
+    fn can_update(&self, user: &User) -> bool {
+        user.enabled && user.is_privileged
+    }
+    fn can_create(user: &User) -> bool {
+        user.enabled && user.is_privileged
     }
 
     fn from_row(row: &Row) -> rusqlite::Result<Self>
@@ -304,8 +315,14 @@ impl DbObject for ModLoader {
     fn get_id(&self) -> Id {
         self.id
     }
-    fn is_accessible(&self, _user: &User) -> bool {
-        true
+    fn can_access(&self, user: &User) -> bool {
+        user.enabled
+    }
+    fn can_update(&self, user: &User) -> bool {
+        user.enabled && user.is_privileged
+    }
+    fn can_create(user: &User) -> bool {
+        user.enabled && user.is_privileged
     }
 
     fn from_row(row: &Row) -> rusqlite::Result<Self>
@@ -343,8 +360,14 @@ impl DbObject for World {
     fn get_id(&self) -> Id {
         self.id
     }
-    fn is_accessible(&self, user: &User) -> bool {
-        self.owner_id == user.id || user.is_privileged
+    fn can_access(&self, user: &User) -> bool {
+        user.enabled && (self.owner_id == user.id || user.is_privileged)
+    }
+    fn can_update(&self, user: &User) -> bool {
+        user.enabled && (self.owner_id == user.id || user.is_privileged)
+    }
+    fn can_create(user: &User) -> bool {
+        user.enabled
     }
 
     fn from_row(row: &Row) -> rusqlite::Result<Self>
@@ -414,8 +437,14 @@ impl DbObject for User {
     fn get_id(&self) -> Id {
         self.id
     }
-    fn is_accessible(&self, user: &User) -> bool {
-        self.id == user.id || user.is_privileged
+    fn can_access(&self, user: &User) -> bool {
+        user.enabled && (self.id == user.id || user.is_privileged)
+    }
+    fn can_update(&self, user: &User) -> bool {
+        user.enabled && (self.id == user.id || user.is_privileged)
+    }
+    fn can_create(user: &User) -> bool {
+        user.enabled && (user.is_privileged)
     }
 
     fn from_row(row: &Row) -> rusqlite::Result<Self>
@@ -513,7 +542,14 @@ impl DbObject for Password {
         self.user_id
     }
 
-    fn is_accessible(&self, _user: &User) -> bool {
+    fn can_access(&self, _user: &User) -> bool {
+        false
+    }
+    //in theory this could be true, but logic that will update this will bypass this check anyway, so it's safer to set it to false
+    fn can_update(&self, user: &User) -> bool {
+        false
+    }
+    fn can_create(user: &User) -> bool {
         false
     }
 
@@ -568,8 +604,14 @@ impl DbObject for Session {
         self.user_id
     }
 
-    fn is_accessible(&self, _user: &User) -> bool {
-        false
+    fn can_access(&self, user: &User) -> bool {
+        user.enabled && (self.user_id == user.id || user.is_privileged)
+    }
+    fn can_update(&self, user: &User) -> bool {
+        user.enabled && user.is_privileged
+    }
+    fn can_create(user: &User) -> bool {
+        user.enabled && (user.is_privileged)
     }
 
     fn from_row(row: &Row) -> rusqlite::Result<Self>
@@ -590,7 +632,7 @@ impl DbObject for Session {
 
     fn columns() -> Vec<(&'static str, &'static str)> {
         vec![
-            ("user_id", "UNSIGNED INTEGER REFERENCES users(id)",),
+            ("user_id", "UNSIGNED INTEGER REFERENCES users(id)"),
             ("token", "TEXT  PRIMARY KEY"),
             ("created", "DATETIME NOT NULL"),
             ("expires", "BOOLEAN NOT NULL DEFAULT TRUE"),
@@ -616,9 +658,16 @@ impl DbObject for InviteLink {
     fn get_id(&self) -> Id {
         self.id
     }
-    fn is_accessible(&self, _user: &User) -> bool {
-        false
+    fn can_access(&self, user: &User) -> bool {
+        user.enabled && (self.creator_id == user.id || user.is_privileged)
     }
+    fn can_update(&self, user: &User) -> bool {
+        user.enabled && user.is_privileged
+    }
+    fn can_create(user: &User) -> bool {
+        user.enabled && user.is_privileged
+    }
+
     fn from_row(row: &Row) -> rusqlite::Result<Self>
     where
         Self: Sized,

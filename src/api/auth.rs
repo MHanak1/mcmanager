@@ -1,9 +1,9 @@
+use crate::database::Database;
 use crate::database::objects::{DbObject, Password, Session, User};
 use crate::database::types::Token;
 use anyhow::{Result, anyhow};
 use argon2::PasswordHasher;
 use rusqlite::{Connection, params};
-use crate::database::Database;
 
 pub fn try_user_auth(username: String, password: String, database: &Database) -> Result<Session> {
     let user = database.conn.query_row(
@@ -15,7 +15,7 @@ pub fn try_user_auth(username: String, password: String, database: &Database) ->
     let user_password = Password::get_from_db(&database.conn, user.id)?;
 
     let argon2 = argon2::Argon2::default();
-    
+
     let password_hash = argon2
         .hash_password(password.as_bytes(), &user_password.salt)
         .unwrap();
@@ -30,7 +30,7 @@ pub fn try_user_auth(username: String, password: String, database: &Database) ->
         created: chrono::offset::Utc::now(),
         expires: false,
     };
-    
+
     database.insert(&new_session)?;
 
     Ok(new_session)

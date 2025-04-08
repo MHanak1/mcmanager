@@ -52,12 +52,12 @@ impl Id {
         Ok(Self { id })
     }
 
-    #[must_use] pub fn new_random() -> Self {
+    pub fn new_random() -> Self {
         let val = rand::random_range(0..ID_MAX_VALUE);
         Self::from_i64(val).unwrap()
     }
 
-    #[must_use] pub fn as_i64(self) -> i64 {
+    pub fn as_i64(self) -> i64 {
         self.id
     }
 }
@@ -162,9 +162,9 @@ pub struct Token {
     token: String,
 }
 
-// A base64 encoded auth token. By default it has the length of 4 (giving 32 bytes)
+/// A base64 encoded auth token. By default it has the length of 4 (giving 32 bytes)
 impl Token {
-    #[must_use] pub fn new(size: usize) -> Self {
+    pub fn new(size: usize) -> Self {
         let mut rng = rand::rngs::OsRng;
 
         let token = (0..size)

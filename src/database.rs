@@ -1,11 +1,11 @@
-use argon2::{Argon2, PasswordHasher};
 use crate::database::objects::DbObject;
 use crate::database::objects::{
     InviteLink, Mod, ModLoader, Password, Session, User, Version, World,
 };
-use crate::database::types::{Id};
+use crate::database::types::Id;
 use argon2::password_hash::SaltString;
 use argon2::password_hash::rand_core::OsRng;
+use argon2::{Argon2, PasswordHasher};
 
 pub mod objects;
 pub mod types;
@@ -58,7 +58,7 @@ impl Database {
         Ok(entries
             .filter_map(|entry| match entry {
                 Ok(the_mod) => {
-                    if the_mod.is_accessible(&user) {
+                    if the_mod.can_access(&user) {
                         Some(the_mod)
                     } else {
                         None
@@ -83,7 +83,10 @@ impl Database {
         println!("salt: {salt}");
         self.insert(&Password {
             user_id: user.id,
-            hash: argon.hash_password(password.as_bytes(), &salt).unwrap().to_string(),
+            hash: argon
+                .hash_password(password.as_bytes(), &salt)
+                .unwrap()
+                .to_string(),
             salt,
         })?;
 
@@ -154,7 +157,6 @@ pub fn manipulate_data() -> anyhow::Result<()> {
         description: "".to_string(),
         icon_id: None,
         owner_id: user_max.id,
-        hidden: false,
     };
 
     let mut mc_mod_max = Mod {
@@ -164,7 +166,6 @@ pub fn manipulate_data() -> anyhow::Result<()> {
         description: "Mod Description".to_string(),
         icon_id: Some(Default::default()),
         owner_id: user_max.id,
-        hidden: true,
     };
 
     let mut world_min = World {

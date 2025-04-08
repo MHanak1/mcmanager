@@ -1,6 +1,6 @@
 use anyhow::Result;
 use mcmanager::database::objects::{DbObject, World};
-use mcmanager::database::types::{Id};
+use mcmanager::database::types::Id;
 use mcmanager::database::{Database, objects};
 use mcmanager::util;
 use std::path::Path;
@@ -11,8 +11,14 @@ fn main() -> Result<()> {
     let database = Database { conn };
     database.init().expect("Failed to init database");
 
-    let miguel = database.create_user("MHanak".parse()?, "Password".parse()?)?;
-    
+    let mut miguel = database.create_user("MHanak".parse()?, "Password".parse()?)?;
+    let dingus = database.create_user("Dingus".parse()?, "AAAAAAAAAAAAAAA".parse()?)?;
+    let dorkis = database.create_user("Dorkus".parse()?, "A".parse()?)?;
+
+    miguel.is_privileged = true;
+
+    database.update(&miguel).expect("Failed to update Miguel");
+
     let forge = objects::ModLoader {
         id: Id::new_random(),
         name: "Forge".to_string(),
@@ -79,7 +85,6 @@ fn main() -> Result<()> {
         description: "Lightweight and modular API providing common hooks and intercompatibility measures utilized by mods using the Fabric toolchain.".to_string(),
         icon_id: None,
         owner_id: miguel.id,
-        hidden: false,
     })?;
 
     database.insert(&objects::Mod {
@@ -89,7 +94,6 @@ fn main() -> Result<()> {
         description: "The fastest and most compatible rendering optimization mod for Minecraft. Now available for both NeoForge and Fabric!".to_string(),
         icon_id: None,
         owner_id: miguel.id,
-        hidden: false,
     })?;
 
     database.insert(&objects::Mod {
@@ -99,7 +103,6 @@ fn main() -> Result<()> {
         description: "Configuration Library for Minecraft Mods".to_string(),
         icon_id: None,
         owner_id: miguel.id,
-        hidden: false,
     })?;
 
     database.insert(&objects::Mod {
@@ -109,7 +112,6 @@ fn main() -> Result<()> {
         description: "A modern shader pack loader for Minecraft intended to be compatible with existing OptiFine shader packs".to_string(),
         icon_id: None,
         owner_id: miguel.id,
-        hidden: false,
     })?;
 
     database.insert(&objects::Mod {
@@ -119,7 +121,6 @@ fn main() -> Result<()> {
         description: "View Items and Recipes".to_string(),
         icon_id: None,
         owner_id: miguel.id,
-        hidden: false,
     })?;
 
     let geckolib = objects::Mod {
@@ -130,13 +131,10 @@ fn main() -> Result<()> {
             .to_string(),
         icon_id: None,
         owner_id: miguel.id,
-        hidden: false,
     };
 
     database.insert(&geckolib)?;
-    let mut stmt = database
-        .conn
-        .prepare("SELECT * FROM mods")?;
+    let mut stmt = database.conn.prepare("SELECT * FROM mods")?;
     let mods_iter = stmt.query_map([], objects::Mod::from_row)?;
 
     for mcmod in mods_iter {
