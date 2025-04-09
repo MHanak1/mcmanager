@@ -53,7 +53,7 @@ impl Database {
     pub fn get_all<T: DbObject>(&self, user: User) -> rusqlite::Result<Vec<T>> {
         let mut stmt = self
             .conn
-            .prepare(&format!["SELECT * FROM {}", T::table_name()])?;
+            .prepare(&format!("SELECT * FROM {}", T::table_name()))?;
         let entries = stmt.query_map([], T::from_row)?;
         Ok(entries
             .filter_map(|entry| match entry {
@@ -121,7 +121,7 @@ pub fn manipulate_data() -> anyhow::Result<()> {
 
     let mut user_min = User {
         id: Default::default(),
-        name: "".to_string(),
+        name: String::new(),
         avatar_id: None,
         memory_limit: None,
         player_limit: None,
@@ -154,8 +154,8 @@ pub fn manipulate_data() -> anyhow::Result<()> {
     let mut mc_mod_min = Mod {
         id: Default::default(),
         version_id: version.id,
-        name: "".to_string(),
-        description: "".to_string(),
+        name: String::new(),
+        description: String::new(),
         icon_id: None,
         owner_id: user_max.id,
     };
@@ -172,7 +172,7 @@ pub fn manipulate_data() -> anyhow::Result<()> {
     let mut world_min = World {
         id: Default::default(),
         owner_id: user_min.id,
-        name: "".to_string(),
+        name: String::new(),
         icon_id: None,
         allocated_memory: 0,
         version_id: version.id,

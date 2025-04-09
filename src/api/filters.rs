@@ -32,7 +32,7 @@ pub fn with_auth(
             async move {
                 database.lock().map_or_else(
                     |err| {
-                        eprintln!("{}", err);
+                        eprintln!("{err}");
                         Err(warp::reject::custom(rejections::InternalServerError))
                     },
                     |database| {
@@ -47,14 +47,11 @@ pub fn with_auth(
                                 Session::from_row,
                             )
                             .map_or_else(
-                                |err| match err {
-                                    rusqlite::Error::QueryReturnedNoRows => {
-                                        Err(warp::reject::custom(rejections::Unauthorized))
-                                    }
-                                    _ => {
-                                        eprintln!("{}", err);
-                                        Err(warp::reject::custom(rejections::InternalServerError))
-                                    },
+                                |err| if let rusqlite::Error::QueryReturnedNoRows = err {
+                                    Err(warp::reject::custom(rejections::Unauthorized))
+                                } else {
+                                    eprintln!("{err}");
+                                    Err(warp::reject::custom(rejections::InternalServerError))
                                 },
                                 |session| if let Ok(user) = database.get_one::<User>(session.user_id) { Ok(user) } else {
                                     eprintln!(
@@ -65,8 +62,7 @@ pub fn with_auth(
                                         Ok(_) => {}
                                         Err(error) => {
                                             eprintln!(
-                                                "Failed to remove orphaned session: {}\n(what the fuck)",
-                                                error
+                                                "Failed to remove orphaned session: {error}\n(what the fuck)"
                                             );
                                         }
                                     }

@@ -205,7 +205,7 @@ impl From<Token> for String {
 
 impl From<String> for Token {
     fn from(value: String) -> Self {
-        Token { token: value }
+        Self { token: value }
     }
 }
 impl FromSql for Token {

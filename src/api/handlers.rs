@@ -38,7 +38,7 @@ where
                                 StatusCode::OK,
                             )),
                             _ => {
-                                eprintln!("{:?}", err);
+                                eprintln!("{err:?}");
                                 Err(warp::reject::custom(rejections::InternalServerError))
                             }
                         }
@@ -56,7 +56,7 @@ where
             .and(warp::path(Self::table_name()))
             .and(warp::path::end())
             .and(filters::with_db(db_mutex.clone()))
-            .and(filters::with_auth(db_mutex.clone()))
+            .and(filters::with_auth(db_mutex))
             .and_then(|db_mutex, user| async move { Self::api_list(db_mutex, user) })
     }
 }
@@ -110,7 +110,7 @@ where
             .and(warp::path::param::<String>())
             .and(warp::path::end())
             .and(filters::with_db(db_mutex.clone()))
-            .and(filters::with_auth(db_mutex.clone()))
+            .and(filters::with_auth(db_mutex))
             .and_then(|id, db_mutex, user| async move { Self::api_get(id, db_mutex, user) })
     }
 }
@@ -141,7 +141,7 @@ where
                             warp::http::StatusCode::CREATED,
                         )),
                         Err(err) => {
-                            eprintln!("{:?}", err);
+                            eprintln!("{err:?}");
                             Ok(warp::reply::with_status(
                                 warp::reply::json(&"internal server error"),
                                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -167,7 +167,7 @@ where
             .and(warp::path("create"))
             .and(warp::path::end())
             .and(filters::with_db(db_mutex.clone()))
-            .and(filters::with_auth(db_mutex.clone()))
+            .and(filters::with_auth(db_mutex))
             .and(warp::body::json())
             .and_then(|db_mutex, user, data| async move { Self::api_create(db_mutex, user, data) })
     }
@@ -270,7 +270,7 @@ impl ApiCreate for Mod {
             id: Default::default(),
             version_id: data.version_id,
             name: data.name,
-            description: data.description.unwrap_or("".into()),
+            description: data.description.unwrap_or_default(),
             icon_id: data.icon_id,
             owner_id: user.id,
         }
@@ -304,7 +304,7 @@ impl ApiCreate for ModLoader {
 impl ApiCreate for World {
     type JsonFrom = json_fields::World;
     fn from_json(data: Self::JsonFrom, user: User) -> Self {
-        World {
+        Self {
             id: Default::default(),
             owner_id: user.id,
             name: data.name,
@@ -350,24 +350,18 @@ impl ApiCreate for User {
                         warp::http::StatusCode::CREATED,
                     )),
                     Err(err) => match err.downcast_ref::<rusqlite::Error>() {
-                        Some(err) => match err {
-                            Error::SqliteFailure(err, ..) => match *err {
-                                rusqlite::ffi::Error {
-                                    code: rusqlite::ErrorCode::ConstraintViolation,
-                                    ..
-                                } => Ok(warp::reply::with_status(
-                                    warp::reply::json(&"username already taken"),
-                                    StatusCode::CONFLICT,
-                                )),
-                                _ => {
-                                    eprintln!("{:?}", err);
-                                    Err(warp::reject::custom(rejections::InternalServerError))
-                                }
-                            },
-                            _ => {
-                                eprintln!("{:?}", err);
-                                Err(warp::reject::custom(rejections::InternalServerError))
-                            }
+                        Some(err) => if let Error::SqliteFailure(err, ..) = err { if let rusqlite::ffi::Error {
+                                code: rusqlite::ErrorCode::ConstraintViolation,
+                                ..
+                            } = *err { Ok(warp::reply::with_status(
+                            warp::reply::json(&"username already taken"),
+                            StatusCode::CONFLICT,
+                        )) } else {
+                            eprintln!("{err:?}");
+                            Err(warp::reject::custom(rejections::InternalServerError))
+                        } } else {
+                            eprintln!("{err:?}");
+                            Err(warp::reject::custom(rejections::InternalServerError))
                         },
                         _ => Err(warp::reject::custom(rejections::InternalServerError)),
                     },
@@ -426,7 +420,7 @@ pub async fn user_auth(
             )),
             Err(err) => match err.downcast_ref::<rusqlite::Error>() {
                 Some(err) => {
-                    if let rusqlite::Error::QueryReturnedNoRows = err {
+                    if matches!(err, rusqlite::Error::QueryReturnedNoRows) {
                         Err(warp::reject::custom(util::rejections::BadRequest))
                     } else {
                         eprintln!("Error: {err:?}");
