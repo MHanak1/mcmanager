@@ -1,7 +1,6 @@
 use crate::api::util::rejections;
 use crate::database::Database;
 use crate::database::objects::{DbObject, Session, User};
-use log::error;
 use rusqlite::params;
 use std::convert::Infallible;
 use std::sync::{Arc, Mutex};

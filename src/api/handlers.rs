@@ -6,13 +6,11 @@ use crate::database::objects::{
     DbObject, InviteLink, Mod, ModLoader, Session, User, Version, World,
 };
 use crate::database::types::Id;
-use crate::{api, database};
 use rusqlite::Error;
-use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use std::sync::{Arc, Mutex};
 use warp::http::StatusCode;
-use warp::{Filter, Rejection, Reply};
+use warp::{Filter};
 
 pub trait ApiList: DbObject
 where
@@ -186,11 +184,8 @@ pub trait ApiUpdate : DbObject where Self: std::marker::Sized, Self: serde::Seri
  */
 
 mod json_fields {
-    use crate::api::util::rejections::BadRequest;
-    use crate::database::types::{Id, Token};
-    use argon2::password_hash::SaltString;
-    use chrono::{DateTime, Utc};
-    use serde::{Deserialize, Serialize};
+    use crate::database::types::{Id};
+    use serde::{Deserialize};
 
     #[derive(Debug, Clone, Deserialize)]
     pub struct Login {
@@ -285,7 +280,7 @@ impl ApiCreate for Mod {
 impl ApiCreate for Version {
     type JsonFrom = json_fields::Version;
 
-    fn from_json(data: Self::JsonFrom, user: User) -> Self {
+    fn from_json(data: Self::JsonFrom, _user: User) -> Self {
         Self {
             id: Default::default(),
             minecraft_version: data.minecraft_version,
@@ -297,7 +292,7 @@ impl ApiCreate for Version {
 impl ApiCreate for ModLoader {
     type JsonFrom = json_fields::ModLoader;
 
-    fn from_json(data: Self::JsonFrom, user: User) -> Self {
+    fn from_json(data: Self::JsonFrom, _user: User) -> Self {
         Self {
             id: Default::default(),
             name: data.name,
@@ -324,7 +319,7 @@ impl ApiCreate for World {
 impl ApiCreate for User {
     type JsonFrom = json_fields::User;
 
-    fn from_json(data: Self::JsonFrom, user: User) -> Self {
+    fn from_json(data: Self::JsonFrom, _user: User) -> Self {
         Self {
             id: Default::default(),
             name: data.username,
@@ -402,7 +397,7 @@ impl ApiCreate for Session {
 impl ApiCreate for InviteLink {
     type JsonFrom = json_fields::InviteLink;
 
-    fn from_json(data: Self::JsonFrom, user: User) -> Self {
+    fn from_json(_data: Self::JsonFrom, user: User) -> Self {
         Self {
             id: Default::default(),
             invite_token: Default::default(),

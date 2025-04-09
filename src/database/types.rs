@@ -1,5 +1,5 @@
 use crate::util;
-use crate::util::base64::base64_encode;
+use crate::util::base64::{base64_decode, base64_encode};
 use anyhow::Result;
 use rand::TryRngCore;
 use rusqlite::ToSql;
@@ -157,7 +157,7 @@ fn id() {
     assert_eq!(Id::new_random().to_string().len(), 8);
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Token {
     token: String,
 }
@@ -171,6 +171,18 @@ impl Token {
             .map(|_| base64_encode(&rng.try_next_u64().unwrap().to_be_bytes()))
             .collect::<String>();
         Self { token }
+    }
+
+    pub fn from_string_ckecked(string: String) -> Result<Self> {
+        //check if is decodable
+        match base64_decode(string.as_str()) {
+            Ok(_) => {
+                Ok(Self {token: string })
+            }
+            Err((err, _)) => {
+                Err(anyhow::anyhow!(err.to_string()))
+            }
+        }
     }
 }
 
@@ -207,5 +219,27 @@ impl FromSql for Token {
 impl ToSql for Token {
     fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
         Ok(ToSqlOutput::from(self.token.as_str()))
+    }
+}
+
+impl Serialize for Token {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for Token {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        match Self::from_string_ckecked(s) {
+            Ok(id) => Ok(id),
+            Err(err) => Err(Error::custom(err.to_string())),
+        }
     }
 }

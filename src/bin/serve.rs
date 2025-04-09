@@ -1,19 +1,13 @@
-use log::error;
 use mcmanager::api::filters;
 use mcmanager::api::handlers::{ApiCreate, ApiGet, ApiList};
-use mcmanager::api::util::rejections::InvalidBearerToken;
 use mcmanager::database::Database;
 use mcmanager::database::objects::{
-    DbObject, InviteLink, Mod, ModLoader, Session, User, Version, World,
+    InviteLink, Mod, ModLoader, Session, User, Version, World,
 };
 use mcmanager::{api, util};
-use rusqlite::fallible_iterator::FallibleIterator;
-use rusqlite::params;
-use std::convert::Infallible;
 use std::path::Path;
-use std::string::String;
 use std::sync::{Arc, Mutex};
-use warp::{Filter, Rejection};
+use warp::{Filter};
 
 #[tokio::main]
 async fn main() {

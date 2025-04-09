@@ -546,10 +546,10 @@ impl DbObject for Password {
         false
     }
     //in theory this could be true, but logic that will update this will bypass this check anyway, so it's safer to set it to false
-    fn can_update(&self, user: &User) -> bool {
+    fn can_update(&self, _user: &User) -> bool {
         false
     }
-    fn can_create(user: &User) -> bool {
+    fn can_create(_user: &User) -> bool {
         false
     }
 
