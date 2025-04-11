@@ -1,3 +1,4 @@
+use crate::database::objects::{DbObject, User};
 use crate::util;
 use crate::util::base64::{base64_decode, base64_encode};
 use anyhow::Result;
@@ -9,6 +10,199 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt::{Debug, Display, Formatter};
 
 pub(crate) const ID_MAX_VALUE: i64 = 281_474_976_710_655;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Column {
+    pub name: String,
+    pub data_type: Type,
+    pub modifiers: Vec<Modifier>,
+}
+
+impl Column {
+    pub fn new(name: &str, data_type: Type) -> Self {
+        Self {
+            name: name.to_string(),
+            data_type,
+            modifiers: Vec::new(),
+        }
+    }
+
+    pub fn descriptor(&self) -> String {
+        let mut descriptor = self.data_type.descriptor();
+        for modifier in &self.modifiers {
+            descriptor = modifier.apply_to(descriptor);
+        }
+        descriptor
+    }
+
+    pub fn with_modifier(self, modifier: Modifier) -> Self {
+        let mut new = self.clone();
+        new.modifiers.push(modifier);
+        new
+    }
+
+    pub fn primary_key(self) -> Self {
+        self.with_modifier(Modifier::PrimaryKey)
+    }
+
+    pub fn not_null(self) -> Self {
+        self.with_modifier(Modifier::NotNull)
+    }
+
+    pub fn unique(self) -> Self {
+        self.with_modifier(Modifier::Unique)
+    }
+
+    pub fn references(self, value: &str) -> Self {
+        self.with_modifier(Modifier::References(value.to_string()))
+    }
+
+    pub fn default(self, value: &str) -> Self {
+        self.with_modifier(Modifier::Default(value.to_string()))
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Type {
+    Integer(bool),
+    Float,
+    Text,
+    Boolean,
+    Blob,
+    Id,
+    Token,
+    Datetime,
+}
+
+impl Type {
+    pub fn descriptor(&self) -> String {
+        match self {
+            Type::Integer(signed, ..) => {
+                if *signed {
+                    "INTEGER".to_string()
+                } else {
+                    "UNSIGNED INTEGER".to_string()
+                }
+            }
+            Type::Float => "FLOAT".to_string(),
+            Type::Text => "TEXT".to_string(),
+            Type::Boolean => "BOOLEAN".to_string(),
+            Type::Blob => "BLOB".to_string(),
+            Type::Id => "UNSIGNED BIGINT".to_string(),
+            Type::Token => "TEXT".to_string(),
+            Type::Datetime => "DATETIME".to_string(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Modifier {
+    PrimaryKey,
+    NotNull,
+    Unique,
+    References(String),
+    Default(String),
+}
+
+impl Modifier {
+    pub fn descriptor(&self) -> String {
+        match self {
+            Modifier::PrimaryKey => "PRIMARY KEY".to_string(),
+            Modifier::NotNull => "NOT NULL".to_string(),
+            Modifier::Unique => "UNIQUE".to_string(),
+            Modifier::References(s) => format!("REFERENCES {}", s),
+            Modifier::Default(s) => format!("DEFAULT {}", s),
+        }
+    }
+
+    pub fn apply_to(&self, value: String) -> String {
+        format!("{} {}", value, self.descriptor())
+    }
+}
+
+pub enum Access {
+    All,
+    User,
+    Owner,
+    PrivilegedUser,
+    None,
+
+    And(Box<Access>, Box<Access>),
+    Or(Box<Access>, Box<Access>),
+}
+
+impl Access {
+    pub fn or(self, other: Access) -> Self {
+        Access::Or(Box::new(self), Box::new(other))
+    }
+    pub fn and(self, other: Access) -> Self {
+        Access::And(Box::new(self), Box::new(other))
+    }
+
+    pub fn can_access<T: DbObject + ?Sized>(&self, object: Option<&T>, user: &User) -> bool {
+        match self {
+            Access::All => true,
+            Access::And(left, right) => {
+                right.can_access(object, user) && left.can_access(object, user)
+            }
+            Access::Or(left, right) => {
+                right.can_access(object, user) || left.can_access(object, user)
+            }
+            _ => {
+                //all the following restrict the user to be enabled
+                if !user.enabled {
+                    false
+                } else {
+                    match self {
+                        Access::User => true,
+                        Access::Owner => object.expect("owner access used with object being None").params()[T::owner_id_column_index().expect("Owner access used, but owner_id_column_index() not implemented for the DbObject")] == user.id.to_sql().unwrap(),
+                        Access::PrivilegedUser => user.is_privileged,
+                        Access::None => false,
+                        Access::All | Access::And(..) | Access::Or(..) => {
+                            unreachable!();
+                        },
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn access_filter<T: DbObject + ?Sized>(&self, user: &User) -> String {
+        match self {
+            Access::All => "1".to_string(),
+            Access::And(left, right) => {
+                format!(
+                    "({} AND {})",
+                    left.access_filter::<T>(user),
+                    right.access_filter::<T>(user)
+                )
+            }
+            Access::Or(left, right) => {
+                format!(
+                    "({} OR {})",
+                    left.access_filter::<T>(user),
+                    right.access_filter::<T>(user)
+                )
+            }
+            _ => {
+                //all the following restrict the user to be enabled
+                if !user.enabled {
+                    "0".to_string()
+                } else {
+                    match self {
+                        Access::User => "1".to_string(),
+                        Access::Owner => format!("{}={}", T::columns()[T::owner_id_column_index().expect("Owner access used, but owner_id_column_index() not implemented for the DbObject")].name, user.id.as_i64().to_string()),
+                        Access::PrivilegedUser => if user.is_privileged { "1" } else { "0" }.to_string(),
+                        Access::None => "0".to_string(),
+                        Access::All | Access::And(..) | Access::Or(..) => {
+                            unreachable!();
+                        },
+                    }
+                }
+            }
+        }
+    }
+}
 
 /// Id holds a 48-bit identifier, which can be accessed in a form of an `i64` or as an URL-safe base 64 encoded 8 character `string`
 ///
@@ -176,12 +370,8 @@ impl Token {
     pub fn from_string_ckecked(string: String) -> Result<Self> {
         //check if is decodable
         match base64_decode(string.as_str()) {
-            Ok(_) => {
-                Ok(Self {token: string })
-            }
-            Err((err, _)) => {
-                Err(anyhow::anyhow!(err.to_string()))
-            }
+            Ok(_) => Ok(Self { token: string }),
+            Err((err, _)) => Err(anyhow::anyhow!(err.to_string())),
         }
     }
 }

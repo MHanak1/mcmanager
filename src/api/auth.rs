@@ -16,13 +16,18 @@ pub fn try_user_auth(username: String, password: String, database: &Database) ->
 
     //here we hash a random password, so no matter if provided username is correct or not it will take roughly the same time
     if user.is_err() {
-        let _ = argon2.hash_password_into(b"RandomPassword", b"RandomSalt", &mut [0u8; 32]);
+        bollocks_hash();
         return Err(anyhow!("Invalid username or password"));
     }
 
     let user = user?;
 
-    let user_password = Password::get_from_db(&database.conn, user.id)?;
+    if !user.enabled {
+        bollocks_hash();
+        return Err(anyhow!("User disabled"));
+    }
+
+    let user_password = Password::get_from_db(&database.conn, user.id, None)?;
 
     let password_hash = argon2
         .hash_password(password.as_bytes(), &user_password.salt)
@@ -36,12 +41,18 @@ pub fn try_user_auth(username: String, password: String, database: &Database) ->
         user_id: user.id,
         token: Token::new(4),
         created: chrono::offset::Utc::now(),
-        expires: false,
+        expires: true,
     };
 
-    database.insert(&new_session)?;
+    //bypass perm check, we want all users to be able to log in
+    database.insert(&new_session, None)?;
 
     Ok(new_session)
+}
+
+fn bollocks_hash() {
+    let argon2 = argon2::Argon2::default();
+    let _ = argon2.hash_password_into(b"RandomPassword", b"RandomSalt", &mut [0u8; 32]);
 }
 
 pub fn get_user(token: String, conn: &Connection) -> Result<User> {
@@ -51,7 +62,7 @@ pub fn get_user(token: String, conn: &Connection) -> Result<User> {
         Session::from_row,
     )?;
 
-    match User::get_from_db(conn, session.user_id) {
+    match User::get_from_db(conn, session.user_id, None) {
         Ok(user) => Ok(user),
         Err(_) => Err(anyhow!("User not found")),
     }

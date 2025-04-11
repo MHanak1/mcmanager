@@ -1,4 +1,3 @@
-use crate::api::util;
 use crate::api::util::rejections;
 use crate::api::{auth, filters};
 use crate::database::Database;
@@ -8,24 +7,26 @@ use crate::database::objects::{
 use crate::database::types::Id;
 use rusqlite::Error;
 use serde::de::DeserializeOwned;
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use warp::Filter;
 use warp::http::StatusCode;
-use warp::{Filter};
 
 pub trait ApiList: DbObject
 where
-    Self: std::marker::Sized,
+    Self: Sized,
     Self: serde::Serialize,
 {
     //in theory the user filter should be done within the sql query, but for the sake of simplicity we do that when collecting the results
     fn api_list(
         db_mutex: Arc<Mutex<Database>>,
         user: User,
+        filters: HashMap<String, String>,
     ) -> Result<impl warp::Reply, warp::Rejection> {
         db_mutex.lock().map_or_else(
             |_| Err(warp::reject::custom(rejections::InternalServerError)),
             |database| {
-                match database.get_all::<Self>(user) {
+                match database.list_filtered::<Self>(filters, Some(&user)) {
                     Ok(objects) => Ok(warp::reply::with_status(
                         warp::reply::json(&objects),
                         StatusCode::OK,
@@ -34,7 +35,7 @@ where
                         match err {
                             //if the user does not have access to anything, instead of erroring out return an empty array
                             Error::QueryReturnedNoRows => Ok(warp::reply::with_status(
-                                warp::reply::json::<std::vec::Vec<&str>>(&vec![]),
+                                warp::reply::json::<Vec<&str>>(&vec![]),
                                 StatusCode::OK,
                             )),
                             _ => {
@@ -57,12 +58,15 @@ where
             .and(warp::path::end())
             .and(filters::with_db(db_mutex.clone()))
             .and(filters::with_auth(db_mutex))
-            .and_then(|db_mutex, user| async move { Self::api_list(db_mutex, user) })
+            .and(warp::query::<HashMap<String, String>>())
+            .and_then(
+                |db_mutex, user, filters| async move { Self::api_list(db_mutex, user, filters) },
+            )
     }
 }
 pub trait ApiGet: DbObject
 where
-    Self: std::marker::Sized,
+    Self: Sized,
     Self: serde::Serialize,
 {
     fn api_get(
@@ -72,29 +76,34 @@ where
     ) -> Result<impl warp::Reply, warp::Rejection> {
         let id = Id::from_string(&id);
         if id.is_err() {
-            return Err(warp::reject::custom(util::rejections::NotFound));
+            return Err(warp::reject::custom(rejections::NotFound));
         }
 
         let id = id.unwrap();
 
         db_mutex.lock().map_or_else(
             |_| Err(warp::reject::not_found()),
-            |database| match Self::get_from_db(&database.conn, id) {
+            |database| match Self::get_from_db(&database.conn, id, Some(&user)) {
                 Ok(object) => {
-                    if object.can_access(&user) {
+                    Ok(warp::reply::with_status(
+                        warp::reply::json(&object),
+                        StatusCode::OK,
+                    ))
+
+                    /*
+                    if object.can(&user) {
                         Ok(warp::reply::with_status(
                             warp::reply::json(&object),
                             StatusCode::OK,
                         ))
                     } else {
                         // act as if the object doesn't exist
-                        Err(warp::reject::custom(util::rejections::NotFound))
+                        Err(warp::reject::custom(rejections::NotFound))
                     }
+                     */
                 }
                 Err(err) => match err {
-                    Error::QueryReturnedNoRows => {
-                        Err(warp::reject::custom(util::rejections::NotFound))
-                    }
+                    Error::QueryReturnedNoRows => Err(warp::reject::custom(rejections::NotFound)),
                     _ => Err(warp::reject::custom(rejections::InternalServerError)),
                 },
             },
@@ -117,7 +126,7 @@ where
 
 pub trait ApiCreate: DbObject
 where
-    Self: std::marker::Sized,
+    Self: Sized,
     Self: serde::Serialize,
 {
     type JsonFrom: Clone + DeserializeOwned + Send;
@@ -133,12 +142,12 @@ where
             db_mutex.lock().map_or_else(
                 |_| Err(warp::reject::custom(rejections::InternalServerError)),
                 |database| {
-                    let new = Self::from_json(data, user);
+                    let new = Self::from_json(data, user.clone());
 
-                    match database.insert(&new) {
+                    match database.insert(&new, Some(&user)) {
                         Ok(_) => Ok(warp::reply::with_status(
                             warp::reply::json(&new),
-                            warp::http::StatusCode::CREATED,
+                            StatusCode::CREATED,
                         )),
                         Err(err) => {
                             eprintln!("{err:?}");
@@ -162,6 +171,7 @@ where
         db_mutex: Arc<Mutex<Database>>,
     ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
         warp::post()
+            .and(warp::body::content_length_limit(1024 * 32))
             .and(warp::path("api"))
             .and(warp::path(Self::table_name()))
             .and(warp::path("create"))
@@ -174,7 +184,7 @@ where
 }
 
 /*
-pub trait ApiUpdate : DbObject where Self: std::marker::Sized, Self: serde::Serialize {
+pub trait ApiUpdate : DbObject where Self: Sized, Self: serde::Serialize {
     type JsonFrom;
 
     async fn api_create(db_mutex: Arc<Mutex<Database>>, user: User, data: Self::JsonFrom) -> Result<impl warp::Reply, warp::Rejection> {
@@ -184,8 +194,8 @@ pub trait ApiUpdate : DbObject where Self: std::marker::Sized, Self: serde::Seri
  */
 
 mod json_fields {
-    use crate::database::types::{Id};
-    use serde::{Deserialize};
+    use crate::database::types::Id;
+    use serde::Deserialize;
 
     #[derive(Debug, Clone, Deserialize)]
     pub struct Login {
@@ -347,22 +357,29 @@ impl ApiCreate for User {
                 {
                     Ok(new) => Ok(warp::reply::with_status(
                         warp::reply::json(&new),
-                        warp::http::StatusCode::CREATED,
+                        StatusCode::CREATED,
                     )),
-                    Err(err) => match err.downcast_ref::<rusqlite::Error>() {
-                        Some(err) => if let Error::SqliteFailure(err, ..) = err { if let rusqlite::ffi::Error {
-                                code: rusqlite::ErrorCode::ConstraintViolation,
-                                ..
-                            } = *err { Ok(warp::reply::with_status(
-                            warp::reply::json(&"username already taken"),
-                            StatusCode::CONFLICT,
-                        )) } else {
-                            eprintln!("{err:?}");
-                            Err(warp::reject::custom(rejections::InternalServerError))
-                        } } else {
-                            eprintln!("{err:?}");
-                            Err(warp::reject::custom(rejections::InternalServerError))
-                        },
+                    Err(err) => match err.downcast_ref::<Error>() {
+                        Some(err) => {
+                            if let Error::SqliteFailure(err, ..) = err {
+                                if let rusqlite::ffi::Error {
+                                    code: rusqlite::ErrorCode::ConstraintViolation,
+                                    ..
+                                } = *err
+                                {
+                                    Ok(warp::reply::with_status(
+                                        warp::reply::json(&"username already taken"),
+                                        StatusCode::CONFLICT,
+                                    ))
+                                } else {
+                                    eprintln!("{err:?}");
+                                    Err(warp::reject::custom(rejections::InternalServerError))
+                                }
+                            } else {
+                                eprintln!("{err:?}");
+                                Err(warp::reject::custom(rejections::InternalServerError))
+                            }
+                        }
                         _ => Err(warp::reject::custom(rejections::InternalServerError)),
                     },
                 },
@@ -407,7 +424,7 @@ pub async fn user_auth(
     credentials: json_fields::Login,
 ) -> Result<impl warp::Reply, warp::Rejection> {
     db_mutex.lock().map_or_else(
-        |_| Err(warp::reject::custom(util::rejections::InternalServerError)),
+        |_| Err(warp::reject::custom(rejections::InternalServerError)),
         |database| match auth::try_user_auth(credentials.username, credentials.password, &database)
         {
             Ok(session) => Ok(warp::reply::with_status(
@@ -418,16 +435,16 @@ pub async fn user_auth(
                 ),
                 StatusCode::CREATED,
             )),
-            Err(err) => match err.downcast_ref::<rusqlite::Error>() {
+            Err(err) => match err.downcast_ref::<Error>() {
                 Some(err) => {
-                    if matches!(err, rusqlite::Error::QueryReturnedNoRows) {
-                        Err(warp::reject::custom(util::rejections::BadRequest))
+                    if matches!(err, Error::QueryReturnedNoRows) {
+                        Err(warp::reject::custom(rejections::BadRequest))
                     } else {
                         eprintln!("Error: {err:?}");
-                        Err(warp::reject::custom(util::rejections::InternalServerError))
+                        Err(warp::reject::custom(rejections::InternalServerError))
                     }
                 }
-                None => Err(warp::reject::custom(util::rejections::Unauthorized)),
+                None => Err(warp::reject::custom(rejections::Unauthorized)),
             },
         },
     )

@@ -1,13 +1,11 @@
 use mcmanager::api::filters;
 use mcmanager::api::handlers::{ApiCreate, ApiGet, ApiList};
 use mcmanager::database::Database;
-use mcmanager::database::objects::{
-    InviteLink, Mod, ModLoader, Session, User, Version, World,
-};
+use mcmanager::database::objects::{InviteLink, Mod, ModLoader, Session, User, Version, World};
 use mcmanager::{api, util};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-use warp::{Filter};
+use warp::Filter;
 
 #[tokio::main]
 async fn main() {

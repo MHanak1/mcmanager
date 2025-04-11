@@ -53,12 +53,12 @@ pub fn with_auth(
                                     eprintln!("{err}");
                                     Err(warp::reject::custom(rejections::InternalServerError))
                                 },
-                                |session| if let Ok(user) = database.get_one::<User>(session.user_id) { Ok(user) } else {
+                                |session| if let Ok(user) = database.get_one::<User>(session.user_id, None) { Ok(user) } else {
                                     eprintln!(
                                         "Orphaned session found, token: {}, user: {}. deleting (note: this should never happen because of SQLite foreign key requirement",
                                         session.token, session.user_id
                                     );
-                                    match database.remove(&session) {
+                                    match database.remove(&session, None) {
                                         Ok(_) => {}
                                         Err(error) => {
                                             eprintln!(
