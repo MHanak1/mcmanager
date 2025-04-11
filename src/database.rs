@@ -75,7 +75,7 @@ impl Database {
         };
 
         if let Some(user) = user {
-            query += T::view_access().access_filter::<T>(&user).as_str();
+            query += T::view_access().access_filter::<T>(user).as_str();
         }
 
         println!("{}", query);
@@ -113,13 +113,7 @@ impl Database {
                     "null" => {} //stop from doing anything no null
                     "false" => value = "0".to_string(),
                     "true" => value = "1".to_string(),
-                    _ => match column.data_type {
-                        Type::Id => match Id::from_string(&*value) {
-                            Ok(id) => value = id.as_i64().to_string(),
-                            Err(_) => {}
-                        },
-                        _ => {}
-                    },
+                    _ => if column.data_type == Type::Id { if let Ok(id) = Id::from_string(&value) { value = id.as_i64().to_string() } },
                 };
 
                 if value == "null" {
@@ -134,14 +128,14 @@ impl Database {
         (new_filters, values)
     }
 
-    pub fn create_user(&self, username: String, password: String) -> anyhow::Result<User> {
+    pub fn create_user(&self, username: String, password: &str) -> anyhow::Result<User> {
         let user = User {
             name: username,
             ..Default::default()
         };
         self.create_user_from(user, password)
     }
-    pub fn create_user_from(&self, user: User, password: String) -> anyhow::Result<User> {
+    pub fn create_user_from(&self, user: User, password: &str) -> anyhow::Result<User> {
         self.insert(&user, None)?;
 
         let salt = SaltString::generate(&mut OsRng);
