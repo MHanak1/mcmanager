@@ -30,7 +30,7 @@ impl Column {
     pub fn descriptor(&self) -> String {
         let mut descriptor = self.data_type.descriptor();
         for modifier in &self.modifiers {
-            descriptor = modifier.apply_to(descriptor);
+            descriptor = modifier.apply_to(&descriptor);
         }
         descriptor
     }
@@ -110,12 +110,12 @@ impl Modifier {
             Modifier::PrimaryKey => "PRIMARY KEY".to_string(),
             Modifier::NotNull => "NOT NULL".to_string(),
             Modifier::Unique => "UNIQUE".to_string(),
-            Modifier::References(s) => format!("REFERENCES {}", s),
-            Modifier::Default(s) => format!("DEFAULT {}", s),
+            Modifier::References(s) => format!("REFERENCES {s}"),
+            Modifier::Default(s) => format!("DEFAULT {s}"),
         }
     }
 
-    pub fn apply_to(&self, value: String) -> String {
+    pub fn apply_to(&self, value: &str) -> String {
         format!("{} {}", value, self.descriptor())
     }
 }
@@ -150,9 +150,7 @@ impl Access {
             }
             _ => {
                 //all the following restrict the user to be enabled
-                if !user.enabled {
-                    false
-                } else {
+                if user.enabled {
                     match self {
                         Access::User => true,
                         Access::Owner => object.expect("owner access used with object being None").params()[T::owner_id_column_index().expect("Owner access used, but owner_id_column_index() not implemented for the DbObject")] == user.id.to_sql().unwrap(),
@@ -162,6 +160,8 @@ impl Access {
                             unreachable!();
                         },
                     }
+                } else {
+                    false
                 }
             }
         }
@@ -186,18 +186,18 @@ impl Access {
             }
             _ => {
                 //all the following restrict the user to be enabled
-                if !user.enabled {
-                    "0".to_string()
-                } else {
+                if user.enabled {
                     match self {
                         Access::User => "1".to_string(),
-                        Access::Owner => format!("{}={}", T::columns()[T::owner_id_column_index().expect("Owner access used, but owner_id_column_index() not implemented for the DbObject")].name, user.id.as_i64().to_string()),
+                        Access::Owner => format!("{}={}", T::columns()[T::owner_id_column_index().expect("Owner access used, but owner_id_column_index() not implemented for the DbObject")].name, user.id.as_i64()),
                         Access::PrivilegedUser => if user.is_privileged { "1" } else { "0" }.to_string(),
                         Access::None => "0".to_string(),
                         Access::All | Access::And(..) | Access::Or(..) => {
                             unreachable!();
                         },
                     }
+                } else {
+                    "0".to_string()
                 }
             }
         }

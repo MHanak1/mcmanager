@@ -11,9 +11,9 @@ fn main() -> Result<()> {
     let database = Database { conn };
     database.init().expect("Failed to init database");
 
-    let mut miguel = database.create_user("MHanak".parse()?, "Password".parse()?)?;
-    let _ = database.create_user("Dingus".parse()?, "AAAAAAAAAAAAAAA".parse()?)?;
-    let _ = database.create_user("Dorkus".parse()?, "A".parse()?)?;
+    let mut miguel = database.create_user("MHanak".parse()?, "Password")?;
+    let _ = database.create_user("Dingus".parse()?, "AAAAAAAAAAAAAAA")?;
+    let _ = database.create_user("Dorkus".parse()?, "A")?;
 
     println!(
         "{}",

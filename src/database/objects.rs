@@ -33,12 +33,7 @@ pub trait DbObject {
         None
     }
     fn get_column(name: &str) -> Option<Column> {
-        for column in Self::columns() {
-            if name == column.name {
-                return Some(column);
-            }
-        }
-        None
+        Self::columns().iter().find(|c| c.name == name).map(|c| c.to_owned())
     }
 
     fn database_descriptor() -> String {
@@ -60,7 +55,7 @@ pub trait DbObject {
                     Some(user) => {
                         format!(" AND {}", Self::update_access().access_filter::<Self>(user))
                     }
-                    None => "".to_string(),
+                    None => String::new(),
                 },
             ),
             params![self.get_id()],
@@ -109,7 +104,7 @@ pub trait DbObject {
                     Some(user) => {
                         format!(" AND {}", Self::update_access().access_filter::<Self>(user))
                     }
-                    None => "".to_string(),
+                    None => String::new(),
                 }
             ),
             params_from_iter(self.params()),
@@ -128,7 +123,7 @@ pub trait DbObject {
                     Some(user) => {
                         format!(" AND {}", Self::update_access().access_filter::<Self>(user))
                     }
-                    None => "".to_string(),
+                    None => String::new(),
                 }
             ),
             params![id],
@@ -548,7 +543,7 @@ impl DbObject for User {
 impl Default for User {
     fn default() -> Self {
         Self {
-            id: Default::default(),
+            id: Id::default(),
             name: String::new(),
             avatar_id: None,
             memory_limit: None,

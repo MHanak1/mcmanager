@@ -5,7 +5,7 @@ use anyhow::{Result, anyhow};
 use argon2::PasswordHasher;
 use rusqlite::{Connection, params};
 
-pub fn try_user_auth(username: String, password: String, database: &Database) -> Result<Session> {
+pub fn try_user_auth(username: &str, password: &str, database: &Database) -> Result<Session> {
     let user = database.conn.query_row(
         &format!("SELECT * FROM {} WHERE name = ?1", User::table_name(),),
         params![username],
@@ -55,7 +55,7 @@ fn bollocks_hash() {
     let _ = argon2.hash_password_into(b"RandomPassword", b"RandomSalt", &mut [0u8; 32]);
 }
 
-pub fn get_user(token: String, conn: &Connection) -> Result<User> {
+pub fn get_user(token: &str, conn: &Connection) -> Result<User> {
     let session = conn.query_row(
         &format!("SELECT * FROM {} WHERE token = ?1", Session::table_name(),),
         params![token],

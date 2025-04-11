@@ -3,9 +3,17 @@ name = "mcmanager"
 version = "0.1.0"
 edition = "2024"
 
+[lints.rust]
+unsafe_code = "forbid"
 
-#[lib]
-#proc-macro = true
+[lints.clippy]
+uninlined_format_args = "warn"
+unused_async = "warn"
+if_not_else = "warn"
+default_trait_access = "warn"
+manual_string_new = "warn"
+manual_find = "warn"
+needless_pass_by_value = "warn"
 
 [dependencies]
 anyhow = "1.0.97"
@@ -14,6 +22,7 @@ chrono = "0.4.40"
 rand = "0.9.0"
 rusqlite = { version = "0.34.0", features = ["bundled", "chrono"] }
 serde = { version = "1.0.219", features = ["derive"] }
+
 serde_json = "1.0.140"
 serde_urlencoded = "0.7.1"
 serde_with = { version =  "3.12.0", features = ["chrono"] }

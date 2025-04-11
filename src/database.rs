@@ -55,6 +55,7 @@ impl Database {
         self.list_filtered::<T>(HashMap::default(), user)
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     pub fn list_filtered<T: DbObject>(
         &self,
         filters: HashMap<String, String>,
@@ -62,7 +63,9 @@ impl Database {
     ) -> rusqlite::Result<Vec<T>> {
         let mut query = format!("SELECT * FROM {} WHERE ", T::table_name());
 
-        let fields = if !filters.is_empty() {
+        let fields = if filters.is_empty() {
+            vec![]
+        } else {
             let (filters_processed, fields) = Self::construct_filters::<T>(&filters);
 
             for filter in filters_processed {
@@ -70,15 +73,13 @@ impl Database {
                 query += " AND ";
             }
             fields
-        } else {
-            vec![]
         };
 
         if let Some(user) = user {
             query += T::view_access().access_filter::<T>(user).as_str();
         }
 
-        println!("{}", query);
+        println!("{query}");
 
         let mut stmt = self.conn.prepare(&query)?;
         let rows = stmt.query_map(rusqlite::params_from_iter(fields), T::from_row)?;
@@ -117,7 +118,7 @@ impl Database {
                 };
 
                 if value == "null" {
-                    new_filters.push(format!("{} IS NULL", query));
+                    new_filters.push(format!("{query} IS NULL"));
                 } else {
                     values.push(value.clone());
                     new_filters.push(format!("{}=?{}", query, values.len()));

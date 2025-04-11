@@ -4,7 +4,7 @@ use crate::database::Database;
 use crate::database::objects::{
     DbObject, InviteLink, Mod, ModLoader, Session, User, Version, World,
 };
-use crate::database::types::Id;
+use crate::database::types::{Id, Token};
 use rusqlite::Error;
 use serde::de::DeserializeOwned;
 use std::collections::HashMap;
@@ -277,7 +277,7 @@ impl ApiCreate for Mod {
 
     fn from_json(data: Self::JsonFrom, user: User) -> Self {
         Self {
-            id: Default::default(),
+            id: Id::default(),
             version_id: data.version_id,
             name: data.name,
             description: data.description.unwrap_or_default(),
@@ -292,7 +292,7 @@ impl ApiCreate for Version {
 
     fn from_json(data: Self::JsonFrom, _user: User) -> Self {
         Self {
-            id: Default::default(),
+            id: Id::default(),
             minecraft_version: data.minecraft_version,
             mod_loader_id: data.mod_loader_id,
         }
@@ -304,7 +304,7 @@ impl ApiCreate for ModLoader {
 
     fn from_json(data: Self::JsonFrom, _user: User) -> Self {
         Self {
-            id: Default::default(),
+            id: Id::default(),
             name: data.name,
             can_load_mods: data.can_load_mods,
         }
@@ -315,7 +315,7 @@ impl ApiCreate for World {
     type JsonFrom = json_fields::World;
     fn from_json(data: Self::JsonFrom, user: User) -> Self {
         Self {
-            id: Default::default(),
+            id: Id::default(),
             owner_id: user.id,
             name: data.name,
             icon_id: None,
@@ -331,7 +331,7 @@ impl ApiCreate for User {
 
     fn from_json(data: Self::JsonFrom, _user: User) -> Self {
         Self {
-            id: Default::default(),
+            id: Id::default(),
             name: data.username,
             avatar_id: data.avatar_id,
             memory_limit: data.memory_limit,
@@ -353,7 +353,7 @@ impl ApiCreate for User {
             db_mutex.lock().map_or_else(
                 |_| Err(warp::reject::custom(rejections::InternalServerError)),
                 |database| match database
-                    .create_user_from(Self::from_json(data.clone(), user), data.password)
+                    .create_user_from(Self::from_json(data.clone(), user), &data.password)
                 {
                     Ok(new) => Ok(warp::reply::with_status(
                         warp::reply::json(&new),
@@ -398,7 +398,7 @@ impl ApiCreate for Session {
     fn from_json(data: Self::JsonFrom, user: User) -> Self {
         Self {
             user_id: user.id,
-            token: Default::default(),
+            token: Token::default(),
             created: chrono::offset::Utc::now(),
             expires: data.expires.unwrap_or(true),
         }
@@ -410,8 +410,8 @@ impl ApiCreate for InviteLink {
 
     fn from_json(_data: Self::JsonFrom, user: User) -> Self {
         Self {
-            id: Default::default(),
-            invite_token: Default::default(),
+            id: Id::default(),
+            invite_token: Token::default(),
             creator_id: user.id,
             created: chrono::offset::Utc::now(),
         }
@@ -419,13 +419,14 @@ impl ApiCreate for InviteLink {
 }
 
 //this in theory could be transformed into ApiCreate implementation, but it would require a fair amount of changes, and for now it's not causing any problems
+#[allow(clippy::unused_async)]
 pub async fn user_auth(
     db_mutex: Arc<Mutex<Database>>,
     credentials: json_fields::Login,
 ) -> Result<impl warp::Reply, warp::Rejection> {
     db_mutex.lock().map_or_else(
         |_| Err(warp::reject::custom(rejections::InternalServerError)),
-        |database| match auth::try_user_auth(credentials.username, credentials.password, &database)
+        |database| match auth::try_user_auth(&credentials.username, &credentials.password, &database)
         {
             Ok(session) => Ok(warp::reply::with_status(
                 warp::reply::with_header(
@@ -450,6 +451,7 @@ pub async fn user_auth(
     )
 }
 
+#[allow(clippy::unused_async)]
 pub async fn user_info(user: User) -> Result<impl warp::Reply, warp::Rejection> {
     Ok(warp::reply::json(&user))
 }
