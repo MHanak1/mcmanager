@@ -1,5 +1,5 @@
 use mcmanager::api::filters;
-use mcmanager::api::handlers::{ApiCreate, ApiGet, ApiList};
+use mcmanager::api::handlers::{ApiCreate, ApiGet, ApiList, ApiUpdate};
 use mcmanager::database::Database;
 use mcmanager::database::objects::{InviteLink, Mod, ModLoader, Session, User, Version, World};
 use mcmanager::{api, util};
@@ -9,10 +9,10 @@ use warp::Filter;
 
 #[tokio::main]
 async fn main() {
-    let conn =
-        rusqlite::Connection::open(Path::new(&util::dirs::data_dir().join("database.db"))).unwrap();
+    let conn = rusqlite::Connection::open(Path::new(&util::dirs::data_dir().join("database.db")))
+        .expect("failed to open database");
     let database = Database { conn };
-    database.init().unwrap();
+    database.init().expect("failed to initialize database");
     run(database).await;
 }
 
@@ -42,19 +42,24 @@ async fn run(database: Database) {
 
     let mods = Mod::list_filter(db_mutex.clone())
         .or(Mod::create_filter(db_mutex.clone()))
-        .or(Mod::get_filter(db_mutex.clone()));
+        .or(Mod::get_filter(db_mutex.clone()))
+        .or(Mod::update_filter(db_mutex.clone()));
     let versions = Version::list_filter(db_mutex.clone())
         .or(Version::create_filter(db_mutex.clone()))
-        .or(Version::get_filter(db_mutex.clone()));
+        .or(Version::get_filter(db_mutex.clone()))
+        .or(Version::update_filter(db_mutex.clone()));
     let mod_loaders = ModLoader::list_filter(db_mutex.clone())
         .or(ModLoader::create_filter(db_mutex.clone()))
-        .or(ModLoader::get_filter(db_mutex.clone()));
+        .or(ModLoader::get_filter(db_mutex.clone()))
+        .or(ModLoader::update_filter(db_mutex.clone()));
     let worlds = World::list_filter(db_mutex.clone())
         .or(World::create_filter(db_mutex.clone()))
-        .or(World::get_filter(db_mutex.clone()));
+        .or(World::get_filter(db_mutex.clone()))
+        .or(World::update_filter(db_mutex.clone()));
     let users = User::list_filter(db_mutex.clone())
         .or(User::create_filter(db_mutex.clone()))
-        .or(User::get_filter(db_mutex.clone()));
+        .or(User::get_filter(db_mutex.clone()))
+        .or(User::update_filter(db_mutex.clone()));
     let sessions = Session::list_filter(db_mutex.clone())
         .or(Session::create_filter(db_mutex.clone()))
         .or(Session::get_filter(db_mutex.clone()));

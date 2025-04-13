@@ -7,7 +7,7 @@ pub mod dirs {
         env::current_exe()
             .expect("Can't get current executable path")
             .parent()
-            .unwrap()
+            .expect("Can't get parent directory of executable")
             .to_owned()
     }
     pub fn data_dir() -> PathBuf {

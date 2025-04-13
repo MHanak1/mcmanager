@@ -74,40 +74,25 @@ where
         db_mutex: Arc<Mutex<Database>>,
         user: User,
     ) -> Result<impl warp::Reply, warp::Rejection> {
-        let id = Id::from_string(&id);
-        if id.is_err() {
-            return Err(warp::reject::custom(rejections::NotFound));
-        }
-
-        let id = id.unwrap();
-
-        db_mutex.lock().map_or_else(
-            |_| Err(warp::reject::not_found()),
-            |database| match Self::get_from_db(&database.conn, id, Some(&user)) {
-                Ok(object) => {
-                    Ok(warp::reply::with_status(
+        if let Ok(id) = Id::from_string(&id) {
+            db_mutex.lock().map_or_else(
+                |_| Err(warp::reject::not_found()),
+                |database| match database.get_one::<Self>(id, Some(&user)) {
+                    Ok(object) => Ok(warp::reply::with_status(
                         warp::reply::json(&object),
                         StatusCode::OK,
-                    ))
-
-                    /*
-                    if object.can(&user) {
-                        Ok(warp::reply::with_status(
-                            warp::reply::json(&object),
-                            StatusCode::OK,
-                        ))
-                    } else {
-                        // act as if the object doesn't exist
-                        Err(warp::reject::custom(rejections::NotFound))
-                    }
-                     */
-                }
-                Err(err) => match err {
-                    Error::QueryReturnedNoRows => Err(warp::reject::custom(rejections::NotFound)),
-                    _ => Err(warp::reject::custom(rejections::InternalServerError)),
+                    )),
+                    Err(err) => match err {
+                        Error::QueryReturnedNoRows => {
+                            Err(warp::reject::custom(rejections::NotFound))
+                        }
+                        _ => Err(warp::reject::custom(rejections::InternalServerError)),
+                    },
                 },
-            },
-        )
+            )
+        } else {
+            Err(warp::reject::custom(rejections::NotFound))
+        }
     }
 
     fn get_filter(
@@ -142,6 +127,10 @@ where
             db_mutex.lock().map_or_else(
                 |_| Err(warp::reject::custom(rejections::InternalServerError)),
                 |database| {
+                    if !Self::can_create(&user) {
+                        return Err(warp::reject::custom(rejections::Unauthorized));
+                    }
+
                     let new = Self::from_json(data, user.clone());
 
                     match database.insert(&new, Some(&user)) {
@@ -183,15 +172,64 @@ where
     }
 }
 
-/*
-pub trait ApiUpdate : DbObject where Self: Sized, Self: serde::Serialize {
-    type JsonFrom;
+pub trait ApiUpdate: ApiCreate
+where
+    Self: Sized,
+    Self: serde::Serialize,
+{
+    fn update_with_json(&self, data: Self::JsonFrom) -> Self;
 
-    async fn api_create(db_mutex: Arc<Mutex<Database>>, user: User, data: Self::JsonFrom) -> Result<impl warp::Reply, warp::Rejection> {
+    fn api_update(
+        db_mutex: Arc<Mutex<Database>>,
+        id: String,
+        user: User,
+        data: Self::JsonFrom,
+    ) -> Result<impl warp::Reply, warp::Rejection> {
+        db_mutex.lock().map_or_else(
+            |_| Err(warp::reject::custom(rejections::InternalServerError)),
+            |database| {
+                if let Ok(id) = Id::from_string(&id) {
+                    database.get_one(id, Some(&user)).map_or_else(
+                        |_| Err(warp::reject::custom(rejections::NotFound)),
+                        |object: Self| {
+                            let object = object.update_with_json(data);
+                            match database.update(&object, Some(&user)) {
+                                Ok(_) => Ok(warp::reply::with_status(
+                                    warp::reply::json(&object),
+                                    StatusCode::OK,
+                                )),
+                                Err(err) => {
+                                    eprintln!("{err:?}");
+                                    Err(warp::reject::custom(rejections::Unauthorized))
+                                }
+                            }
+                        },
+                    )
+                } else {
+                    Err(warp::reject::custom(rejections::NotFound))
+                }
+            },
+        )
+    }
 
+    fn update_filter(
+        db_mutex: Arc<Mutex<Database>>,
+    ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
+        warp::put()
+            .and(warp::body::content_length_limit(1024 * 32))
+            .and(warp::path("api"))
+            .and(warp::path(Self::table_name()))
+            .and(warp::path::param::<String>())
+            .and(warp::path("update"))
+            .and(warp::path::end())
+            .and(filters::with_db(db_mutex.clone()))
+            .and(filters::with_auth(db_mutex))
+            .and(warp::body::json())
+            .and_then(|id, db_mutex, user, data| async move {
+                Self::api_update(db_mutex, id, user, data)
+            })
     }
 }
- */
 
 mod json_fields {
     use crate::database::types::Id;
@@ -235,7 +273,7 @@ mod json_fields {
 
     #[derive(Debug, Clone, Deserialize)]
     pub struct User {
-        pub username: String,
+        pub name: String,
         pub password: String,
         pub avatar_id: Option<Id>,
         pub memory_limit: Option<u32>,
@@ -257,21 +295,7 @@ mod json_fields {
 }
 
 impl ApiList for Mod {}
-impl ApiList for Version {}
-impl ApiList for ModLoader {}
-impl ApiList for World {}
-impl ApiList for User {}
-impl ApiList for Session {}
-impl ApiList for InviteLink {}
-
 impl ApiGet for Mod {}
-impl ApiGet for Version {}
-impl ApiGet for ModLoader {}
-impl ApiGet for World {}
-impl ApiGet for User {}
-impl ApiGet for Session {}
-impl ApiGet for InviteLink {}
-
 impl ApiCreate for Mod {
     type JsonFrom = json_fields::Mod;
 
@@ -286,6 +310,19 @@ impl ApiCreate for Mod {
         }
     }
 }
+impl ApiUpdate for Mod {
+    fn update_with_json(&self, data: Self::JsonFrom) -> Self {
+        let mut new = self.clone();
+        new.version_id = data.version_id;
+        new.description = data.description.unwrap_or_default();
+        new.name = data.name;
+        new.icon_id = data.icon_id;
+        new
+    }
+}
+
+impl ApiList for Version {}
+impl ApiGet for Version {}
 
 impl ApiCreate for Version {
     type JsonFrom = json_fields::Version;
@@ -298,7 +335,17 @@ impl ApiCreate for Version {
         }
     }
 }
+impl ApiUpdate for Version {
+    fn update_with_json(&self, data: Self::JsonFrom) -> Self {
+        let mut new = self.clone();
+        new.minecraft_version = data.minecraft_version;
+        new.mod_loader_id = data.mod_loader_id;
+        new
+    }
+}
 
+impl ApiList for ModLoader {}
+impl ApiGet for ModLoader {}
 impl ApiCreate for ModLoader {
     type JsonFrom = json_fields::ModLoader;
 
@@ -310,7 +357,17 @@ impl ApiCreate for ModLoader {
         }
     }
 }
+impl ApiUpdate for ModLoader {
+    fn update_with_json(&self, data: Self::JsonFrom) -> Self {
+        let mut new = self.clone();
+        new.name = data.name;
+        new.can_load_mods = data.can_load_mods;
+        new
+    }
+}
 
+impl ApiList for World {}
+impl ApiGet for World {}
 impl ApiCreate for World {
     type JsonFrom = json_fields::World;
     fn from_json(data: Self::JsonFrom, user: User) -> Self {
@@ -326,13 +383,26 @@ impl ApiCreate for World {
     }
 }
 
+impl ApiUpdate for World {
+    fn update_with_json(&self, data: Self::JsonFrom) -> Self {
+        let mut new = self.clone();
+        new.name = data.name;
+        new.icon_id = data.icon_id;
+        new.allocated_memory = data.allocated_memory.unwrap_or(new.allocated_memory);
+        new.version_id = data.version_id;
+        new.enabled = data.enabled.unwrap_or(new.enabled);
+        new
+    }
+}
+
+impl ApiList for User {}
+impl ApiGet for User {}
 impl ApiCreate for User {
     type JsonFrom = json_fields::User;
-
     fn from_json(data: Self::JsonFrom, _user: User) -> Self {
         Self {
             id: Id::default(),
-            name: data.username,
+            name: data.name,
             avatar_id: data.avatar_id,
             memory_limit: data.memory_limit,
             player_limit: data.player_limit,
@@ -392,7 +462,24 @@ impl ApiCreate for User {
         }
     }
 }
+impl ApiUpdate for User {
+    fn update_with_json(&self, data: Self::JsonFrom) -> Self {
+        let mut new = self.clone();
+        new.name = data.name;
+        new.avatar_id = data.avatar_id;
+        new.memory_limit = data.memory_limit;
+        new.player_limit = data.player_limit;
+        new.world_limit = data.world_limit;
+        new.active_world_limit = data.active_world_limit;
+        new.storage_limit = data.storage_limit;
+        new.is_privileged = data.is_privileged.unwrap_or(new.is_privileged);
+        new.enabled = data.enabled.unwrap_or(new.enabled);
+        new
+    }
+}
 
+impl ApiList for Session {}
+impl ApiGet for Session {}
 impl ApiCreate for Session {
     type JsonFrom = json_fields::Session;
     fn from_json(data: Self::JsonFrom, user: User) -> Self {
@@ -405,6 +492,8 @@ impl ApiCreate for Session {
     }
 }
 
+impl ApiList for InviteLink {}
+impl ApiGet for InviteLink {}
 impl ApiCreate for InviteLink {
     type JsonFrom = json_fields::InviteLink;
 
@@ -426,8 +515,11 @@ pub async fn user_auth(
 ) -> Result<impl warp::Reply, warp::Rejection> {
     db_mutex.lock().map_or_else(
         |_| Err(warp::reject::custom(rejections::InternalServerError)),
-        |database| match auth::try_user_auth(&credentials.username, &credentials.password, &database)
-        {
+        |database| match auth::try_user_auth(
+            &credentials.username,
+            &credentials.password,
+            &database,
+        ) {
             Ok(session) => Ok(warp::reply::with_status(
                 warp::reply::with_header(
                     warp::reply::json(&session.token),

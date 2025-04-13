@@ -6,6 +6,7 @@ use crate::database::types::{Id, Type};
 use argon2::password_hash::SaltString;
 use argon2::password_hash::rand_core::OsRng;
 use argon2::{Argon2, PasswordHasher};
+use rusqlite::{params, params_from_iter};
 use std::collections::HashMap;
 
 pub mod objects;
@@ -35,20 +36,89 @@ impl Database {
         Ok(())
     }
 
-    pub fn insert(&self, value: &impl DbObject, user: Option<&User>) -> rusqlite::Result<usize> {
-        value.insert_self(&self.conn, user)
+    pub fn insert<T: DbObject>(&self, value: &T, user: Option<&User>) -> rusqlite::Result<usize> {
+        if let Some(user) = user {
+            if !T::can_create(user) {
+                return Err(rusqlite::Error::QueryReturnedNoRows);
+            }
+        }
+        self.conn.execute(
+            &format!(
+                "INSERT INTO {} ({}) VALUES ({})",
+                T::table_name(),
+                T::columns()
+                    .iter()
+                    .map(|column| column.name.to_string())
+                    .collect::<Vec<String>>()
+                    .join(", "),
+                T::columns()
+                    .iter()
+                    .enumerate()
+                    .map(|i| { format!("?{}", i.0 + 1) })
+                    .collect::<Vec<String>>()
+                    .join(", ")
+            ),
+            params_from_iter(value.params()),
+        )
     }
 
-    pub fn update(&self, value: &impl DbObject, user: Option<&User>) -> rusqlite::Result<usize> {
-        value.update_self(&self.conn, user)
+    pub fn update<T: DbObject>(&self, value: &T, user: Option<&User>) -> rusqlite::Result<usize> {
+        self.conn.execute(
+            &format!(
+                "UPDATE {} SET {} WHERE {} = {}{}",
+                T::table_name(),
+                T::columns()
+                    .iter()
+                    .enumerate()
+                    .map(|(id, column)| { format!("{} = ?{}", column.name, id + 1) })
+                    .collect::<Vec<String>>()
+                    .join(", "),
+                T::columns()[T::id_column_index()].name,
+                value.get_id().as_i64(),
+                match user {
+                    Some(user) => {
+                        format!(" AND {}", T::update_access().access_filter::<T>(user))
+                    }
+                    None => String::new(),
+                }
+            ),
+            params_from_iter(value.params()),
+        )
     }
 
-    pub fn remove(&self, value: &impl DbObject, user: Option<&User>) -> rusqlite::Result<usize> {
-        value.remove_self(&self.conn, user)
+    pub fn remove<T: DbObject>(&self, value: &T, user: Option<&User>) -> rusqlite::Result<usize> {
+        self.conn.execute(
+            &format!(
+                "DELETE FROM {} WHERE {} = ?1{}",
+                T::table_name(),
+                T::columns()[T::id_column_index()].name,
+                match user {
+                    Some(user) => {
+                        format!(" AND {}", T::update_access().access_filter::<T>(user))
+                    }
+                    None => String::new(),
+                },
+            ),
+            params![value.get_id()],
+        )
     }
 
     pub fn get_one<T: DbObject>(&self, id: Id, user: Option<&User>) -> rusqlite::Result<T> {
-        T::get_from_db(&self.conn, id, user)
+        self.conn.query_row(
+            &format!(
+                "SELECT * FROM {} WHERE {} = ?1{}",
+                T::table_name(),
+                T::columns()[T::id_column_index()].name,
+                match user {
+                    Some(user) => {
+                        format!(" AND {}", T::update_access().access_filter::<T>(user))
+                    }
+                    None => String::new(),
+                }
+            ),
+            params![id],
+            |row| T::from_row(row),
+        )
     }
 
     pub fn list_all<T: DbObject>(&self, user: Option<&User>) -> rusqlite::Result<Vec<T>> {
@@ -114,7 +184,13 @@ impl Database {
                     "null" => {} //stop from doing anything no null
                     "false" => value = "0".to_string(),
                     "true" => value = "1".to_string(),
-                    _ => if column.data_type == Type::Id { if let Ok(id) = Id::from_string(&value) { value = id.as_i64().to_string() } },
+                    _ => {
+                        if column.data_type == Type::Id {
+                            if let Ok(id) = Id::from_string(&value) {
+                                value = id.as_i64().to_string()
+                            }
+                        }
+                    }
                 };
 
                 if value == "null" {
@@ -147,7 +223,7 @@ impl Database {
                 user_id: user.id,
                 hash: argon
                     .hash_password(password.as_bytes(), &salt)
-                    .unwrap()
+                    .expect("could not has password")
                     .to_string(),
                 salt,
             },
@@ -158,6 +234,7 @@ impl Database {
     }
 }
 
+//TODO: Fix this after the refactor
 #[rustfmt::skip]
 #[test]
 pub fn manipulate_data() -> anyhow::Result<()> {

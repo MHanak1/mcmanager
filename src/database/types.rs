@@ -120,10 +120,17 @@ impl Modifier {
     }
 }
 
+/// Access level
+///
+/// [`Access::All`]: the access will always pass
+/// [`Access::User`]: every active user has access
+/// [`Access::Owner(column_name: String)`]: only the owner has access. to use this on a [`DbObject`], the parameter is the name of the column accessing user's id will be matched with
+/// [`Access::PrivilegedUser`]: every user with `privileged = true` has access
+/// [`Access::None`]: access is always denied
 pub enum Access {
     All,
     User,
-    Owner,
+    Owner(&'static str),
     PrivilegedUser,
     None,
 
@@ -139,6 +146,12 @@ impl Access {
         Access::And(Box::new(self), Box::new(other))
     }
 
+    /// whether a user can passes the access check.
+    ///
+    /// # Panics
+    ///
+    /// if the access level is [`Access::Owner`], the `object` must me [`Some`].
+    #[allow(clippy::expect_fun_call)]
     pub fn can_access<T: DbObject + ?Sized>(&self, object: Option<&T>, user: &User) -> bool {
         match self {
             Access::All => true,
@@ -153,12 +166,26 @@ impl Access {
                 if user.enabled {
                     match self {
                         Access::User => true,
-                        Access::Owner => object.expect("owner access used with object being None").params()[T::owner_id_column_index().expect("Owner access used, but owner_id_column_index() not implemented for the DbObject")] == user.id.to_sql().unwrap(),
+                        //Access::Owner() => object.expect("owner access used with object being None").params()[] == user.id.to_sql().unwrap(),
+                        Access::Owner(owner_column_name) => {
+                            let object = object.expect("Access::User must have object");
+                            object.params()[T::get_column_index(owner_column_name).expect(
+                                format!(
+                                    "column with the name of {} not found in {}",
+                                    owner_column_name,
+                                    T::table_name()
+                                )
+                                .as_str(),
+                            )] == user
+                                .id
+                                .to_sql()
+                                .expect("failed to convert the user's id to an sql value")
+                        }
                         Access::PrivilegedUser => user.is_privileged,
                         Access::None => false,
                         Access::All | Access::And(..) | Access::Or(..) => {
                             unreachable!();
-                        },
+                        }
                     }
                 } else {
                     false
@@ -189,12 +216,16 @@ impl Access {
                 if user.enabled {
                     match self {
                         Access::User => "1".to_string(),
-                        Access::Owner => format!("{}={}", T::columns()[T::owner_id_column_index().expect("Owner access used, but owner_id_column_index() not implemented for the DbObject")].name, user.id.as_i64()),
-                        Access::PrivilegedUser => if user.is_privileged { "1" } else { "0" }.to_string(),
+                        Access::Owner(owner_column_name) => {
+                            format!("{}={}", owner_column_name, user.id.as_i64())
+                        }
+                        Access::PrivilegedUser => {
+                            if user.is_privileged { "1" } else { "0" }.to_string()
+                        }
                         Access::None => "0".to_string(),
                         Access::All | Access::And(..) | Access::Or(..) => {
                             unreachable!();
-                        },
+                        }
                     }
                 } else {
                     "0".to_string()
@@ -235,7 +266,7 @@ impl Id {
             return Err(anyhow::anyhow!("Failed to parse id"));
         }
 
-        let id_slice = id_slice.unwrap();
+        let id_slice = id_slice.expect("failed to optain the id's slice");
 
         let mut id = 0i64;
         for i in id_slice {
@@ -248,7 +279,7 @@ impl Id {
 
     pub fn new_random() -> Self {
         let val = rand::random_range(0..ID_MAX_VALUE);
-        Self::from_i64(val).unwrap()
+        Self::from_i64(val).expect("failed to create a new id")
     }
 
     pub fn as_i64(self) -> i64 {
@@ -362,7 +393,13 @@ impl Token {
         let mut rng = rand::rngs::OsRng;
 
         let token = (0..size)
-            .map(|_| base64_encode(&rng.try_next_u64().unwrap().to_be_bytes()))
+            .map(|_| {
+                base64_encode(
+                    &rng.try_next_u64()
+                        .expect("failed to url_encode the value")
+                        .to_be_bytes(),
+                )
+            })
             .collect::<String>();
         Self { token }
     }

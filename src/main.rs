@@ -1,6 +1,6 @@
 use anyhow::Result;
-use mcmanager::database::objects::{User, World};
-use mcmanager::database::types::{Access, Id};
+use mcmanager::database::objects::World;
+use mcmanager::database::types::Id;
 use mcmanager::database::{Database, objects};
 use mcmanager::util;
 use std::path::Path;
@@ -15,27 +15,11 @@ fn main() -> Result<()> {
     let _ = database.create_user("Dingus".parse()?, "AAAAAAAAAAAAAAA")?;
     let _ = database.create_user("Dorkus".parse()?, "A")?;
 
-    println!(
-        "{}",
-        Access::PrivilegedUser
-            .and(Access::User)
-            .or(Access::Owner)
-            .access_filter::<User>(&miguel)
-    );
-
     miguel.is_privileged = true;
 
     database
         .update(&miguel, None)
         .expect("Failed to update Miguel");
-
-    println!(
-        "{}",
-        Access::PrivilegedUser
-            .and(Access::User)
-            .or(Access::Owner)
-            .access_filter::<User>(&miguel)
-    );
 
     let forge = objects::ModLoader {
         id: Id::new_random(),
