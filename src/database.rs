@@ -257,6 +257,9 @@ pub fn manipulate_data() -> anyhow::Result<()> {
     use crate::database::types::Id;
     use chrono::DateTime;
     use pretty_assertions::assert_eq;
+    use log::{info};
+
+    env_logger::init();
 
     let conn = rusqlite::Connection::open_in_memory()?;
 

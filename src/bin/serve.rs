@@ -114,6 +114,7 @@ fn object_creation_and_removal() -> anyhow::Result<()> {
     use mcmanager::configuration;
     use pretty_assertions::assert_eq;
     use reqwest::header;
+    use serde::Deserialize;
     use std::thread;
     env_logger::init();
 
