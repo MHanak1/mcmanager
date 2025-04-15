@@ -11,9 +11,9 @@ fn main() -> Result<()> {
     let database = Database { conn };
     database.init().expect("Failed to init database");
 
-    let mut miguel = database.create_user("MHanak".parse()?, "Password")?;
-    let _ = database.create_user("Dingus".parse()?, "AAAAAAAAAAAAAAA")?;
-    let _ = database.create_user("Dorkus".parse()?, "A")?;
+    let mut miguel = database.create_user("MHanak", "Password")?;
+    let _ = database.create_user("Dingus", "AAAAAAAAAAAAAAA")?;
+    let _ = database.create_user("Dorkus", "A")?;
 
     miguel.is_privileged = true;
 

@@ -1,8 +1,11 @@
+use crate::api::handlers::json_fields;
+use crate::database::Database;
 use crate::database::types::{Access, Column, Id, Token, Type};
 use argon2::password_hash::SaltString;
 use chrono::{DateTime, Utc};
 use rusqlite::types::ToSqlOutput;
 use rusqlite::{Row, ToSql};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 
@@ -16,6 +19,22 @@ pub trait DbObject {
     fn update_access() -> Access;
     /// [`Access`] level for creating of the object.
     fn create_access() -> Access;
+    /// whether a user can view this object using the API
+    ///
+    /// # Panics
+    ///
+    /// see [`Access::can_access`]
+    fn can_view(&self, user: &User) -> bool {
+        Self::view_access().can_access::<Self>(Some(self), user)
+    }
+    /// whether a user can update this object using the API
+    ///
+    /// # Panics
+    ///
+    /// see [`Access::can_access`]
+    fn can_update(&self, user: &User) -> bool {
+        Self::update_access().can_access::<Self>(Some(self), user)
+    }
     /// whether a user can create this object using the API
     ///
     /// # Panics
@@ -24,6 +43,19 @@ pub trait DbObject {
     fn can_create(user: &User) -> bool {
         Self::create_access().can_access::<Self>(None, user)
     }
+
+    #[allow(unused)]
+    fn before_create(&self, database: &Database) {}
+    #[allow(unused)]
+    fn before_update(&self, database: &Database) {}
+    #[allow(unused)]
+    fn before_delete(&self, database: &Database) {}
+    #[allow(unused)]
+    fn after_create(&self, database: &Database) {}
+    #[allow(unused)]
+    fn after_update(&self, database: &Database) {}
+    #[allow(unused)]
+    fn after_delete(&self, database: &Database) {}
 
     fn table_name() -> &'static str;
 
@@ -56,6 +88,31 @@ pub trait DbObject {
     }
 
     fn params(&self) -> Vec<ToSqlOutput>;
+}
+
+pub trait FromJson
+where
+    Self: Sized,
+{
+    type JsonFrom: Clone + DeserializeOwned + Send;
+
+    fn from_json(data: Self::JsonFrom, user: User) -> Self;
+}
+
+pub trait UpdateJson: FromJson
+where
+    Self: Sized,
+{
+    fn update_with_json(&self, data: Self::JsonFrom) -> Self;
+}
+
+pub trait ToJson
+where
+    Self: Sized,
+{
+    type JsonTo: Clone + DeserializeOwned + Send;
+
+    fn to_json(&self) -> Self::JsonTo;
 }
 
 /// `id`: mod's unique [`Id`]
@@ -489,6 +546,13 @@ impl DbObject for User {
         Access::PrivilegedUser
     }
 
+    /*
+    fn before_delete(&self, database: &Database) {
+        for mcmod in database.list_filtered()
+        //delete all things that the user
+    }
+     */
+
     fn table_name() -> &'static str {
         "users"
     }
@@ -802,5 +866,159 @@ impl DbObject for InviteLink {
                 .to_sql()
                 .expect("failed to convert the value to sql"),
         ]
+    }
+}
+
+impl FromJson for Mod {
+    type JsonFrom = json_fields::Mod;
+
+    fn from_json(data: Self::JsonFrom, user: User) -> Self {
+        Self {
+            id: Id::default(),
+            version_id: data.version_id,
+            name: data.name,
+            description: data.description.unwrap_or_default(),
+            icon_id: data.icon_id,
+            owner_id: user.id,
+        }
+    }
+}
+
+impl UpdateJson for Mod {
+    fn update_with_json(&self, data: Self::JsonFrom) -> Self {
+        let mut new = self.clone();
+        new.version_id = data.version_id;
+        new.description = data.description.unwrap_or_default();
+        new.name = data.name;
+        new.icon_id = data.icon_id;
+        new
+    }
+}
+
+impl FromJson for Version {
+    type JsonFrom = json_fields::Version;
+
+    fn from_json(data: Self::JsonFrom, _user: User) -> Self {
+        Self {
+            id: Id::default(),
+            minecraft_version: data.minecraft_version,
+            mod_loader_id: data.mod_loader_id,
+        }
+    }
+}
+
+impl UpdateJson for Version {
+    fn update_with_json(&self, data: Self::JsonFrom) -> Self {
+        let mut new = self.clone();
+        new.minecraft_version = data.minecraft_version;
+        new.mod_loader_id = data.mod_loader_id;
+        new
+    }
+}
+
+impl FromJson for ModLoader {
+    type JsonFrom = json_fields::ModLoader;
+
+    fn from_json(data: Self::JsonFrom, _user: User) -> Self {
+        Self {
+            id: Id::default(),
+            name: data.name,
+            can_load_mods: data.can_load_mods,
+        }
+    }
+}
+
+impl UpdateJson for ModLoader {
+    fn update_with_json(&self, data: Self::JsonFrom) -> Self {
+        let mut new = self.clone();
+        new.name = data.name;
+        new.can_load_mods = data.can_load_mods;
+        new
+    }
+}
+
+impl FromJson for World {
+    type JsonFrom = json_fields::World;
+    fn from_json(data: Self::JsonFrom, user: User) -> Self {
+        Self {
+            id: Id::default(),
+            owner_id: user.id,
+            name: data.name,
+            icon_id: None,
+            allocated_memory: data.allocated_memory.unwrap_or(1024),
+            version_id: data.version_id,
+            enabled: false,
+        }
+    }
+}
+
+impl UpdateJson for World {
+    fn update_with_json(&self, data: Self::JsonFrom) -> Self {
+        let mut new = self.clone();
+        new.name = data.name;
+        new.icon_id = data.icon_id;
+        new.allocated_memory = data.allocated_memory.unwrap_or(new.allocated_memory);
+        new.version_id = data.version_id;
+        new.enabled = data.enabled.unwrap_or(new.enabled);
+        new
+    }
+}
+
+impl FromJson for User {
+    type JsonFrom = json_fields::User;
+    fn from_json(data: Self::JsonFrom, _user: User) -> Self {
+        Self {
+            id: Id::default(),
+            name: data.name,
+            avatar_id: data.avatar_id,
+            memory_limit: data.memory_limit,
+            player_limit: data.player_limit,
+            world_limit: data.world_limit,
+            active_world_limit: data.active_world_limit,
+            storage_limit: data.storage_limit,
+            is_privileged: data.is_privileged.unwrap_or(false),
+            enabled: data.enabled.unwrap_or(true),
+        }
+    }
+}
+
+impl UpdateJson for User {
+    fn update_with_json(&self, data: Self::JsonFrom) -> Self {
+        let mut new = self.clone();
+        new.name = data.name;
+        new.avatar_id = data.avatar_id;
+        new.memory_limit = data.memory_limit;
+        new.player_limit = data.player_limit;
+        new.world_limit = data.world_limit;
+        new.active_world_limit = data.active_world_limit;
+        new.storage_limit = data.storage_limit;
+        new.is_privileged = data.is_privileged.unwrap_or(new.is_privileged);
+        new.enabled = data.enabled.unwrap_or(new.enabled);
+        new
+    }
+}
+
+impl FromJson for Session {
+    type JsonFrom = json_fields::Session;
+    fn from_json(data: Self::JsonFrom, user: User) -> Self {
+        Self {
+            user_id: user.id,
+            token: Token::default(),
+            created: chrono::offset::Utc::now(),
+            expires: data.expires.unwrap_or(true),
+        }
+    }
+}
+
+impl FromJson for InviteLink {
+    type JsonFrom = json_fields::InviteLink;
+
+    fn from_json(_data: Self::JsonFrom, user: User) -> Self {
+        Self {
+            id: Id::default(),
+            invite_token: Token::default(),
+            creator_id: user.id,
+            created: chrono::offset::Utc::now(),
+        }
     }
 }

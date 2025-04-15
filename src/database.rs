@@ -8,6 +8,7 @@ use argon2::password_hash::rand_core::OsRng;
 use argon2::{Argon2, PasswordHasher};
 use rusqlite::{params, params_from_iter};
 use std::collections::HashMap;
+use chrono::DateTime;
 
 pub mod objects;
 pub mod types;
@@ -42,7 +43,8 @@ impl Database {
                 return Err(rusqlite::Error::QueryReturnedNoRows);
             }
         }
-        self.conn.execute(
+        value.before_create(self);
+        let result = self.conn.execute(
             &format!(
                 "INSERT INTO {} ({}) VALUES ({})",
                 T::table_name(),
@@ -59,11 +61,19 @@ impl Database {
                     .join(", ")
             ),
             params_from_iter(value.params()),
-        )
+        );
+        value.after_create(self);
+        result
     }
 
     pub fn update<T: DbObject>(&self, value: &T, user: Option<&User>) -> rusqlite::Result<usize> {
-        self.conn.execute(
+        if let Some(user) = user {
+            if !value.can_update(user) {
+                return Err(rusqlite::Error::QueryReturnedNoRows);
+            }
+        }
+        value.before_update(self);
+        let result = self.conn.execute(
             &format!(
                 "UPDATE {} SET {} WHERE {} = {}{}",
                 T::table_name(),
@@ -83,11 +93,19 @@ impl Database {
                 }
             ),
             params_from_iter(value.params()),
-        )
+        );
+        value.after_update(self);
+        result
     }
 
     pub fn remove<T: DbObject>(&self, value: &T, user: Option<&User>) -> rusqlite::Result<usize> {
-        self.conn.execute(
+        if let Some(user) = user {
+            if !value.can_update(user) {
+                return Err(rusqlite::Error::QueryReturnedNoRows);
+            }
+        }
+        value.before_delete(self);
+        let result = self.conn.execute(
             &format!(
                 "DELETE FROM {} WHERE {} = ?1{}",
                 T::table_name(),
@@ -100,7 +118,9 @@ impl Database {
                 },
             ),
             params![value.get_id()],
-        )
+        );
+        value.after_delete(self);
+        result
     }
 
     pub fn get_one<T: DbObject>(&self, id: Id, user: Option<&User>) -> rusqlite::Result<T> {
@@ -205,9 +225,9 @@ impl Database {
         (new_filters, values)
     }
 
-    pub fn create_user(&self, username: String, password: &str) -> anyhow::Result<User> {
+    pub fn create_user(&self, username: &str, password: &str) -> anyhow::Result<User> {
         let user = User {
-            name: username,
+            name: username.to_string(),
             ..Default::default()
         };
         self.create_user_from(user, password)
@@ -239,6 +259,7 @@ impl Database {
 #[test]
 pub fn manipulate_data() -> anyhow::Result<()> {
     use crate::database::types::Id;
+    use pretty_assertions::assert_eq;
 
     let conn = rusqlite::Connection::open_in_memory()?;
 
@@ -252,14 +273,14 @@ pub fn manipulate_data() -> anyhow::Result<()> {
     };
 
     let mut version = Version {
-        id: Default::default(),
+        id: Id::default(),
         minecraft_version: "1.2.3.4".to_string(),
         mod_loader_id: mod_loader.id,
     };
 
 
     let mut user_min = User {
-        id: Default::default(),
+        id: Id::default(),
         name: String::new(),
         avatar_id: None,
         memory_limit: None,
@@ -272,9 +293,9 @@ pub fn manipulate_data() -> anyhow::Result<()> {
     };
 
     let mut user_max = User {
-        id: Default::default(),
+        id: Id::default(),
         name: "Username".to_string(),
-        avatar_id: Some(Default::default()),
+        avatar_id: Some(Id::default()),
         memory_limit: Some(1024),
         player_limit: Some(10),
         world_limit: Some(10),
@@ -291,7 +312,7 @@ pub fn manipulate_data() -> anyhow::Result<()> {
     };
 
     let mut mc_mod_min = Mod {
-        id: Default::default(),
+        id: Id::default(),
         version_id: version.id,
         name: String::new(),
         description: String::new(),
@@ -304,12 +325,12 @@ pub fn manipulate_data() -> anyhow::Result<()> {
         version_id: version.id,
         name: "Mod Name".to_string(),
         description: "Mod Description".to_string(),
-        icon_id: Some(Default::default()),
+        icon_id: Some(Id::default()),
         owner_id: user_max.id,
     };
 
     let mut world_min = World {
-        id: Default::default(),
+        id: Id::default(),
         owner_id: user_min.id,
         name: String::new(),
         icon_id: None,
@@ -319,10 +340,10 @@ pub fn manipulate_data() -> anyhow::Result<()> {
     };
 
     let mut world_max = World {
-        id: Default::default(),
+        id: Id::default(),
         owner_id: user_max.id,
         name: "World Name".to_string(),
-        icon_id: Some(Default::default()),
+        icon_id: Some(Id::default()),
         allocated_memory: 1024,
         version_id: version.id,
         enabled: true,
@@ -330,16 +351,16 @@ pub fn manipulate_data() -> anyhow::Result<()> {
 
     let mut session = Session {
         user_id: user_min.id,
-        token: Default::default(),
-        created: Default::default(),
+        token: Token::default(),
+        created: DateTime::default(),
         expires: false,
     };
 
     let mut invite_link = InviteLink {
-        id: Default::default(),
+        id: Id::default(),
         invite_token: Token::new(1),
         creator_id: user_min.id,
-        created: Default::default(),
+        created: DateTime::default(),
     };
 
     database.insert(&mod_loader, None)?;
@@ -355,17 +376,17 @@ pub fn manipulate_data() -> anyhow::Result<()> {
     database.insert(&invite_link, None)?;
 
     println!("checking inserted objects");
-    assert_eq!(mod_loader, ModLoader::get_from_db(&database.conn, mod_loader.id, None)?);
-    assert_eq!(version, Version::get_from_db(&database.conn, version.id, None)?);
-    assert_eq!(user_min, User::get_from_db(&database.conn, user_min.id, None)?);
-    assert_eq!(user_max, User::get_from_db(&database.conn, user_max.id, None)?);
-    assert_eq!(password, Password::get_from_db(&database.conn, password.user_id, None)?);
-    assert_eq!(mc_mod_min, Mod::get_from_db(&database.conn, mc_mod_min.id, None)?);
-    assert_eq!(mc_mod_max, Mod::get_from_db(&database.conn, Id::from_string("ABCDEFGH").unwrap(), None)?);
-    assert_eq!(world_min, World::get_from_db(&database.conn, world_min.id, None)?);
-    assert_eq!(world_max, World::get_from_db(&database.conn, world_max.id, None)?);
-    assert_eq!(session, Session::get_from_db(&database.conn, session.user_id, None)?);
-    assert_eq!(invite_link, InviteLink::get_from_db(&database.conn, invite_link.id, None)?);
+    assert_eq!(mod_loader, database.get_one::<ModLoader>(mod_loader.id, None)?);
+    assert_eq!(version, database.get_one::<Version>(version.id, None)?);
+    assert_eq!(user_min, database.get_one::<User>(user_min.id, None)?);
+    assert_eq!(user_max, database.get_one::<User>(user_max.id, None)?);
+    assert_eq!(password, database.get_one::<Password>(password.user_id, None)?);
+    assert_eq!(mc_mod_min, database.get_one::<Mod>(mc_mod_min.id, None)?);
+    assert_eq!(mc_mod_max, database.get_one::<Mod>(Id::from_string("ABCDEFGH").expect("invalid id"), None)?);
+    assert_eq!(world_min, database.get_one::<World>(world_min.id, None)?);
+    assert_eq!(world_max, database.get_one::<World>(world_max.id, None)?);
+    assert_eq!(session, database.get_one::<Session>(session.user_id, None)?);
+    assert_eq!(invite_link, database.get_one::<InviteLink>(invite_link.id, None)?);
 
     println!("altering values");
     mod_loader.name = "New Display Name".to_string();
@@ -381,17 +402,17 @@ pub fn manipulate_data() -> anyhow::Result<()> {
     invite_link.invite_token = Token::new(1);
 
     println!("checking if objects no longer the same");
-    assert_ne!(mod_loader, ModLoader::get_from_db(&database.conn, mod_loader.id, None)?);
-    assert_ne!(version, Version::get_from_db(&database.conn, version.id, None)?);
-    assert_ne!(user_min, User::get_from_db(&database.conn, user_min.id, None)?);
-    assert_ne!(user_max, User::get_from_db(&database.conn, user_max.id, None)?);
-    assert_ne!(password, Password::get_from_db(&database.conn, password.user_id, None)?);
-    assert_ne!(mc_mod_min, Mod::get_from_db(&database.conn, mc_mod_min.id, None)?);
-    assert_ne!(mc_mod_max, Mod::get_from_db(&database.conn, mc_mod_max.id, None)?);
-    assert_ne!(world_min, World::get_from_db(&database.conn, world_min.id, None)?);
-    assert_ne!(world_max, World::get_from_db(&database.conn, world_max.id, None)?);
-    assert_ne!(session, Session::get_from_db(&database.conn, session.user_id, None)?);
-    assert_ne!(invite_link, InviteLink::get_from_db(&database.conn, invite_link.id, None)?);
+    assert_ne!(mod_loader, database.get_one::<ModLoader>(mod_loader.id, None)?);
+    assert_ne!(version, database.get_one::<Version>(version.id, None)?);
+    assert_ne!(user_min, database.get_one::<User>(user_min.id, None)?);
+    assert_ne!(user_max, database.get_one::<User>(user_max.id, None)?);
+    assert_ne!(password, database.get_one::<Password>(password.user_id, None)?);
+    assert_ne!(mc_mod_min, database.get_one::<Mod>(mc_mod_min.id, None)?);
+    assert_ne!(mc_mod_max, database.get_one::<Mod>(mc_mod_max.id, None)?);
+    assert_ne!(world_min, database.get_one::<World>(world_min.id, None)?);
+    assert_ne!(world_max, database.get_one::<World>(world_max.id, None)?);
+    assert_ne!(session, database.get_one::<Session>(session.user_id, None)?);
+    assert_ne!(invite_link, database.get_one::<InviteLink>(invite_link.id, None)?);
 
     println!("updating objects");
     assert_eq!(database.update(&mod_loader, None)?, 1);
@@ -407,17 +428,17 @@ pub fn manipulate_data() -> anyhow::Result<()> {
     assert_eq!(database.update(&invite_link, None)?, 1);
 
     println!("checking if objects are again the same");
-    assert_eq!(mod_loader, ModLoader::get_from_db(&database.conn, mod_loader.id, None)?);
-    assert_eq!(version, Version::get_from_db(&database.conn, version.id, None)?);
-    assert_eq!(user_min, User::get_from_db(&database.conn, user_min.id, None)?);
-    assert_eq!(user_max, User::get_from_db(&database.conn, user_max.id, None)?);
-    assert_eq!(password, Password::get_from_db(&database.conn, password.user_id, None)?);
-    assert_eq!(mc_mod_min, Mod::get_from_db(&database.conn, mc_mod_min.id, None)?);
-    assert_eq!(mc_mod_max, Mod::get_from_db(&database.conn, mc_mod_max.id, None)?);
-    assert_eq!(world_min, World::get_from_db(&database.conn, world_min.id, None)?);
-    assert_eq!(world_max, World::get_from_db(&database.conn, world_max.id, None)?);
-    assert_eq!(session, Session::get_from_db(&database.conn, session.user_id, None)?);
-    assert_eq!(invite_link, InviteLink::get_from_db(&database.conn, invite_link.id, None)?);
+    assert_eq!(mod_loader, database.get_one::<ModLoader>(mod_loader.id, None)?);
+    assert_eq!(version, database.get_one::<Version>(version.id, None)?);
+    assert_eq!(user_min, database.get_one::<User>(user_min.id, None)?);
+    assert_eq!(user_max, database.get_one::<User>(user_max.id, None)?);
+    assert_eq!(password, database.get_one::<Password>(password.user_id, None)?);
+    assert_eq!(mc_mod_min, database.get_one::<Mod>(mc_mod_min.id, None)?);
+    assert_eq!(mc_mod_max, database.get_one::<Mod>(mc_mod_max.id, None)?);
+    assert_eq!(world_min, database.get_one::<World>(world_min.id, None)?);
+    assert_eq!(world_max, database.get_one::<World>(world_max.id, None)?);
+    assert_eq!(session, database.get_one::<Session>(session.user_id, None)?);
+    assert_eq!(invite_link, database.get_one::<InviteLink>(invite_link.id, None)?);
 
     println!("removing objects");
     assert_eq!(database.remove(&world_min, None)?, 1);
@@ -433,17 +454,17 @@ pub fn manipulate_data() -> anyhow::Result<()> {
     assert_eq!(database.remove(&user_max, None)?, 1);
 
     println!("checking if objects are actually removed");
-    assert_eq!(Err(rusqlite::Error::QueryReturnedNoRows), ModLoader::get_from_db(&database.conn, mod_loader.id, None));
-    assert_eq!(Err(rusqlite::Error::QueryReturnedNoRows), Version::get_from_db(&database.conn, version.id, None));
-    assert_eq!(Err(rusqlite::Error::QueryReturnedNoRows), User::get_from_db(&database.conn, user_min.id, None));
-    assert_eq!(Err(rusqlite::Error::QueryReturnedNoRows), User::get_from_db(&database.conn, user_max.id, None));
-    assert_eq!(Err(rusqlite::Error::QueryReturnedNoRows), Password::get_from_db(&database.conn, password.user_id, None));
-    assert_eq!(Err(rusqlite::Error::QueryReturnedNoRows), Mod::get_from_db(&database.conn, mc_mod_min.id, None));
-    assert_eq!(Err(rusqlite::Error::QueryReturnedNoRows), Mod::get_from_db(&database.conn, mc_mod_max.id, None));
-    assert_eq!(Err(rusqlite::Error::QueryReturnedNoRows), World::get_from_db(&database.conn, world_min.id, None));
-    assert_eq!(Err(rusqlite::Error::QueryReturnedNoRows), World::get_from_db(&database.conn, world_max.id, None));
-    assert_eq!(Err(rusqlite::Error::QueryReturnedNoRows), Session::get_from_db(&database.conn, session.user_id, None));
-    assert_eq!(Err(rusqlite::Error::QueryReturnedNoRows), InviteLink::get_from_db(&database.conn, invite_link.id, None));
+    assert_eq!(Err(rusqlite::Error::QueryReturnedNoRows), database.get_one::<ModLoader>(mod_loader.id, None));
+    assert_eq!(Err(rusqlite::Error::QueryReturnedNoRows), database.get_one::<Version>(version.id, None));
+    assert_eq!(Err(rusqlite::Error::QueryReturnedNoRows), database.get_one::<User>(user_min.id, None));
+    assert_eq!(Err(rusqlite::Error::QueryReturnedNoRows), database.get_one::<User>(user_max.id, None));
+    assert_eq!(Err(rusqlite::Error::QueryReturnedNoRows), database.get_one::<Password>(password.user_id, None));
+    assert_eq!(Err(rusqlite::Error::QueryReturnedNoRows), database.get_one::<Mod>(mc_mod_min.id, None));
+    assert_eq!(Err(rusqlite::Error::QueryReturnedNoRows), database.get_one::<Mod>(mc_mod_max.id, None));
+    assert_eq!(Err(rusqlite::Error::QueryReturnedNoRows), database.get_one::<World>(world_min.id, None));
+    assert_eq!(Err(rusqlite::Error::QueryReturnedNoRows), database.get_one::<World>(world_max.id, None));
+    assert_eq!(Err(rusqlite::Error::QueryReturnedNoRows), database.get_one::<Session>(session.user_id, None));
+    assert_eq!(Err(rusqlite::Error::QueryReturnedNoRows), database.get_one::<InviteLink>(invite_link.id, None));
 
     Ok(())
 }

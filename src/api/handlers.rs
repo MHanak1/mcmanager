@@ -2,11 +2,10 @@ use crate::api::util::rejections;
 use crate::api::{auth, filters};
 use crate::database::Database;
 use crate::database::objects::{
-    DbObject, InviteLink, Mod, ModLoader, Session, User, Version, World,
+    DbObject, FromJson, InviteLink, Mod, ModLoader, Session, UpdateJson, User, Version, World,
 };
-use crate::database::types::{Id, Token};
+use crate::database::types::Id;
 use rusqlite::Error;
-use serde::de::DeserializeOwned;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use warp::Filter;
@@ -86,7 +85,10 @@ where
                         Error::QueryReturnedNoRows => {
                             Err(warp::reject::custom(rejections::NotFound))
                         }
-                        _ => Err(warp::reject::custom(rejections::InternalServerError)),
+                        _ => {
+                            eprintln!("{err:?}");
+                            Err(warp::reject::custom(rejections::InternalServerError))
+                        }
                     },
                 },
             )
@@ -109,15 +111,11 @@ where
     }
 }
 
-pub trait ApiCreate: DbObject
+pub trait ApiCreate: DbObject + FromJson
 where
     Self: Sized,
     Self: serde::Serialize,
 {
-    type JsonFrom: Clone + DeserializeOwned + Send;
-
-    fn from_json(data: Self::JsonFrom, user: User) -> Self;
-    //async fn api_create(db_mutex: Arc<Mutex<Database>>, user: User, data: Self::JsonFrom) -> Result<impl warp::Reply, warp::Rejection>;
     fn api_create(
         db_mutex: Arc<Mutex<Database>>,
         user: User,
@@ -131,11 +129,11 @@ where
                         return Err(warp::reject::custom(rejections::Unauthorized));
                     }
 
-                    let new = Self::from_json(data, user.clone());
+                    let object = Self::from_json(data, user.clone());
 
-                    match database.insert(&new, Some(&user)) {
+                    match database.insert(&object, Some(&user)) {
                         Ok(_) => Ok(warp::reply::with_status(
-                            warp::reply::json(&new),
+                            warp::reply::json(&object),
                             StatusCode::CREATED,
                         )),
                         Err(err) => {
@@ -172,13 +170,11 @@ where
     }
 }
 
-pub trait ApiUpdate: ApiCreate
+pub trait ApiUpdate: ApiCreate + UpdateJson
 where
     Self: Sized,
     Self: serde::Serialize,
 {
-    fn update_with_json(&self, data: Self::JsonFrom) -> Self;
-
     fn api_update(
         db_mutex: Arc<Mutex<Database>>,
         id: String,
@@ -196,7 +192,7 @@ where
                             match database.update(&object, Some(&user)) {
                                 Ok(_) => Ok(warp::reply::with_status(
                                     warp::reply::json(&object),
-                                    StatusCode::OK,
+                                    StatusCode::CREATED,
                                 )),
                                 Err(err) => {
                                     eprintln!("{err:?}");
@@ -231,7 +227,67 @@ where
     }
 }
 
-mod json_fields {
+pub trait ApiRemove: DbObject
+where
+    Self: Sized,
+    Self: serde::Serialize,
+{
+    fn api_remove(
+        id: String,
+        db_mutex: Arc<Mutex<Database>>,
+        user: User,
+    ) -> Result<impl warp::Reply, warp::Rejection> {
+        if let Ok(id) = Id::from_string(&id) {
+            db_mutex.lock().map_or_else(
+                |_| Err(warp::reject::not_found()),
+                |database| match database.get_one::<Self>(id, Some(&user)) {
+                    Ok(object) => match database.remove(&object, Some(&user)) {
+                        Ok(_) => Ok(warp::reply::with_status(
+                            warp::reply::json(&""),
+                            StatusCode::OK,
+                        )),
+                        Err(err) => match err {
+                            Error::QueryReturnedNoRows => {
+                                Err(warp::reject::custom(rejections::NotFound))
+                            }
+                            _ => {
+                                eprintln!("{err:?}");
+                                Err(warp::reject::custom(rejections::InternalServerError))
+                            }
+                        },
+                    },
+                    Err(err) => match err {
+                        Error::QueryReturnedNoRows => {
+                            Err(warp::reject::custom(rejections::NotFound))
+                        }
+                        _ => {
+                            eprintln!("{err:?}");
+                            Err(warp::reject::custom(rejections::InternalServerError))
+                        }
+                    },
+                },
+            )
+        } else {
+            Err(warp::reject::custom(rejections::NotFound))
+        }
+    }
+
+    fn remove_filter(
+        db_mutex: Arc<Mutex<Database>>,
+    ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
+        warp::get()
+            .and(warp::path("api"))
+            .and(warp::path(Self::table_name()))
+            .and(warp::path::param::<String>())
+            .and(warp::path("remove"))
+            .and(warp::path::end())
+            .and(filters::with_db(db_mutex.clone()))
+            .and(filters::with_auth(db_mutex))
+            .and_then(|id, db_mutex, user| async move { Self::api_remove(id, db_mutex, user) })
+    }
+}
+
+pub(crate) mod json_fields {
     use crate::database::types::Id;
     use serde::Deserialize;
 
@@ -296,124 +352,31 @@ mod json_fields {
 
 impl ApiList for Mod {}
 impl ApiGet for Mod {}
-impl ApiCreate for Mod {
-    type JsonFrom = json_fields::Mod;
-
-    fn from_json(data: Self::JsonFrom, user: User) -> Self {
-        Self {
-            id: Id::default(),
-            version_id: data.version_id,
-            name: data.name,
-            description: data.description.unwrap_or_default(),
-            icon_id: data.icon_id,
-            owner_id: user.id,
-        }
-    }
-}
-impl ApiUpdate for Mod {
-    fn update_with_json(&self, data: Self::JsonFrom) -> Self {
-        let mut new = self.clone();
-        new.version_id = data.version_id;
-        new.description = data.description.unwrap_or_default();
-        new.name = data.name;
-        new.icon_id = data.icon_id;
-        new
-    }
-}
+impl ApiCreate for Mod {}
+impl ApiUpdate for Mod {}
+impl ApiRemove for Mod {}
 
 impl ApiList for Version {}
 impl ApiGet for Version {}
-
-impl ApiCreate for Version {
-    type JsonFrom = json_fields::Version;
-
-    fn from_json(data: Self::JsonFrom, _user: User) -> Self {
-        Self {
-            id: Id::default(),
-            minecraft_version: data.minecraft_version,
-            mod_loader_id: data.mod_loader_id,
-        }
-    }
-}
-impl ApiUpdate for Version {
-    fn update_with_json(&self, data: Self::JsonFrom) -> Self {
-        let mut new = self.clone();
-        new.minecraft_version = data.minecraft_version;
-        new.mod_loader_id = data.mod_loader_id;
-        new
-    }
-}
+impl ApiCreate for Version {}
+impl ApiUpdate for Version {}
+impl ApiRemove for Version {}
 
 impl ApiList for ModLoader {}
 impl ApiGet for ModLoader {}
-impl ApiCreate for ModLoader {
-    type JsonFrom = json_fields::ModLoader;
-
-    fn from_json(data: Self::JsonFrom, _user: User) -> Self {
-        Self {
-            id: Id::default(),
-            name: data.name,
-            can_load_mods: data.can_load_mods,
-        }
-    }
-}
-impl ApiUpdate for ModLoader {
-    fn update_with_json(&self, data: Self::JsonFrom) -> Self {
-        let mut new = self.clone();
-        new.name = data.name;
-        new.can_load_mods = data.can_load_mods;
-        new
-    }
-}
+impl ApiCreate for ModLoader {}
+impl ApiUpdate for ModLoader {}
+impl ApiRemove for ModLoader {}
 
 impl ApiList for World {}
 impl ApiGet for World {}
-impl ApiCreate for World {
-    type JsonFrom = json_fields::World;
-    fn from_json(data: Self::JsonFrom, user: User) -> Self {
-        Self {
-            id: Id::default(),
-            owner_id: user.id,
-            name: data.name,
-            icon_id: None,
-            allocated_memory: data.allocated_memory.unwrap_or(1024),
-            version_id: data.version_id,
-            enabled: false,
-        }
-    }
-}
-
-impl ApiUpdate for World {
-    fn update_with_json(&self, data: Self::JsonFrom) -> Self {
-        let mut new = self.clone();
-        new.name = data.name;
-        new.icon_id = data.icon_id;
-        new.allocated_memory = data.allocated_memory.unwrap_or(new.allocated_memory);
-        new.version_id = data.version_id;
-        new.enabled = data.enabled.unwrap_or(new.enabled);
-        new
-    }
-}
+impl ApiCreate for World {}
+impl ApiUpdate for World {}
+impl ApiRemove for World {}
 
 impl ApiList for User {}
 impl ApiGet for User {}
 impl ApiCreate for User {
-    type JsonFrom = json_fields::User;
-    fn from_json(data: Self::JsonFrom, _user: User) -> Self {
-        Self {
-            id: Id::default(),
-            name: data.name,
-            avatar_id: data.avatar_id,
-            memory_limit: data.memory_limit,
-            player_limit: data.player_limit,
-            world_limit: data.world_limit,
-            active_world_limit: data.active_world_limit,
-            storage_limit: data.storage_limit,
-            is_privileged: data.is_privileged.unwrap_or(false),
-            enabled: data.enabled.unwrap_or(true),
-        }
-    }
-
     fn api_create(
         db_mutex: Arc<Mutex<Database>>,
         user: User,
@@ -462,50 +425,18 @@ impl ApiCreate for User {
         }
     }
 }
-impl ApiUpdate for User {
-    fn update_with_json(&self, data: Self::JsonFrom) -> Self {
-        let mut new = self.clone();
-        new.name = data.name;
-        new.avatar_id = data.avatar_id;
-        new.memory_limit = data.memory_limit;
-        new.player_limit = data.player_limit;
-        new.world_limit = data.world_limit;
-        new.active_world_limit = data.active_world_limit;
-        new.storage_limit = data.storage_limit;
-        new.is_privileged = data.is_privileged.unwrap_or(new.is_privileged);
-        new.enabled = data.enabled.unwrap_or(new.enabled);
-        new
-    }
-}
+impl ApiUpdate for User {}
+impl ApiRemove for User {}
 
 impl ApiList for Session {}
 impl ApiGet for Session {}
-impl ApiCreate for Session {
-    type JsonFrom = json_fields::Session;
-    fn from_json(data: Self::JsonFrom, user: User) -> Self {
-        Self {
-            user_id: user.id,
-            token: Token::default(),
-            created: chrono::offset::Utc::now(),
-            expires: data.expires.unwrap_or(true),
-        }
-    }
-}
+impl ApiCreate for Session {}
+impl ApiRemove for Session {}
 
 impl ApiList for InviteLink {}
 impl ApiGet for InviteLink {}
-impl ApiCreate for InviteLink {
-    type JsonFrom = json_fields::InviteLink;
-
-    fn from_json(_data: Self::JsonFrom, user: User) -> Self {
-        Self {
-            id: Id::default(),
-            invite_token: Token::default(),
-            creator_id: user.id,
-            created: chrono::offset::Utc::now(),
-        }
-    }
-}
+impl ApiCreate for InviteLink {}
+impl ApiRemove for InviteLink {}
 
 //this in theory could be transformed into ApiCreate implementation, but it would require a fair amount of changes, and for now it's not causing any problems
 #[allow(clippy::unused_async)]

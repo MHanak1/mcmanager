@@ -357,6 +357,8 @@ impl Default for Id {
 
 #[test]
 fn id() {
+    use pretty_assertions::assert_eq;
+
     assert_eq!(Id::from_i64(0).unwrap(), Id { id: 0 });
     assert!(Id::from_i64(ID_MAX_VALUE + 1).is_err());
 

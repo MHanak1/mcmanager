@@ -1,16 +1,19 @@
 use mcmanager::api::filters;
-use mcmanager::api::handlers::{ApiCreate, ApiGet, ApiList, ApiUpdate};
+use mcmanager::api::handlers::{ApiCreate, ApiGet, ApiList, ApiRemove, ApiUpdate};
+use mcmanager::configuration;
 use mcmanager::database::Database;
 use mcmanager::database::objects::{InviteLink, Mod, ModLoader, Session, User, Version, World};
 use mcmanager::{api, util};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::Path;
+use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use warp::Filter;
 
 #[tokio::main]
 async fn main() {
-    let conn = rusqlite::Connection::open(Path::new(&util::dirs::data_dir().join("database.db")))
-        .expect("failed to open database");
+    let conn =
+        rusqlite::Connection::open(Path::new(&util::dirs::data_dir().join("database.db"))).expect("failed to open the database");
     let database = Database { conn };
     database.init().expect("failed to initialize database");
     run(database).await;
@@ -18,6 +21,13 @@ async fn main() {
 
 /// This is a piece of shit.
 async fn run(database: Database) {
+    let listen_address = configuration::CONFIG
+        .get::<String>("listen_address")
+        .expect("invalid listen_address");
+    let listen_port = configuration::CONFIG
+        .get::<u16>("listen_port")
+        .expect("invalid listen_port");
+
     // GET /hello/warp => 200 OK with body "Hello, warp!"
     util::dirs::init_dirs().expect("Failed to initialize the data directory");
 
@@ -42,30 +52,39 @@ async fn run(database: Database) {
 
     let mods = Mod::list_filter(db_mutex.clone())
         .or(Mod::create_filter(db_mutex.clone()))
-        .or(Mod::get_filter(db_mutex.clone()))
-        .or(Mod::update_filter(db_mutex.clone()));
+        .or(Mod::update_filter(db_mutex.clone()))
+        .or(Mod::remove_filter(db_mutex.clone()))
+        .or(Mod::get_filter(db_mutex.clone()));
     let versions = Version::list_filter(db_mutex.clone())
         .or(Version::create_filter(db_mutex.clone()))
-        .or(Version::get_filter(db_mutex.clone()))
-        .or(Version::update_filter(db_mutex.clone()));
+        .or(Version::update_filter(db_mutex.clone()))
+        .or(Version::remove_filter(db_mutex.clone()))
+        .or(Version::get_filter(db_mutex.clone()));
     let mod_loaders = ModLoader::list_filter(db_mutex.clone())
         .or(ModLoader::create_filter(db_mutex.clone()))
-        .or(ModLoader::get_filter(db_mutex.clone()))
-        .or(ModLoader::update_filter(db_mutex.clone()));
+        .or(ModLoader::update_filter(db_mutex.clone()))
+        .or(ModLoader::remove_filter(db_mutex.clone()))
+        .or(ModLoader::get_filter(db_mutex.clone()));
     let worlds = World::list_filter(db_mutex.clone())
         .or(World::create_filter(db_mutex.clone()))
-        .or(World::get_filter(db_mutex.clone()))
-        .or(World::update_filter(db_mutex.clone()));
+        .or(World::update_filter(db_mutex.clone()))
+        .or(World::remove_filter(db_mutex.clone()))
+        .or(World::get_filter(db_mutex.clone()));
     let users = User::list_filter(db_mutex.clone())
         .or(User::create_filter(db_mutex.clone()))
-        .or(User::get_filter(db_mutex.clone()))
-        .or(User::update_filter(db_mutex.clone()));
+        .or(User::update_filter(db_mutex.clone()))
+        .or(User::remove_filter(db_mutex.clone()))
+        .or(User::get_filter(db_mutex.clone()));
     let sessions = Session::list_filter(db_mutex.clone())
         .or(Session::create_filter(db_mutex.clone()))
+        .or(Session::remove_filter(db_mutex.clone()))
         .or(Session::get_filter(db_mutex.clone()));
     let invite_links = InviteLink::list_filter(db_mutex.clone())
         .or(InviteLink::create_filter(db_mutex.clone()))
+        .or(InviteLink::remove_filter(db_mutex.clone()))
         .or(InviteLink::get_filter(db_mutex.clone()));
+
+    println!("Listening on {listen_address}:{listen_port}");
 
     warp::serve(
         login
@@ -78,6 +97,128 @@ async fn run(database: Database) {
             .or(sessions)
             .or(invite_links),
     )
-    .run(([127, 0, 0, 1], 3030))
+    .run(SocketAddr::new(
+        IpAddr::V4(Ipv4Addr::from_str(&listen_address).expect("invalid listen_address")),
+        listen_port,
+    ))
     .await;
+
+    println!("Exited");
+}
+
+#[test]
+#[allow(unused)]
+fn object_creation_and_removal() -> anyhow::Result<()> {
+    use mcmanager::configuration;
+    use pretty_assertions::assert_eq;
+    use reqwest::header;
+    use std::thread;
+
+    let conn = rusqlite::Connection::open_in_memory().expect("Can't open database connection");
+
+    let database = Database { conn };
+    database.init().expect("Can't init database");
+    let mut admin = database.create_user("Admin", "Password1")?;
+    admin.is_privileged = true;
+    database.update(&admin, None)?;
+
+    thread::spawn(|| {
+        let rt = tokio::runtime::Runtime::new().expect("Can't create runtime");
+        rt.block_on(run(database))
+    });
+
+    //wait for the server to start
+    thread::sleep(std::time::Duration::from_secs(1));
+
+    let url = format!(
+        "http://{}:{}/api",
+        configuration::CONFIG
+            .get::<String>("listen_address")
+            .expect("invalid listen_address"),
+        configuration::CONFIG
+            .get::<String>("listen_port")
+            .expect("invalid listen_port")
+    );
+
+    let client = reqwest::blocking::Client::new();
+
+    let admin_token = client
+        .post(format!("{url}/login"))
+        .body("{\"username\": \"Admin\", \"password\": \"Password1\"}")
+        .send()?
+        .text()?
+        .replace("\"", "");
+
+    let got_user: User = serde_json::from_str(
+        &client
+            .get(format!("{url}/user"))
+            .header(header::AUTHORIZATION, format!("Bearer {admin_token}"))
+            .send()?
+            .text()?,
+    )?;
+
+    assert_eq!(admin, got_user);
+
+    let user1: User = serde_json::from_str(
+        &client
+            .post(format!("{url}/users/create"))
+            .header(header::AUTHORIZATION, format!("Bearer {admin_token}"))
+            .body("{\"name\": \"User1\", \"password\": \"Password2\"}")
+            .send()?
+            .text()?,
+    )?;
+
+    let user2: User = serde_json::from_str(
+        &client
+            .post(format!("{url}/users/create"))
+            .header(header::AUTHORIZATION, format!("Bearer {admin_token}"))
+            .body("{\"name\": \"User2\", \"password\": \"Password3\"}")
+            .send()?
+            .text()?,
+    )?;
+
+    let user1_token = client
+        .post(format!("{url}/login"))
+        .body("{\"username\": \"User1\", \"password\": \"Password2\"}")
+        .send()?
+        .text()?
+        .replace("\"", "");
+
+    let user2_token = client
+        .post(format!("{url}/login"))
+        .body("{\"username\": \"User2\", \"password\": \"Password3\"}")
+        .send()?
+        .text()?
+        .replace("\"", "");
+
+    let admin_user_access: Vec<User> = serde_json::from_str(
+        &client
+            .get(format!("{url}/users"))
+            .header(header::AUTHORIZATION, format!("Bearer {admin_token}"))
+            .send()?
+            .text()?,
+    )?;
+
+    let normal_user_access: Vec<User> = serde_json::from_str(
+        &client
+            .get(format!("{url}/users"))
+            .header(header::AUTHORIZATION, format!("Bearer {user1_token}"))
+            .send()?
+            .text()?,
+    )?;
+
+    assert_eq!(
+        admin_user_access,
+        vec![admin.clone(), user1.clone(), user2.clone()]
+    );
+    assert_eq!(normal_user_access, vec![user1.clone()]);
+
+    /*
+    let world: World = serde_json::from_str(&client.post(format!("{url}/worlds/create"))
+        .header(header::AUTHORIZATION, format!("Bearer {}", user1_token))
+        .body("{\"name\": \"User2\", \"password\": \"Password3\"}")
+        .send()?.text()?)?;
+     */
+
+    Ok(())
 }
