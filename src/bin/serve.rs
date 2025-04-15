@@ -2,16 +2,18 @@ use mcmanager::api::filters;
 use mcmanager::api::handlers::{ApiCreate, ApiGet, ApiList, ApiRemove, ApiUpdate};
 use mcmanager::configuration;
 use mcmanager::database::Database;
-use mcmanager::database::objects::{InviteLink, Mod, ModLoader, Session, User, Version, World};
 use mcmanager::{api, util};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use warp::Filter;
+use log::info;
+use mcmanager::database::objects::{Mod, Version, ModLoader, World, User, Session, InviteLink};
 
 #[tokio::main]
 async fn main() {
+    env_logger::init();
     let conn =
         rusqlite::Connection::open(Path::new(&util::dirs::data_dir().join("database.db"))).expect("failed to open the database");
     let database = Database { conn };
@@ -84,7 +86,8 @@ async fn run(database: Database) {
         .or(InviteLink::remove_filter(db_mutex.clone()))
         .or(InviteLink::get_filter(db_mutex.clone()));
 
-    println!("Listening on {listen_address}:{listen_port}");
+    //let log = warp::log::custom(|info| info!("{} - {}: {}", info.method(), info.status(), info.path()));
+    let log = warp::log("info");
 
     warp::serve(
         login
@@ -95,15 +98,15 @@ async fn run(database: Database) {
             .or(worlds)
             .or(users)
             .or(sessions)
-            .or(invite_links),
+            .or(invite_links)
+            .recover(api::handlers::handle_rejection)
+            .with(log)
     )
     .run(SocketAddr::new(
         IpAddr::V4(Ipv4Addr::from_str(&listen_address).expect("invalid listen_address")),
         listen_port,
     ))
     .await;
-
-    println!("Exited");
 }
 
 #[test]
@@ -113,6 +116,7 @@ fn object_creation_and_removal() -> anyhow::Result<()> {
     use pretty_assertions::assert_eq;
     use reqwest::header;
     use std::thread;
+    env_logger::init();
 
     let conn = rusqlite::Connection::open_in_memory().expect("Can't open database connection");
 

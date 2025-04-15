@@ -4,12 +4,16 @@ use crate::database::Database;
 use crate::database::objects::{
     DbObject, FromJson, InviteLink, Mod, ModLoader, Session, UpdateJson, User, Version, World,
 };
-use crate::database::types::Id;
+use crate::database::types::{Id, Token};
 use rusqlite::Error;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use warp::Filter;
+use warp::{reject, Filter};
 use warp::http::StatusCode;
+use log::error;
+use serde::Serialize;
+use warp::reject::Reject;
+use crate::api::util::rejections::NotFound;
 
 pub trait ApiList: DbObject
 where
@@ -23,7 +27,7 @@ where
         filters: HashMap<String, String>,
     ) -> Result<impl warp::Reply, warp::Rejection> {
         db_mutex.lock().map_or_else(
-            |_| Err(warp::reject::custom(rejections::InternalServerError)),
+            |err| Err(warp::reject::custom(rejections::InternalServerError::from(err.to_string()))),
             |database| {
                 match database.list_filtered::<Self>(filters, Some(&user)) {
                     Ok(objects) => Ok(warp::reply::with_status(
@@ -38,8 +42,8 @@ where
                                 StatusCode::OK,
                             )),
                             _ => {
-                                eprintln!("{err:?}");
-                                Err(warp::reject::custom(rejections::InternalServerError))
+                                error!("{err:?}");
+                                Err(warp::reject::custom(rejections::InternalServerError::from(err.to_string())))
                             }
                         }
                     }
@@ -86,8 +90,8 @@ where
                             Err(warp::reject::custom(rejections::NotFound))
                         }
                         _ => {
-                            eprintln!("{err:?}");
-                            Err(warp::reject::custom(rejections::InternalServerError))
+                            error!("{err:?}");
+                            Err(warp::reject::custom(rejections::InternalServerError::from(err.to_string())))
                         }
                     },
                 },
@@ -123,7 +127,7 @@ where
     ) -> Result<impl warp::Reply, warp::Rejection> {
         if Self::can_create(&user) {
             db_mutex.lock().map_or_else(
-                |_| Err(warp::reject::custom(rejections::InternalServerError)),
+                |err| Err(warp::reject::custom(rejections::InternalServerError::from(err.to_string()))),
                 |database| {
                     if !Self::can_create(&user) {
                         return Err(warp::reject::custom(rejections::Unauthorized));
@@ -137,7 +141,7 @@ where
                             StatusCode::CREATED,
                         )),
                         Err(err) => {
-                            eprintln!("{err:?}");
+                            error!("{err:?}");
                             Ok(warp::reply::with_status(
                                 warp::reply::json(&"internal server error"),
                                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -182,7 +186,7 @@ where
         data: Self::JsonFrom,
     ) -> Result<impl warp::Reply, warp::Rejection> {
         db_mutex.lock().map_or_else(
-            |_| Err(warp::reject::custom(rejections::InternalServerError)),
+            |err| Err(warp::reject::custom(rejections::InternalServerError::from(err.to_string()))),
             |database| {
                 if let Ok(id) = Id::from_string(&id) {
                     database.get_one(id, Some(&user)).map_or_else(
@@ -195,7 +199,7 @@ where
                                     StatusCode::CREATED,
                                 )),
                                 Err(err) => {
-                                    eprintln!("{err:?}");
+                                    error!("{err:?}");
                                     Err(warp::reject::custom(rejections::Unauthorized))
                                 }
                             }
@@ -251,8 +255,8 @@ where
                                 Err(warp::reject::custom(rejections::NotFound))
                             }
                             _ => {
-                                eprintln!("{err:?}");
-                                Err(warp::reject::custom(rejections::InternalServerError))
+                                error!("{err:?}");
+                                Err(warp::reject::custom(rejections::InternalServerError::from(err.to_string())))
                             }
                         },
                     },
@@ -261,8 +265,8 @@ where
                             Err(warp::reject::custom(rejections::NotFound))
                         }
                         _ => {
-                            eprintln!("{err:?}");
-                            Err(warp::reject::custom(rejections::InternalServerError))
+                            error!("{err:?}");
+                            Err(warp::reject::custom(rejections::InternalServerError::from(err.to_string())))
                         }
                     },
                 },
@@ -384,7 +388,7 @@ impl ApiCreate for User {
     ) -> Result<impl warp::Reply, warp::Rejection> {
         if Self::can_create(&user) {
             db_mutex.lock().map_or_else(
-                |_| Err(warp::reject::custom(rejections::InternalServerError)),
+                |err| Err(warp::reject::custom(rejections::InternalServerError::from(err.to_string()))),
                 |database| match database
                     .create_user_from(Self::from_json(data.clone(), user), &data.password)
                 {
@@ -405,15 +409,15 @@ impl ApiCreate for User {
                                         StatusCode::CONFLICT,
                                     ))
                                 } else {
-                                    eprintln!("{err:?}");
-                                    Err(warp::reject::custom(rejections::InternalServerError))
+                                    error!("{err:?}");
+                                    Err(warp::reject::custom(rejections::InternalServerError::from(err.to_string())))
                                 }
                             } else {
-                                eprintln!("{err:?}");
-                                Err(warp::reject::custom(rejections::InternalServerError))
+                                error!("{err:?}");
+                                Err(warp::reject::custom(rejections::InternalServerError::from(err.to_string())))
                             }
                         }
-                        _ => Err(warp::reject::custom(rejections::InternalServerError)),
+                        _ => Err(warp::reject::custom(rejections::InternalServerError::from(err.to_string()))),
                     },
                 },
             )
@@ -438,6 +442,11 @@ impl ApiGet for InviteLink {}
 impl ApiCreate for InviteLink {}
 impl ApiRemove for InviteLink {}
 
+#[derive(Serialize)]
+struct TokenReply {
+    token: String,
+}
+
 //this in theory could be transformed into ApiCreate implementation, but it would require a fair amount of changes, and for now it's not causing any problems
 #[allow(clippy::unused_async)]
 pub async fn user_auth(
@@ -445,7 +454,7 @@ pub async fn user_auth(
     credentials: json_fields::Login,
 ) -> Result<impl warp::Reply, warp::Rejection> {
     db_mutex.lock().map_or_else(
-        |_| Err(warp::reject::custom(rejections::InternalServerError)),
+        |err| Err(warp::reject::custom(rejections::InternalServerError::from(err.to_string()))),
         |database| match auth::try_user_auth(
             &credentials.username,
             &credentials.password,
@@ -453,9 +462,9 @@ pub async fn user_auth(
         ) {
             Ok(session) => Ok(warp::reply::with_status(
                 warp::reply::with_header(
-                    warp::reply::json(&session.token),
-                    "set-cookie",
-                    format!("auth={}; Path=/; HttpOnly; Max-Age=1209600", session.token),
+                    warp::reply::json(&TokenReply { token: session.token.to_string() }),
+                    "Set-Cookie",
+                    format!("sessionToken={}; Path=/api; HttpOnly; Max-Age=1209600", session.token),
                 ),
                 StatusCode::CREATED,
             )),
@@ -464,8 +473,8 @@ pub async fn user_auth(
                     if matches!(err, Error::QueryReturnedNoRows) {
                         Err(warp::reject::custom(rejections::BadRequest))
                     } else {
-                        eprintln!("Error: {err:?}");
-                        Err(warp::reject::custom(rejections::InternalServerError))
+                        error!("Error: {err:?}");
+                        Err(warp::reject::custom(rejections::InternalServerError::from(err.to_string())))
                     }
                 }
                 None => Err(warp::reject::custom(rejections::Unauthorized)),
@@ -477,4 +486,79 @@ pub async fn user_auth(
 #[allow(clippy::unused_async)]
 pub async fn user_info(user: User) -> Result<impl warp::Reply, warp::Rejection> {
     Ok(warp::reply::json(&user))
+}
+
+
+// This function receives a `Rejection` and tries to return a custom
+// value, otherwise simply passes the rejection along.
+pub async fn handle_rejection(err: warp::Rejection) -> Result<impl warp::Reply, std::convert::Infallible> {
+    let code;
+    let message;
+
+    #[derive(Serialize)]
+    struct ErrorMessage {
+        code: u16,
+        message: String,
+    }
+
+    if let Some(rejections::NotFound) = err.find() {
+        code = StatusCode::NOT_FOUND;
+        message = "not found";
+    } else if let Some(error) = err.find::<rejections::InternalServerError>() {
+        error!("{}", error.error);
+        code = StatusCode::INTERNAL_SERVER_ERROR;
+        message = "internal server error";
+    }
+    else if let Some(error) = err.find::<rejections::InvalidBearerToken>() {
+        code = StatusCode::UNAUTHORIZED;
+        message = "invalid brearer token";
+    }
+    else if let Some(error) = err.find::<rejections::Unauthorized>() {
+        code = StatusCode::UNAUTHORIZED;
+        message = "unauthorized";
+    }
+    else if let Some(error) = err.find::<rejections::BadRequest>() {
+        code = StatusCode::BAD_REQUEST;
+        message = "bad request";
+    }
+    else if let Some(error) = err.find::<rejections::NotImplemented>() {
+        code = StatusCode::NOT_IMPLEMENTED;
+        message = "not implemented";
+    }
+    else if let Some(error) = err.find::<warp::reject::InvalidQuery>() {
+        code = StatusCode::BAD_REQUEST;
+        message = "invalid query";
+    }
+    else if let Some(error) = err.find::<warp::reject::InvalidHeader>() {
+        code = StatusCode::BAD_REQUEST;
+        message = "invalid header";
+    }
+    else if let Some(error) = err.find::<warp::reject::LengthRequired>() {
+        code = StatusCode::LENGTH_REQUIRED;
+        message = "length required";
+    }
+    else if let Some(error) = err.find::<warp::reject::MethodNotAllowed>() {
+        code = StatusCode::METHOD_NOT_ALLOWED;
+        message = "method not allowed";
+    }
+    else if let Some(error) = err.find::<warp::reject::PayloadTooLarge>() {
+        code = StatusCode::PAYLOAD_TOO_LARGE;
+        message = "payload too large";
+    }
+    else if let Some(error) = err.find::<warp::reject::UnsupportedMediaType>() {
+        code = StatusCode::UNSUPPORTED_MEDIA_TYPE;
+        message = "unsupported media type";
+    }
+    else {
+        error!("unhandled rejection: {:?}", err);
+        code = StatusCode::IM_A_TEAPOT;
+        message = "unhandled rejection";
+    }
+
+    let json = warp::reply::json(&ErrorMessage {
+        code: code.as_u16(),
+        message: message.into(),
+    });
+
+    Ok(warp::reply::with_status(json, code))
 }

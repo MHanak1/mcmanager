@@ -5,6 +5,7 @@ use rusqlite::params;
 use std::convert::Infallible;
 use std::sync::{Arc, Mutex};
 use warp::{Filter, Rejection};
+use log::error;
 
 pub fn with_db(
     db: Arc<Mutex<Database>>,
@@ -25,15 +26,15 @@ pub fn with_auth(
     database: Arc<Mutex<Database>>,
 ) -> impl Filter<Extract = (User,), Error = Rejection> + Clone {
     with_bearer_token()
-        .or(warp::cookie("auth"))
+        .or(warp::cookie("sessionToken"))
         .unify()
         .and_then(move |token: String| {
             let database = database.clone();
             async move {
                 database.lock().map_or_else(
                     |err| {
-                        eprintln!("{err}");
-                        Err(warp::reject::custom(rejections::InternalServerError))
+                        error!("{err}");
+                        Err(warp::reject::custom(rejections::InternalServerError::from(err.to_string())))
                     },
                     |database| {
                         database
@@ -50,23 +51,26 @@ pub fn with_auth(
                                 |err| if let rusqlite::Error::QueryReturnedNoRows = err {
                                     Err(warp::reject::custom(rejections::Unauthorized))
                                 } else {
-                                    eprintln!("{err}");
-                                    Err(warp::reject::custom(rejections::InternalServerError))
+                                    error!("{err}");
+                                    Err(warp::reject::custom(rejections::InternalServerError::from(err.to_string())))
                                 },
-                                |session| if let Ok(user) = database.get_one::<User>(session.user_id, None) { Ok(user) } else {
-                                    eprintln!(
-                                        "Orphaned session found, token: {}, user: {}. deleting (note: this should never happen because of SQLite foreign key requirement",
-                                        session.token, session.user_id
-                                    );
-                                    match database.remove(&session, None) {
-                                        Ok(_) => {}
-                                        Err(error) => {
-                                            eprintln!(
-                                                "Failed to remove orphaned session: {error}\n(what the fuck)"
-                                            );
+                                |session| match database.get_one::<User>(session.user_id, None) {
+                                    Ok(user) => Ok(user),
+                                    Err(err) => {
+                                        error!(
+                                            "Orphaned session found, token: {}, user: {}. deleting (note: this should never happen because of SQLite foreign key requirement",
+                                            session.token, session.user_id
+                                        );
+                                        match database.remove(&session, None) {
+                                            Ok(_) => {}
+                                            Err(error) => {
+                                                eprintln!(
+                                                    "Failed to remove orphaned session: {error}\n(what the fuck)"
+                                                );
+                                            }
                                         }
+                                        Err(warp::reject::custom(rejections::InternalServerError::from(err.to_string())))
                                     }
-                                    Err(warp::reject::custom(rejections::InternalServerError))
                                 },
                             )
                     },
