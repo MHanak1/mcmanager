@@ -1,9 +1,9 @@
-use rusqlite::{Row, ToSql};
-use rusqlite::types::ToSqlOutput;
-use serde::{Deserialize, Serialize};
-use crate::api::handlers::json_fields;
+use crate::api::handlers::{ApiCreate, ApiGet, ApiList, ApiRemove, ApiUpdate};
 use crate::database::objects::{DbObject, FromJson, UpdateJson, User};
 use crate::database::types::{Access, Column, Id, Type};
+use rusqlite::types::ToSqlOutput;
+use rusqlite::{Row, ToSql};
+use serde::{Deserialize, Serialize};
 
 /// `id`: version's unique [`Id`]
 ///
@@ -73,8 +73,15 @@ impl DbObject for Version {
     }
 }
 
+#[allow(clippy::struct_field_names)]
+#[derive(Debug, Clone, Deserialize)]
+pub struct JsonFrom {
+    pub minecraft_version: String,
+    pub mod_loader_id: Id,
+}
+
 impl FromJson for Version {
-    type JsonFrom = json_fields::Version;
+    type JsonFrom = JsonFrom;
 
     fn from_json(data: Self::JsonFrom, _user: User) -> Self {
         Self {
@@ -93,3 +100,9 @@ impl UpdateJson for Version {
         new
     }
 }
+
+impl ApiList for Version {}
+impl ApiGet for Version {}
+impl ApiCreate for Version {}
+impl ApiUpdate for Version {}
+impl ApiRemove for Version {}

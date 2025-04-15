@@ -1,11 +1,11 @@
 use crate::api::util::rejections;
 use crate::database::Database;
 use crate::database::objects::{DbObject, Session, User};
+use log::error;
 use rusqlite::params;
 use std::convert::Infallible;
 use std::sync::{Arc, Mutex};
 use warp::{Filter, Rejection};
-use log::error;
 
 pub fn with_db(
     db: Arc<Mutex<Database>>,
@@ -64,7 +64,7 @@ pub fn with_auth(
                                         match database.remove(&session, None) {
                                             Ok(_) => {}
                                             Err(error) => {
-                                                eprintln!(
+                                                error!(
                                                     "Failed to remove orphaned session: {error}\n(what the fuck)"
                                                 );
                                             }

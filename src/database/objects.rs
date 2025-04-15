@@ -1,30 +1,19 @@
-use crate::api::handlers::json_fields;
 use crate::database::Database;
-use crate::database::types::{Access, Column, Id, Token, Type};
-use argon2::password_hash::SaltString;
-use chrono::{DateTime, Utc};
+use crate::database::types::{Access, Column, Id};
+use rusqlite::Row;
 use rusqlite::types::ToSqlOutput;
-use rusqlite::{Row, ToSql};
 use serde::de::DeserializeOwned;
-use serde::{Deserialize, Serialize};
-use std::fmt::Debug;
 
-pub mod user;
-pub mod world;
+pub mod invite_link;
 pub mod mod_loader;
 pub mod modification;
+pub mod user;
 pub mod version;
-pub mod invite_link;
+pub mod world;
 
 pub use self::{
-    modification::Mod,
-    version::Version,
-    mod_loader::ModLoader,
-    world::World,
-    user::User,
-    user::Session,
-    user::Password,
-    invite_link::InviteLink,
+    invite_link::InviteLink, mod_loader::ModLoader, modification::Mod, user::Password,
+    user::Session, user::User, version::Version, world::World,
 };
 
 /// An object that is meant to be stored in a database
@@ -122,13 +111,4 @@ where
     Self: Sized,
 {
     fn update_with_json(&self, data: Self::JsonFrom) -> Self;
-}
-
-pub trait ToJson
-where
-    Self: Sized,
-{
-    type JsonTo: Clone + DeserializeOwned + Send;
-
-    fn to_json(&self) -> Self::JsonTo;
 }

@@ -1,10 +1,10 @@
-use crate::api::handlers::json_fields;
-use crate::database::types::{Access, Column, Id, Token, Type};
+use crate::api::handlers::{ApiCreate, ApiGet, ApiList, ApiRemove, ApiUpdate};
+use crate::database::objects::{DbObject, FromJson, UpdateJson, User};
+use crate::database::types::{Access, Column, Id, Type};
 use rusqlite::types::ToSqlOutput;
 use rusqlite::{Row, ToSql};
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
-use crate::database::objects::{DbObject, FromJson, UpdateJson, User};
 
 /// `id`: the mod loader's unique [`Id`]
 ///
@@ -74,8 +74,14 @@ impl DbObject for ModLoader {
     }
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct JsonFrom {
+    pub name: String,
+    pub can_load_mods: bool,
+}
+
 impl FromJson for ModLoader {
-    type JsonFrom = json_fields::ModLoader;
+    type JsonFrom = JsonFrom;
 
     fn from_json(data: Self::JsonFrom, _user: User) -> Self {
         Self {
@@ -94,3 +100,9 @@ impl UpdateJson for ModLoader {
         new
     }
 }
+
+impl ApiList for ModLoader {}
+impl ApiGet for ModLoader {}
+impl ApiCreate for ModLoader {}
+impl ApiUpdate for ModLoader {}
+impl ApiRemove for ModLoader {}

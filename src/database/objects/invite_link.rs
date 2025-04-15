@@ -1,11 +1,11 @@
-use crate::api::handlers::json_fields;
+use crate::api::handlers::{ApiCreate, ApiGet, ApiList, ApiRemove};
+use crate::database::objects::{DbObject, FromJson, User};
 use crate::database::types::{Access, Column, Id, Token, Type};
 use chrono::{DateTime, Utc};
 use rusqlite::types::ToSqlOutput;
 use rusqlite::{Row, ToSql};
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
-use crate::database::objects::{DbObject, FromJson, User};
 
 /// `id`: unique [`Id`] of the invite link
 ///
@@ -89,8 +89,11 @@ impl DbObject for InviteLink {
     }
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct JsonFrom {}
+
 impl FromJson for InviteLink {
-    type JsonFrom = json_fields::InviteLink;
+    type JsonFrom = JsonFrom;
 
     fn from_json(_data: Self::JsonFrom, user: User) -> Self {
         Self {
@@ -101,3 +104,8 @@ impl FromJson for InviteLink {
         }
     }
 }
+
+impl ApiList for InviteLink {}
+impl ApiGet for InviteLink {}
+impl ApiCreate for InviteLink {}
+impl ApiRemove for InviteLink {}

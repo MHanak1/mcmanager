@@ -2,20 +2,19 @@ use mcmanager::api::filters;
 use mcmanager::api::handlers::{ApiCreate, ApiGet, ApiList, ApiRemove, ApiUpdate};
 use mcmanager::configuration;
 use mcmanager::database::Database;
+use mcmanager::database::objects::{InviteLink, Mod, ModLoader, Session, User, Version, World};
 use mcmanager::{api, util};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use warp::Filter;
-use log::info;
-use mcmanager::database::objects::{Mod, Version, ModLoader, World, User, Session, InviteLink};
 
 #[tokio::main]
 async fn main() {
     env_logger::init();
-    let conn =
-        rusqlite::Connection::open(Path::new(&util::dirs::data_dir().join("database.db"))).expect("failed to open the database");
+    let conn = rusqlite::Connection::open(Path::new(&util::dirs::data_dir().join("database.db")))
+        .expect("failed to open the database");
     let database = Database { conn };
     database.init().expect("failed to initialize database");
     run(database).await;
@@ -100,7 +99,7 @@ async fn run(database: Database) {
             .or(sessions)
             .or(invite_links)
             .recover(api::handlers::handle_rejection)
-            .with(log)
+            .with(log),
     )
     .run(SocketAddr::new(
         IpAddr::V4(Ipv4Addr::from_str(&listen_address).expect("invalid listen_address")),
@@ -146,12 +145,19 @@ fn object_creation_and_removal() -> anyhow::Result<()> {
 
     let client = reqwest::blocking::Client::new();
 
-    let admin_token = client
-        .post(format!("{url}/login"))
-        .body("{\"username\": \"Admin\", \"password\": \"Password1\"}")
-        .send()?
-        .text()?
-        .replace("\"", "");
+    #[derive(Deserialize)]
+    struct TokenReply {
+        token: String,
+    }
+
+    let admin_token: TokenReply = serde_json::from_str(
+        &client
+            .post(format!("{url}/login"))
+            .body("{\"username\": \"Admin\", \"password\": \"Password1\"}")
+            .send()?
+            .text()?,
+    )?;
+    let admin_token = admin_token.token;
 
     let got_user: User = serde_json::from_str(
         &client
@@ -165,7 +171,7 @@ fn object_creation_and_removal() -> anyhow::Result<()> {
 
     let user1: User = serde_json::from_str(
         &client
-            .post(format!("{url}/users/create"))
+            .post(format!("{url}/users"))
             .header(header::AUTHORIZATION, format!("Bearer {admin_token}"))
             .body("{\"name\": \"User1\", \"password\": \"Password2\"}")
             .send()?
@@ -174,7 +180,7 @@ fn object_creation_and_removal() -> anyhow::Result<()> {
 
     let user2: User = serde_json::from_str(
         &client
-            .post(format!("{url}/users/create"))
+            .post(format!("{url}/users"))
             .header(header::AUTHORIZATION, format!("Bearer {admin_token}"))
             .body("{\"name\": \"User2\", \"password\": \"Password3\"}")
             .send()?
@@ -188,12 +194,23 @@ fn object_creation_and_removal() -> anyhow::Result<()> {
         .text()?
         .replace("\"", "");
 
-    let user2_token = client
-        .post(format!("{url}/login"))
-        .body("{\"username\": \"User2\", \"password\": \"Password3\"}")
-        .send()?
-        .text()?
-        .replace("\"", "");
+    let user1_token: TokenReply = serde_json::from_str(
+        &client
+            .post(format!("{url}/login"))
+            .body("{\"username\": \"User1\", \"password\": \"Password2\"}")
+            .send()?
+            .text()?,
+    )?;
+    let user1_token = user1_token.token;
+
+    let user2_token: TokenReply = serde_json::from_str(
+        &client
+            .post(format!("{url}/login"))
+            .body("{\"username\": \"User2\", \"password\": \"Password3\"}")
+            .send()?
+            .text()?,
+    )?;
+    let user2_token = user2_token.token;
 
     let admin_user_access: Vec<User> = serde_json::from_str(
         &client
@@ -216,13 +233,6 @@ fn object_creation_and_removal() -> anyhow::Result<()> {
         vec![admin.clone(), user1.clone(), user2.clone()]
     );
     assert_eq!(normal_user_access, vec![user1.clone()]);
-
-    /*
-    let world: World = serde_json::from_str(&client.post(format!("{url}/worlds/create"))
-        .header(header::AUTHORIZATION, format!("Bearer {}", user1_token))
-        .body("{\"name\": \"User2\", \"password\": \"Password3\"}")
-        .send()?.text()?)?;
-     */
 
     Ok(())
 }

@@ -1,10 +1,10 @@
-use crate::api::handlers::json_fields;
-use crate::database::types::{Access, Column, Id, Token, Type};
+use crate::api::handlers::{ApiCreate, ApiGet, ApiList, ApiRemove, ApiUpdate};
+use crate::database::objects::{DbObject, FromJson, UpdateJson, User};
+use crate::database::types::{Access, Column, Id, Type};
 use rusqlite::types::ToSqlOutput;
 use rusqlite::{Row, ToSql};
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
-use crate::database::objects::{DbObject, FromJson, UpdateJson, User};
 
 /// `id`: mod's unique [`Id`]
 ///
@@ -99,8 +99,16 @@ impl DbObject for Mod {
     }
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct JsonFrom {
+    pub version_id: Id,
+    pub name: String,
+    pub description: Option<String>,
+    pub icon_id: Option<Id>,
+}
+
 impl FromJson for Mod {
-    type JsonFrom = json_fields::Mod;
+    type JsonFrom = JsonFrom;
 
     fn from_json(data: Self::JsonFrom, user: User) -> Self {
         Self {
@@ -124,3 +132,9 @@ impl UpdateJson for Mod {
         new
     }
 }
+
+impl ApiList for Mod {}
+impl ApiGet for Mod {}
+impl ApiCreate for Mod {}
+impl ApiUpdate for Mod {}
+impl ApiRemove for Mod {}

@@ -1,12 +1,9 @@
 pub mod rejections {
-    use std::error::Error;
-    use std::fmt::Display;
-    use warp::reject;
     use warp::reject::Reject;
 
     #[derive(Debug)]
     pub struct NotFound;
-    impl reject::Reject for NotFound {}
+    impl Reject for NotFound {}
 
     #[derive(Debug)]
     pub struct InternalServerError {
@@ -15,9 +12,7 @@ pub mod rejections {
 
     impl From<String> for InternalServerError {
         fn from(value: String) -> Self {
-            Self {
-                error: value,
-            }
+            Self { error: value }
         }
     }
 

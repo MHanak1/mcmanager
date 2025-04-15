@@ -8,7 +8,6 @@ use argon2::password_hash::rand_core::OsRng;
 use argon2::{Argon2, PasswordHasher};
 use rusqlite::{params, params_from_iter};
 use std::collections::HashMap;
-use log::info;
 
 pub mod objects;
 pub mod types;
@@ -252,7 +251,6 @@ impl Database {
     }
 }
 
-//TODO: Fix this after the refactor
 #[rustfmt::skip]
 #[test]
 pub fn manipulate_data() -> anyhow::Result<()> {

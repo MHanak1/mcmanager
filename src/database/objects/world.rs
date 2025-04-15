@@ -1,9 +1,9 @@
-use rusqlite::{Row, ToSql};
-use rusqlite::types::ToSqlOutput;
-use serde::{Deserialize, Serialize};
-use crate::api::handlers::json_fields;
+use crate::api::handlers::{ApiCreate, ApiGet, ApiList, ApiRemove, ApiUpdate};
 use crate::database::objects::{DbObject, FromJson, UpdateJson, User};
 use crate::database::types::{Access, Column, Id, Type};
+use rusqlite::types::ToSqlOutput;
+use rusqlite::{Row, ToSql};
+use serde::{Deserialize, Serialize};
 
 /// `id`: world's unique [`Id`]
 ///
@@ -120,8 +120,17 @@ impl DbObject for World {
     }
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct JsonFrom {
+    pub name: String,
+    pub icon_id: Option<Id>,
+    pub allocated_memory: Option<u32>,
+    pub version_id: Id,
+    pub enabled: Option<bool>,
+}
+
 impl FromJson for World {
-    type JsonFrom = json_fields::World;
+    type JsonFrom = JsonFrom;
     fn from_json(data: Self::JsonFrom, user: User) -> Self {
         Self {
             id: Id::default(),
@@ -146,3 +155,9 @@ impl UpdateJson for World {
         new
     }
 }
+
+impl ApiList for World {}
+impl ApiGet for World {}
+impl ApiCreate for World {}
+impl ApiUpdate for World {}
+impl ApiRemove for World {}
