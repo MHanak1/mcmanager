@@ -1,15 +1,15 @@
 use crate::api::util::rejections;
 use crate::api::{auth, filters};
-use crate::database::Database;
 use crate::database::objects::{DbObject, FromJson, UpdateJson, User};
 use crate::database::types::Id;
+use crate::database::{Database, DatabaseError};
 use log::error;
-use rusqlite::Error;
+use rusqlite::{Error, ErrorCode};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use warp::Filter;
 use warp::http::StatusCode;
+use warp::{Filter, reject};
 
 pub trait ApiList: DbObject
 where
@@ -37,16 +37,13 @@ where
                     Err(err) => {
                         match err {
                             //if the user does not have access to anything, instead of erroring out return an empty array
-                            Error::QueryReturnedNoRows => Ok(warp::reply::with_status(
-                                warp::reply::json::<Vec<&str>>(&vec![]),
-                                StatusCode::OK,
-                            )),
-                            _ => {
-                                error!("{err:?}");
-                                Err(warp::reject::custom(rejections::InternalServerError::from(
-                                    err.to_string(),
-                                )))
+                            DatabaseError::SqliteError(Error::QueryReturnedNoRows) => {
+                                Ok(warp::reply::with_status(
+                                    warp::reply::json::<Vec<&str>>(&vec![]),
+                                    StatusCode::OK,
+                                ))
                             }
+                            _ => Err(handle_database_error(err)),
                         }
                     }
                 }
@@ -57,10 +54,10 @@ where
     fn list_filter(
         db_mutex: Arc<Mutex<Database>>,
     ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
-        warp::get()
-            .and(warp::path("api"))
+        warp::path("api")
             .and(warp::path(Self::table_name()))
             .and(warp::path::end())
+            .and(warp::get())
             .and(filters::with_db(db_mutex.clone()))
             .and(filters::with_auth(db_mutex))
             .and(warp::query::<HashMap<String, String>>())
@@ -81,23 +78,17 @@ where
     ) -> Result<impl warp::Reply, warp::Rejection> {
         if let Ok(id) = Id::from_string(&id) {
             db_mutex.lock().map_or_else(
-                |_| Err(warp::reject::not_found()),
+                |err| {
+                    Err(warp::reject::custom(rejections::InternalServerError::from(
+                        err.to_string(),
+                    )))
+                },
                 |database| match database.get_one::<Self>(id, Some(&user)) {
                     Ok(object) => Ok(warp::reply::with_status(
                         warp::reply::json(&object),
                         StatusCode::OK,
                     )),
-                    Err(err) => match err {
-                        Error::QueryReturnedNoRows => {
-                            Err(warp::reject::custom(rejections::NotFound))
-                        }
-                        _ => {
-                            error!("{err:?}");
-                            Err(warp::reject::custom(rejections::InternalServerError::from(
-                                err.to_string(),
-                            )))
-                        }
-                    },
+                    Err(err) => Err(handle_database_error(err)),
                 },
             )
         } else {
@@ -108,11 +99,11 @@ where
     fn get_filter(
         db_mutex: Arc<Mutex<Database>>,
     ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
-        warp::get()
-            .and(warp::path("api"))
+        warp::path("api")
             .and(warp::path(Self::table_name()))
             .and(warp::path::param::<String>())
             .and(warp::path::end())
+            .and(warp::get())
             .and(filters::with_db(db_mutex.clone()))
             .and(filters::with_auth(db_mutex))
             .and_then(|id, db_mutex, user| async move { Self::api_get(id, db_mutex, user) })
@@ -145,35 +136,32 @@ where
 
                     match database.insert(&object, Some(&user)) {
                         Ok(_) => Ok(warp::reply::with_status(
-                            warp::reply::json(&object),
+                            warp::reply::with_header(
+                                warp::reply::json(&object),
+                                warp::http::header::LOCATION,
+                                format!("api/{}/{}", Self::table_name(), object.get_id()),
+                            ),
                             StatusCode::CREATED,
                         )),
-                        Err(err) => {
-                            error!("{err:?}");
-                            Ok(warp::reply::with_status(
-                                warp::reply::json(&"internal server error"),
-                                StatusCode::INTERNAL_SERVER_ERROR,
-                            ))
-                        }
+                        Err(err) => Err(warp::reject::custom(rejections::InternalServerError {
+                            error: err.to_string(),
+                        })),
                     }
                 },
             )
         } else {
-            Ok(warp::reply::with_status(
-                warp::reply::json(&"Unauthorized"),
-                StatusCode::UNAUTHORIZED,
-            ))
+            Err(warp::reject::custom(rejections::Unauthorized))
         }
     }
 
     fn create_filter(
         db_mutex: Arc<Mutex<Database>>,
     ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
-        warp::post()
-            .and(warp::body::content_length_limit(1024 * 32))
-            .and(warp::path("api"))
+        warp::path("api")
             .and(warp::path(Self::table_name()))
             .and(warp::path::end())
+            .and(warp::post())
+            .and(warp::body::content_length_limit(1024 * 32))
             .and(filters::with_db(db_mutex.clone()))
             .and(filters::with_auth(db_mutex))
             .and(warp::body::json())
@@ -201,23 +189,20 @@ where
             |database| {
                 if let Ok(id) = Id::from_string(&id) {
                     database.get_one(id, Some(&user)).map_or_else(
-                        |_| Err(warp::reject::custom(rejections::NotFound)),
+                        |err| Err(handle_database_error(err)),
                         |object: Self| {
                             let object = object.update_with_json(data);
                             match database.update(&object, Some(&user)) {
                                 Ok(_) => Ok(warp::reply::with_status(
                                     warp::reply::json(&object),
-                                    StatusCode::CREATED,
+                                    StatusCode::NO_CONTENT,
                                 )),
-                                Err(err) => {
-                                    error!("{err:?}");
-                                    Err(warp::reject::custom(rejections::Unauthorized))
-                                }
+                                Err(err) => Err(handle_database_error(err)),
                             }
                         },
                     )
                 } else {
-                    Err(warp::reject::custom(rejections::NotFound))
+                    Err(warp::reject::custom(rejections::BadRequest))
                 }
             },
         )
@@ -226,12 +211,12 @@ where
     fn update_filter(
         db_mutex: Arc<Mutex<Database>>,
     ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
-        warp::put()
-            .and(warp::body::content_length_limit(1024 * 32))
-            .and(warp::path("api"))
+        warp::path("api")
             .and(warp::path(Self::table_name()))
             .and(warp::path::param::<String>())
             .and(warp::path::end())
+            .and(warp::put())
+            .and(warp::body::content_length_limit(1024 * 32))
             .and(filters::with_db(db_mutex.clone()))
             .and(filters::with_auth(db_mutex))
             .and(warp::body::json())
@@ -253,54 +238,56 @@ where
     ) -> Result<impl warp::Reply, warp::Rejection> {
         if let Ok(id) = Id::from_string(&id) {
             db_mutex.lock().map_or_else(
-                |_| Err(warp::reject::not_found()),
+                |err| {
+                    Err(warp::reject::custom(rejections::InternalServerError::from(
+                        err.to_string(),
+                    )))
+                },
                 |database| match database.get_one::<Self>(id, Some(&user)) {
                     Ok(object) => match database.remove(&object, Some(&user)) {
                         Ok(_) => Ok(warp::reply::with_status(
                             warp::reply::json(&""),
-                            StatusCode::OK,
+                            StatusCode::NO_CONTENT,
                         )),
-                        Err(err) => match err {
-                            Error::QueryReturnedNoRows => {
-                                Err(warp::reject::custom(rejections::NotFound))
-                            }
-                            _ => {
-                                error!("{err:?}");
-                                Err(warp::reject::custom(rejections::InternalServerError::from(
-                                    err.to_string(),
-                                )))
-                            }
-                        },
+                        Err(err) => Err(handle_database_error(err)),
                     },
-                    Err(err) => match err {
-                        Error::QueryReturnedNoRows => {
-                            Err(warp::reject::custom(rejections::NotFound))
-                        }
-                        _ => {
-                            error!("{err:?}");
-                            Err(warp::reject::custom(rejections::InternalServerError::from(
-                                err.to_string(),
-                            )))
-                        }
-                    },
+                    Err(err) => Err(handle_database_error(err)),
                 },
             )
         } else {
-            Err(warp::reject::custom(rejections::NotFound))
+            Err(reject::custom(rejections::NotFound))
         }
     }
 
     fn remove_filter(
         db_mutex: Arc<Mutex<Database>>,
     ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
-        warp::delete()
-            .and(warp::path("api"))
+        warp::path("api")
             .and(warp::path(Self::table_name()))
             .and(warp::path::param::<String>())
             .and(warp::path::end())
+            .and(warp::delete())
             .and(filters::with_db(db_mutex.clone()))
             .and(filters::with_auth(db_mutex))
             .and_then(|id, db_mutex, user| async move { Self::api_remove(id, db_mutex, user) })
+    }
+}
+
+fn handle_database_error(err: DatabaseError) -> warp::Rejection {
+    error!("{err}");
+    match err {
+        DatabaseError::Unauthorized => reject::custom(rejections::Unauthorized),
+        DatabaseError::InternalServerError(error) => {
+            reject::custom(rejections::InternalServerError { error })
+        }
+        DatabaseError::SqliteError(err) => match err {
+            Error::QueryReturnedNoRows => reject::custom(rejections::NotFound),
+            Error::SqliteFailure(sql_err, ..) => match sql_err.code {
+                ErrorCode::ConstraintViolation => reject::custom(rejections::Conflict),
+                _ => reject::custom(rejections::InternalServerError::from(err.to_string())),
+            },
+            _ => reject::custom(rejections::InternalServerError::from(err.to_string())),
+        },
     }
 }
 
@@ -403,6 +390,9 @@ pub async fn handle_rejection(
     } else if err.find::<rejections::NotImplemented>().is_some() {
         code = StatusCode::NOT_IMPLEMENTED;
         message = "not implemented";
+    } else if err.find::<rejections::Conflict>().is_some() {
+        code = StatusCode::CONFLICT;
+        message = "conflict";
     } else if err.find::<warp::reject::InvalidQuery>().is_some() {
         code = StatusCode::BAD_REQUEST;
         message = "invalid query";
@@ -423,7 +413,7 @@ pub async fn handle_rejection(
         message = "unsupported media type";
     } else {
         error!("unhandled rejection: {err:?}");
-        code = StatusCode::IM_A_TEAPOT;
+        code = StatusCode::INTERNAL_SERVER_ERROR;
         message = "unhandled rejection";
     }
 

@@ -33,4 +33,8 @@ pub mod rejections {
     #[derive(Debug)]
     pub struct NotImplemented;
     impl Reject for NotImplemented {}
+
+    #[derive(Debug)]
+    pub struct Conflict;
+    impl Reject for Conflict {}
 }

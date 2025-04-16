@@ -359,25 +359,32 @@ impl Default for Id {
 fn id() {
     use pretty_assertions::assert_eq;
 
-    assert_eq!(Id::from_i64(0).unwrap(), Id { id: 0 });
+    assert_eq!(
+        Id::from_i64(0).expect("failed to create id from i64 (0)"),
+        Id { id: 0 }
+    );
     assert!(Id::from_i64(ID_MAX_VALUE + 1).is_err());
 
     assert_eq!(
-        Id::from_i64(ID_MAX_VALUE).unwrap(),
-        Id::from_string("________").unwrap()
+        Id::from_i64(ID_MAX_VALUE).expect("failed to create id from i64 (ID_MAX_VALUE)"),
+        Id::from_string("________").expect("failed to create id from string (________)")
     ); // "________" is the max possible value
     assert_eq!(
-        Id::from_string("________").unwrap().to_string(),
+        Id::from_string("________")
+            .expect("failed to create id from string (________)")
+            .to_string(),
         "________".to_string()
     );
 
     //an id picked at random
     assert_eq!(
-        Id::from_i64(236540241151257).unwrap(),
-        Id::from_string("1yHRDIUZ").unwrap()
+        Id::from_i64(236540241151257).expect("failed to create id from i64 (236540241151257)"),
+        Id::from_string("1yHRDIUZ").expect("failed to create id from string (1yHRDIUZ)")
     );
     assert_eq!(
-        Id::from_i64(236540241151257).unwrap().to_string(),
+        Id::from_i64(236540241151257)
+            .expect("failed to create id from i64 (236540241151257)")
+            .to_string(),
         "1yHRDIUZ"
     );
 

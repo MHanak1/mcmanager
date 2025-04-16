@@ -54,36 +54,36 @@ async fn run(database: Database) {
     let mods = Mod::list_filter(db_mutex.clone())
         .or(Mod::create_filter(db_mutex.clone()))
         .or(Mod::update_filter(db_mutex.clone()))
-        .or(Mod::remove_filter(db_mutex.clone()))
-        .or(Mod::get_filter(db_mutex.clone()));
+        .or(Mod::get_filter(db_mutex.clone()))
+        .or(Mod::remove_filter(db_mutex.clone()));
     let versions = Version::list_filter(db_mutex.clone())
         .or(Version::create_filter(db_mutex.clone()))
         .or(Version::update_filter(db_mutex.clone()))
-        .or(Version::remove_filter(db_mutex.clone()))
-        .or(Version::get_filter(db_mutex.clone()));
+        .or(Version::get_filter(db_mutex.clone()))
+        .or(Version::remove_filter(db_mutex.clone()));
     let mod_loaders = ModLoader::list_filter(db_mutex.clone())
         .or(ModLoader::create_filter(db_mutex.clone()))
         .or(ModLoader::update_filter(db_mutex.clone()))
-        .or(ModLoader::remove_filter(db_mutex.clone()))
-        .or(ModLoader::get_filter(db_mutex.clone()));
+        .or(ModLoader::get_filter(db_mutex.clone()))
+        .or(ModLoader::remove_filter(db_mutex.clone()));
     let worlds = World::list_filter(db_mutex.clone())
         .or(World::create_filter(db_mutex.clone()))
         .or(World::update_filter(db_mutex.clone()))
-        .or(World::remove_filter(db_mutex.clone()))
-        .or(World::get_filter(db_mutex.clone()));
+        .or(World::get_filter(db_mutex.clone()))
+        .or(World::remove_filter(db_mutex.clone()));
     let users = User::list_filter(db_mutex.clone())
         .or(User::create_filter(db_mutex.clone()))
         .or(User::update_filter(db_mutex.clone()))
-        .or(User::remove_filter(db_mutex.clone()))
-        .or(User::get_filter(db_mutex.clone()));
+        .or(User::get_filter(db_mutex.clone()))
+        .or(User::remove_filter(db_mutex.clone()));
     let sessions = Session::list_filter(db_mutex.clone())
         .or(Session::create_filter(db_mutex.clone()))
-        .or(Session::remove_filter(db_mutex.clone()))
-        .or(Session::get_filter(db_mutex.clone()));
+        .or(Session::get_filter(db_mutex.clone()))
+        .or(Session::remove_filter(db_mutex.clone()));
     let invite_links = InviteLink::list_filter(db_mutex.clone())
         .or(InviteLink::create_filter(db_mutex.clone()))
-        .or(InviteLink::remove_filter(db_mutex.clone()))
-        .or(InviteLink::get_filter(db_mutex.clone()));
+        .or(InviteLink::get_filter(db_mutex.clone()))
+        .or(InviteLink::remove_filter(db_mutex.clone()));
 
     //let log = warp::log::custom(|info| info!("{} - {}: {}", info.method(), info.status(), info.path()));
     let log = warp::log("info");
