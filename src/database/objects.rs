@@ -106,9 +106,10 @@ where
     fn from_json(data: Self::JsonFrom, user: User) -> Self;
 }
 
-pub trait UpdateJson: FromJson
+pub trait UpdateJson
 where
     Self: Sized,
 {
-    fn update_with_json(&self, data: Self::JsonFrom) -> Self;
+    type JsonUpdate: Clone + DeserializeOwned + Send;
+    fn update_with_json(&self, data: Self::JsonUpdate) -> Self;
 }

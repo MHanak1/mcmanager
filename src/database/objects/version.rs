@@ -91,12 +91,19 @@ impl FromJson for Version {
         }
     }
 }
+#[allow(clippy::struct_field_names)]
+#[derive(Debug, Clone, Deserialize)]
+pub struct JsonUpdate {
+    pub minecraft_version: Option<String>,
+    pub mod_loader_id: Option<Id>,
+}
 
 impl UpdateJson for Version {
-    fn update_with_json(&self, data: Self::JsonFrom) -> Self {
+    type JsonUpdate = JsonUpdate;
+    fn update_with_json(&self, data: Self::JsonUpdate) -> Self {
         let mut new = self.clone();
-        new.minecraft_version = data.minecraft_version;
-        new.mod_loader_id = data.mod_loader_id;
+        new.minecraft_version = data.minecraft_version.unwrap_or(new.minecraft_version);
+        new.mod_loader_id = data.mod_loader_id.unwrap_or(new.mod_loader_id);
         new
     }
 }

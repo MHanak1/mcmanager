@@ -256,7 +256,7 @@ impl Database {
 
     pub fn create_user(&self, username: &str, password: &str) -> anyhow::Result<User> {
         let user = User {
-            name: username.to_string(),
+            username: username.to_string(),
             ..Default::default()
         };
         self.create_user_from(user, password)
@@ -311,8 +311,6 @@ pub fn manipulate_data() -> anyhow::Result<()> {
     use pretty_assertions::assert_eq;
     use log::{info};
 
-    env_logger::init();
-
     let conn = rusqlite::Connection::open_in_memory()?;
 
     let database = Database { conn };
@@ -333,7 +331,7 @@ pub fn manipulate_data() -> anyhow::Result<()> {
 
     let mut user_min = User {
         id: Id::default(),
-        name: String::new(),
+        username: String::new(),
         avatar_id: None,
         memory_limit: None,
         player_limit: None,
@@ -346,7 +344,7 @@ pub fn manipulate_data() -> anyhow::Result<()> {
 
     let mut user_max = User {
         id: Id::default(),
-        name: "Username".to_string(),
+        username: "Username".to_string(),
         avatar_id: Some(Id::default()),
         memory_limit: Some(1024),
         player_limit: Some(10),
@@ -443,8 +441,8 @@ pub fn manipulate_data() -> anyhow::Result<()> {
     info!("altering values");
     mod_loader.name = "New Display Name".to_string();
     version.minecraft_version = "4.3.2.1".to_string();
-    user_min.name = "New Username".to_string();
-    user_max.name = "Other New Username".to_string();
+    user_min.username = "New Username".to_string();
+    user_max.username = "Other New Username".to_string();
     password.salt = SaltString::generate(OsRng);
     mc_mod_min.name = "New Mod Name".to_string();
     mc_mod_max.name = "New Mod Name".to_string();

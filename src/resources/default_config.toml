@@ -1,2 +1,18 @@
 listen_address = "127.0.0.1"
 listen_port = 3030
+
+[user_defaults]
+# total RAM limit (in MiB)
+memory_limit = 4096
+# Per-world player limit
+player_limit = 10
+# total wolds the user can have enabled
+world_limit = 10
+# amount of worlds that user can have enabled at a time
+active_world_limit = 3
+# total amount of storage avaliable to the user (in MiB)
+storage_limit = 10240
+
+[world_defaults]
+# Default amount of memory allocated to a server (in MiB)
+allocated_memory = 1024

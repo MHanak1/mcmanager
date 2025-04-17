@@ -92,11 +92,18 @@ impl FromJson for ModLoader {
     }
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct JsonUpdate {
+    pub name: Option<String>,
+    pub can_load_mods: Option<bool>,
+}
+
 impl UpdateJson for ModLoader {
-    fn update_with_json(&self, data: Self::JsonFrom) -> Self {
+    type JsonUpdate = JsonUpdate;
+    fn update_with_json(&self, data: Self::JsonUpdate) -> Self {
         let mut new = self.clone();
-        new.name = data.name;
-        new.can_load_mods = data.can_load_mods;
+        new.name = data.name.unwrap_or(new.name);
+        new.can_load_mods = data.can_load_mods.unwrap_or(new.can_load_mods);
         new
     }
 }

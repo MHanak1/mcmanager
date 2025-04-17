@@ -1,6 +1,6 @@
 use mcmanager::api::filters;
 use mcmanager::api::handlers::{ApiCreate, ApiGet, ApiList, ApiRemove, ApiUpdate};
-use mcmanager::configuration;
+use mcmanager::config;
 use mcmanager::database::Database;
 use mcmanager::database::objects::{InviteLink, Mod, ModLoader, Session, User, Version, World};
 use mcmanager::{api, util};
@@ -17,17 +17,10 @@ async fn main() {
         .expect("failed to open the database");
     let database = Database { conn };
     database.init().expect("failed to initialize database");
-    run(database).await;
+    run(database, config::CONFIG.clone()).await;
 }
 
-async fn run(database: Database) {
-    let listen_address = configuration::CONFIG
-        .get::<String>("listen_address")
-        .expect("invalid listen_address");
-    let listen_port = configuration::CONFIG
-        .get::<u16>("listen_port")
-        .expect("invalid listen_port");
-
+async fn run(database: Database, config: config::Config) {
     util::dirs::init_dirs().expect("Failed to initialize the data directory");
 
     let db_mutex = Arc::new(Mutex::new(database));
@@ -99,8 +92,8 @@ async fn run(database: Database) {
             .with(log),
     )
     .run(SocketAddr::new(
-        IpAddr::V4(Ipv4Addr::from_str(&listen_address).expect("invalid listen_address")),
-        listen_port,
+        IpAddr::V4(Ipv4Addr::from_str(&config.listen_address).expect("invalid listen_address")),
+        config.listen_port as u16,
     ))
     .await;
 }
@@ -108,12 +101,96 @@ async fn run(database: Database) {
 #[test]
 #[allow(unused)]
 fn object_creation_and_removal() -> anyhow::Result<()> {
-    use mcmanager::configuration;
+    const TEST_PORT: u32 = 3031;
+
+    use mcmanager::config;
+    use mcmanager::config::CONFIG;
     use pretty_assertions::assert_eq;
     use reqwest::header;
     use serde::Deserialize;
     use std::thread;
-    env_logger::init();
+
+    let conn = rusqlite::Connection::open_in_memory().expect("Can't open database connection");
+
+    let database = Database { conn };
+    database.init().expect("Can't init database");
+    let mut user = database.create_user("Admin", "Password1")?;
+    user.is_privileged = true;
+    database.update(&user, None)?;
+
+    thread::spawn(|| {
+        let mut config = CONFIG.clone();
+        config.listen_port = TEST_PORT;
+        let rt = tokio::runtime::Runtime::new().expect("Can't create runtime");
+        rt.block_on(run(database, config))
+    });
+
+    //wait for the server to start
+    thread::sleep(std::time::Duration::from_secs(1));
+
+    let url = format!("http://{}:{}/api", CONFIG.listen_address, TEST_PORT);
+
+    let client = reqwest::blocking::Client::new();
+
+    #[derive(Deserialize)]
+    struct TokenReply {
+        token: String,
+    }
+
+    let token: TokenReply = serde_json::from_str(
+        &client
+            .post(format!("{url}/login"))
+            .body("{\"username\": \"Admin\", \"password\": \"Password1\"}")
+            .send()?
+            .text()?,
+    )?;
+    let token = token.token;
+
+    assert_eq!(
+        user,
+        serde_json::from_str(
+            &client
+                .get(format!("{url}/user"))
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .send()?
+                .text()?,
+        )?
+    );
+
+    let created: User = serde_json::from_str(
+        &client
+            .post(format!("{url}/users"))
+            .header(header::AUTHORIZATION, format!("Bearer {token}"))
+            .body("{\"username\": \"User1\", \"password\": \"Password2\"}")
+            .send()?
+            .text()?,
+    )?;
+
+    assert_eq!(created.username, "User1");
+    /*
+    assert_eq!(created.memory_limit, None);
+    assert_eq!(created.player_limit, None);
+    assert_eq!(created.world_limit, None);
+    assert_eq!(created.active_world_limit, None);
+    assert_eq!(created.storage_limit, None);
+    assert_eq!(created.is_privileged, false);
+    assert_eq!(created.enabled, true);
+     */
+
+    Ok(())
+}
+
+#[test]
+#[allow(unused)]
+fn permissions() -> anyhow::Result<()> {
+    const TEST_PORT: u32 = 3032;
+
+    use mcmanager::config;
+    use mcmanager::config::CONFIG;
+    use pretty_assertions::assert_eq;
+    use reqwest::header;
+    use serde::Deserialize;
+    use std::thread;
 
     let conn = rusqlite::Connection::open_in_memory().expect("Can't open database connection");
 
@@ -124,22 +201,16 @@ fn object_creation_and_removal() -> anyhow::Result<()> {
     database.update(&admin, None)?;
 
     thread::spawn(|| {
+        let mut config = CONFIG.clone();
+        config.listen_port = TEST_PORT;
         let rt = tokio::runtime::Runtime::new().expect("Can't create runtime");
-        rt.block_on(run(database))
+        rt.block_on(run(database, config))
     });
 
     //wait for the server to start
     thread::sleep(std::time::Duration::from_secs(1));
 
-    let url = format!(
-        "http://{}:{}/api",
-        configuration::CONFIG
-            .get::<String>("listen_address")
-            .expect("invalid listen_address"),
-        configuration::CONFIG
-            .get::<String>("listen_port")
-            .expect("invalid listen_port")
-    );
+    let url = format!("http://{}:{}/api", CONFIG.listen_address, TEST_PORT);
 
     let client = reqwest::blocking::Client::new();
 
@@ -171,7 +242,7 @@ fn object_creation_and_removal() -> anyhow::Result<()> {
         &client
             .post(format!("{url}/users"))
             .header(header::AUTHORIZATION, format!("Bearer {admin_token}"))
-            .body("{\"name\": \"User1\", \"password\": \"Password2\"}")
+            .body("{\"username\": \"User1\", \"password\": \"Password2\"}")
             .send()?
             .text()?,
     )?;
@@ -180,7 +251,7 @@ fn object_creation_and_removal() -> anyhow::Result<()> {
         &client
             .post(format!("{url}/users"))
             .header(header::AUTHORIZATION, format!("Bearer {admin_token}"))
-            .body("{\"name\": \"User2\", \"password\": \"Password3\"}")
+            .body("{\"username\": \"User2\", \"password\": \"Password3\"}")
             .send()?
             .text()?,
     )?;

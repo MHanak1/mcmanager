@@ -1,16 +1,16 @@
+pub use self::{password::Password, session::Session};
 use crate::api::handlers::{ApiCreate, ApiGet, ApiList, ApiRemove, ApiUpdate};
 use crate::api::util::rejections;
+use crate::config::CONFIG;
 use crate::database::Database;
 use crate::database::objects::{DbObject, FromJson, UpdateJson};
 use crate::database::types::{Access, Column, Id, Type};
 use log::error;
 use rusqlite::types::ToSqlOutput;
 use rusqlite::{Error, Row, ToSql};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::sync::{Arc, Mutex};
 use warp::http::StatusCode;
-
-pub use self::{password::Password, session::Session};
 
 /// `id`: user's unique [`Id`]
 ///
@@ -32,7 +32,7 @@ pub use self::{password::Password, session::Session};
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub struct User {
     pub id: Id,
-    pub name: String,
+    pub username: String,
     pub avatar_id: Option<Id>,
     pub memory_limit: Option<u32>,
     pub player_limit: Option<u32>,
@@ -104,7 +104,7 @@ impl DbObject for User {
     {
         Ok(Self {
             id: row.get(0)?,
-            name: row.get(1)?,
+            username: row.get(1)?,
             avatar_id: row.get(2)?,
             memory_limit: row.get(3)?,
             player_limit: row.get(4)?,
@@ -125,7 +125,7 @@ impl DbObject for User {
             self.id
                 .to_sql()
                 .expect("failed to convert the value to sql"),
-            self.name
+            self.username
                 .to_sql()
                 .expect("failed to convert the value to sql"),
             self.avatar_id
@@ -160,29 +160,44 @@ impl Default for User {
     fn default() -> Self {
         Self {
             id: Id::default(),
-            name: String::new(),
+            username: String::new(),
             avatar_id: None,
-            memory_limit: None,
-            player_limit: None,
-            world_limit: None,
-            active_world_limit: None,
-            storage_limit: None,
+            memory_limit: Some(CONFIG.user_defaults.memory_limit),
+            player_limit: Some(CONFIG.user_defaults.player_limit),
+            world_limit: Some(CONFIG.user_defaults.world_limit),
+            active_world_limit: Some(CONFIG.user_defaults.active_world_limit),
+            storage_limit: Some(CONFIG.user_defaults.storage_limit),
             is_privileged: false,
             enabled: true,
         }
     }
 }
 
+// Any value that is present is considered Some value, including null.
+fn deserialize_some<'de, T, D>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    T: Deserialize<'de>,
+    D: Deserializer<'de>,
+{
+    Deserialize::deserialize(deserializer).map(Some)
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct JsonFrom {
-    pub name: String,
+    pub username: String,
     pub password: String,
-    pub avatar_id: Option<Id>,
-    pub memory_limit: Option<u32>,
-    pub player_limit: Option<u32>,
-    pub world_limit: Option<u32>,
-    pub active_world_limit: Option<u32>,
-    pub storage_limit: Option<u32>,
+    #[serde(default, deserialize_with = "deserialize_some")]
+    pub avatar_id: Option<Option<Id>>,
+    #[serde(default, deserialize_with = "deserialize_some")]
+    pub memory_limit: Option<Option<u32>>,
+    #[serde(default, deserialize_with = "deserialize_some")]
+    pub player_limit: Option<Option<u32>>,
+    #[serde(default, deserialize_with = "deserialize_some")]
+    pub world_limit: Option<Option<u32>>,
+    #[serde(default, deserialize_with = "deserialize_some")]
+    pub active_world_limit: Option<Option<u32>>,
+    #[serde(default, deserialize_with = "deserialize_some")]
+    pub storage_limit: Option<Option<u32>>,
     pub is_privileged: Option<bool>,
     pub enabled: Option<bool>,
 }
@@ -192,29 +207,63 @@ impl FromJson for User {
     fn from_json(data: Self::JsonFrom, _user: User) -> Self {
         Self {
             id: Id::default(),
-            name: data.name,
-            avatar_id: data.avatar_id,
-            memory_limit: data.memory_limit,
-            player_limit: data.player_limit,
-            world_limit: data.world_limit,
-            active_world_limit: data.active_world_limit,
-            storage_limit: data.storage_limit,
+            username: data.username,
+            avatar_id: data.avatar_id.unwrap_or(None),
+            memory_limit: data
+                .memory_limit
+                .unwrap_or(Some(CONFIG.user_defaults.memory_limit)),
+            player_limit: data
+                .player_limit
+                .unwrap_or(Some(CONFIG.user_defaults.player_limit)),
+            world_limit: data
+                .world_limit
+                .unwrap_or(Some(CONFIG.user_defaults.world_limit)),
+            active_world_limit: data
+                .active_world_limit
+                .unwrap_or(Some(CONFIG.user_defaults.active_world_limit)),
+            storage_limit: data
+                .storage_limit
+                .unwrap_or(Some(CONFIG.user_defaults.storage_limit)),
             is_privileged: data.is_privileged.unwrap_or(false),
             enabled: data.enabled.unwrap_or(true),
         }
     }
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct JsonUpdate {
+    #[serde(default, deserialize_with = "deserialize_some")]
+    pub username: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_some")]
+    pub password: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_some")]
+    pub avatar_id: Option<Option<Id>>,
+    #[serde(default, deserialize_with = "deserialize_some")]
+    pub memory_limit: Option<Option<u32>>,
+    #[serde(default, deserialize_with = "deserialize_some")]
+    pub player_limit: Option<Option<u32>>,
+    #[serde(default, deserialize_with = "deserialize_some")]
+    pub world_limit: Option<Option<u32>>,
+    #[serde(default, deserialize_with = "deserialize_some")]
+    pub active_world_limit: Option<Option<u32>>,
+    #[serde(default, deserialize_with = "deserialize_some")]
+    pub storage_limit: Option<Option<u32>>,
+    #[serde(default, deserialize_with = "deserialize_some")]
+    pub is_privileged: Option<bool>,
+    #[serde(default, deserialize_with = "deserialize_some")]
+    pub enabled: Option<bool>,
+}
 impl UpdateJson for User {
-    fn update_with_json(&self, data: Self::JsonFrom) -> Self {
+    type JsonUpdate = JsonUpdate;
+    fn update_with_json(&self, data: Self::JsonUpdate) -> Self {
         let mut new = self.clone();
-        new.name = data.name;
-        new.avatar_id = data.avatar_id;
-        new.memory_limit = data.memory_limit;
-        new.player_limit = data.player_limit;
-        new.world_limit = data.world_limit;
-        new.active_world_limit = data.active_world_limit;
-        new.storage_limit = data.storage_limit;
+        new.username = data.username.unwrap_or(new.username);
+        new.avatar_id = data.avatar_id.unwrap_or(new.avatar_id);
+        new.memory_limit = data.memory_limit.unwrap_or(new.memory_limit);
+        new.player_limit = data.player_limit.unwrap_or(new.player_limit);
+        new.world_limit = data.world_limit.unwrap_or(new.world_limit);
+        new.active_world_limit = data.active_world_limit.unwrap_or(new.active_world_limit);
+        new.storage_limit = data.storage_limit.unwrap_or(new.storage_limit);
         new.is_privileged = data.is_privileged.unwrap_or(new.is_privileged);
         new.enabled = data.enabled.unwrap_or(new.enabled);
         new
@@ -328,14 +377,6 @@ pub mod password {
                     .references("users(id)"),
                 Column::new("salt", Type::Text).not_null(),
                 Column::new("hash", Type::Text).not_null(),
-                /*
-                (
-                    "user_id",
-                    "UNSIGNED BIGINT PRIMARY KEY REFERENCES users(id)",
-                ),
-                ("salt", "TEXT NOT NULL"),
-                ("hash", "TEXT NOT NULL"),
-                 */
             ]
         }
 

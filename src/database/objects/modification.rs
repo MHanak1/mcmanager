@@ -3,7 +3,7 @@ use crate::database::objects::{DbObject, FromJson, UpdateJson, User};
 use crate::database::types::{Access, Column, Id, Type};
 use rusqlite::types::ToSqlOutput;
 use rusqlite::{Row, ToSql};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt::Debug;
 
 /// `id`: mod's unique [`Id`]
@@ -99,6 +99,15 @@ impl DbObject for Mod {
     }
 }
 
+// Any value that is present is considered Some value, including null.
+fn deserialize_some<'de, T, D>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    T: Deserialize<'de>,
+    D: Deserializer<'de>,
+{
+    Deserialize::deserialize(deserializer).map(Some)
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct JsonFrom {
     pub version_id: Id,
@@ -122,13 +131,23 @@ impl FromJson for Mod {
     }
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct JsonUpdate {
+    pub version_id: Option<Id>,
+    pub name: Option<String>,
+    pub description: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_some")]
+    pub icon_id: Option<Option<Id>>,
+}
+
 impl UpdateJson for Mod {
-    fn update_with_json(&self, data: Self::JsonFrom) -> Self {
+    type JsonUpdate = JsonUpdate;
+    fn update_with_json(&self, data: Self::JsonUpdate) -> Self {
         let mut new = self.clone();
-        new.version_id = data.version_id;
-        new.description = data.description.unwrap_or_default();
-        new.name = data.name;
-        new.icon_id = data.icon_id;
+        new.version_id = data.version_id.unwrap_or(new.version_id);
+        new.description = data.description.unwrap_or(new.description);
+        new.name = data.name.unwrap_or(new.name);
+        new.icon_id = data.icon_id.unwrap_or(new.icon_id);
         new
     }
 }

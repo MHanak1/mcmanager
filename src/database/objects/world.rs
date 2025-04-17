@@ -3,7 +3,7 @@ use crate::database::objects::{DbObject, FromJson, UpdateJson, User};
 use crate::database::types::{Access, Column, Id, Type};
 use rusqlite::types::ToSqlOutput;
 use rusqlite::{Row, ToSql};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 /// `id`: world's unique [`Id`]
 ///
@@ -120,13 +120,21 @@ impl DbObject for World {
     }
 }
 
+// Any value that is present is considered Some value, including null.
+fn deserialize_some<'de, T, D>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    T: Deserialize<'de>,
+    D: Deserializer<'de>,
+{
+    Deserialize::deserialize(deserializer).map(Some)
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct JsonFrom {
     pub name: String,
     pub icon_id: Option<Id>,
     pub allocated_memory: Option<u32>,
     pub version_id: Id,
-    pub enabled: Option<bool>,
 }
 
 impl FromJson for World {
@@ -136,21 +144,33 @@ impl FromJson for World {
             id: Id::default(),
             owner_id: user.id,
             name: data.name,
-            icon_id: None,
-            allocated_memory: data.allocated_memory.unwrap_or(1024),
+            icon_id: data.icon_id,
+            allocated_memory: data
+                .allocated_memory
+                .unwrap_or(crate::config::CONFIG.world_defaults.allocated_memory),
             version_id: data.version_id,
             enabled: false,
         }
     }
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct JsonUpdate {
+    pub name: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_some")]
+    pub icon_id: Option<Option<Id>>,
+    pub allocated_memory: Option<u32>,
+    pub version_id: Option<Id>,
+    pub enabled: Option<bool>,
+}
 impl UpdateJson for World {
-    fn update_with_json(&self, data: Self::JsonFrom) -> Self {
+    type JsonUpdate = JsonUpdate;
+    fn update_with_json(&self, data: Self::JsonUpdate) -> Self {
         let mut new = self.clone();
-        new.name = data.name;
-        new.icon_id = data.icon_id;
+        new.name = data.name.unwrap_or(new.name);
+        new.icon_id = data.icon_id.unwrap_or(new.icon_id);
         new.allocated_memory = data.allocated_memory.unwrap_or(new.allocated_memory);
-        new.version_id = data.version_id;
+        new.version_id = data.version_id.unwrap_or(new.version_id);
         new.enabled = data.enabled.unwrap_or(new.enabled);
         new
     }

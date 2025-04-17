@@ -179,7 +179,7 @@ where
         db_mutex: Arc<Mutex<Database>>,
         id: String,
         user: User,
-        data: Self::JsonFrom,
+        data: Self::JsonUpdate,
     ) -> Result<impl warp::Reply, warp::Rejection> {
         db_mutex.lock().map_or_else(
             |err| {
@@ -196,7 +196,7 @@ where
                             match database.update(&object, Some(&user)) {
                                 Ok(_) => Ok(warp::reply::with_status(
                                     warp::reply::json(&object),
-                                    StatusCode::NO_CONTENT,
+                                    StatusCode::OK,
                                 )),
                                 Err(err) => Err(handle_database_error(err)),
                             }
@@ -310,7 +310,7 @@ struct TokenReply {
 //this in theory could be transformed into ApiCreate implementation, but it would require a fair amount of changes, and for now it's not causing any problems
 #[allow(clippy::unused_async)]
 pub async fn user_auth(
-    rate_limit_info: warp_rate_limit::RateLimitInfo,
+    _rate_limit_info: warp_rate_limit::RateLimitInfo,
     db_mutex: Arc<Mutex<Database>>,
     credentials: json_fields::Login,
 ) -> Result<impl warp::Reply, warp::Rejection> {
