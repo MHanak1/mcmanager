@@ -119,12 +119,12 @@ pub struct JsonFrom {
 impl FromJson for Mod {
     type JsonFrom = JsonFrom;
 
-    fn from_json(data: Self::JsonFrom, user: User) -> Self {
+    fn from_json(data: &Self::JsonFrom, user: &User) -> Self {
         Self {
             id: Id::default(),
             version_id: data.version_id,
-            name: data.name,
-            description: data.description.unwrap_or_default(),
+            name: data.name.clone(),
+            description: data.description.clone().unwrap_or_default(),
             icon_id: data.icon_id,
             owner_id: user.id,
         }
@@ -142,11 +142,11 @@ pub struct JsonUpdate {
 
 impl UpdateJson for Mod {
     type JsonUpdate = JsonUpdate;
-    fn update_with_json(&self, data: Self::JsonUpdate) -> Self {
+    fn update_with_json(&self, data: &Self::JsonUpdate) -> Self {
         let mut new = self.clone();
         new.version_id = data.version_id.unwrap_or(new.version_id);
-        new.description = data.description.unwrap_or(new.description);
-        new.name = data.name.unwrap_or(new.name);
+        new.description = data.description.clone().unwrap_or(new.description);
+        new.name = data.name.clone().unwrap_or(new.name);
         new.icon_id = data.icon_id.unwrap_or(new.icon_id);
         new
     }

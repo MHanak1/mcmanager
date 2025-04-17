@@ -133,17 +133,21 @@ where
                         return Err(warp::reject::custom(rejections::Unauthorized));
                     }
 
-                    let object = Self::from_json(data, user.clone());
+                    let object = Self::from_json(&data, &user);
+                    object.before_api_create(&database, &data);
 
                     match database.insert(&object, Some(&user)) {
-                        Ok(_) => Ok(warp::reply::with_status(
-                            warp::reply::with_header(
-                                warp::reply::json(&object),
-                                warp::http::header::LOCATION,
-                                format!("api/{}/{}", Self::table_name(), object.get_id()),
-                            ),
-                            StatusCode::CREATED,
-                        )),
+                        Ok(_) => {
+                            object.after_api_create(&database, &data);
+                            Ok(warp::reply::with_status(
+                                warp::reply::with_header(
+                                    warp::reply::json(&object),
+                                    warp::http::header::LOCATION,
+                                    format!("api/{}/{}", Self::table_name(), object.get_id()),
+                                ),
+                                StatusCode::CREATED,
+                            ))
+                        }
                         Err(err) => Err(warp::reject::custom(rejections::InternalServerError {
                             error: err.to_string(),
                         })),
@@ -154,6 +158,11 @@ where
             Err(warp::reject::custom(rejections::Unauthorized))
         }
     }
+
+    #[allow(unused)]
+    fn before_api_create(&self, database: &Database, json: &Self::JsonFrom) {}
+    #[allow(unused)]
+    fn after_api_create(&self, database: &Database, json: &Self::JsonFrom) {}
 
     fn create_filter(
         db_mutex: Arc<Mutex<Database>>,
@@ -170,7 +179,7 @@ where
     }
 }
 
-pub trait ApiUpdate: ApiCreate + UpdateJson
+pub trait ApiUpdate: DbObject + UpdateJson
 where
     Self: Sized,
     Self: serde::Serialize,
@@ -192,12 +201,16 @@ where
                     database.get_one(id, Some(&user)).map_or_else(
                         |err| Err(handle_database_error(err)),
                         |object: Self| {
-                            let object = object.update_with_json(data);
+                            object.before_api_update(&database, &data);
+                            let object = object.update_with_json(&data);
                             match database.update(&object, Some(&user)) {
-                                Ok(_) => Ok(warp::reply::with_status(
-                                    warp::reply::json(&object),
-                                    StatusCode::OK,
-                                )),
+                                Ok(_) => {
+                                    object.after_api_update(&database, &data);
+                                    Ok(warp::reply::with_status(
+                                        warp::reply::json(&object),
+                                        StatusCode::OK,
+                                    ))
+                                }
                                 Err(err) => Err(handle_database_error(err)),
                             }
                         },
@@ -208,6 +221,10 @@ where
             },
         )
     }
+    #[allow(unused)]
+    fn before_api_update(&self, database: &Database, json: &Self::JsonUpdate) {}
+    #[allow(unused)]
+    fn after_api_update(&self, database: &Database, json: &Self::JsonUpdate) {}
 
     fn update_filter(
         db_mutex: Arc<Mutex<Database>>,
@@ -245,13 +262,19 @@ where
                     )))
                 },
                 |database| match database.get_one::<Self>(id, Some(&user)) {
-                    Ok(object) => match database.remove(&object, Some(&user)) {
-                        Ok(_) => Ok(warp::reply::with_status(
-                            warp::reply::json(&""),
-                            StatusCode::NO_CONTENT,
-                        )),
-                        Err(err) => Err(handle_database_error(err)),
-                    },
+                    Ok(object) => {
+                        object.before_api_delete(&database);
+                        match database.remove(&object, Some(&user)) {
+                            Ok(_) => {
+                                object.after_api_delete(&database);
+                                Ok(warp::reply::with_status(
+                                    warp::reply::json(&""),
+                                    StatusCode::NO_CONTENT,
+                                ))
+                            }
+                            Err(err) => Err(handle_database_error(err)),
+                        }
+                    }
                     Err(err) => Err(handle_database_error(err)),
                 },
             )
@@ -259,6 +282,11 @@ where
             Err(reject::custom(rejections::NotFound))
         }
     }
+
+    #[allow(unused)]
+    fn before_api_delete(&self, database: &Database) {}
+    #[allow(unused)]
+    fn after_api_delete(&self, database: &Database) {}
 
     fn remove_filter(
         db_mutex: Arc<Mutex<Database>>,

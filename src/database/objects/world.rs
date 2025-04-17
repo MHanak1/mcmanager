@@ -61,18 +61,6 @@ impl DbObject for World {
             Column::new("enabled", Type::Boolean)
                 .not_null()
                 .default("false"),
-            /*
-            ("id", "UNSIGNED BIGINT PRIMARY KEY"),
-            ("owner_id", "UNSIGNED BIGINT NOT NULL REFERENCES users(id)"),
-            ("name", "TEXT NOT NULL"),
-            ("icon_id", "UNSIGNED BIGINT"),
-            ("allocated_memory", "UNSIGNED INTEGER"),
-            (
-                "version_id",
-                "UNSIGNED BIGINT NOT NULL REFERENCES versions(id)",
-            ),
-            ("enabled", "BOOLEAN NOT NULL DEFAULT FALSE"),
-             */
         ]
     }
 
@@ -139,11 +127,11 @@ pub struct JsonFrom {
 
 impl FromJson for World {
     type JsonFrom = JsonFrom;
-    fn from_json(data: Self::JsonFrom, user: User) -> Self {
+    fn from_json(data: &Self::JsonFrom, user: &User) -> Self {
         Self {
             id: Id::default(),
             owner_id: user.id,
-            name: data.name,
+            name: data.name.clone(),
             icon_id: data.icon_id,
             allocated_memory: data
                 .allocated_memory
@@ -165,9 +153,9 @@ pub struct JsonUpdate {
 }
 impl UpdateJson for World {
     type JsonUpdate = JsonUpdate;
-    fn update_with_json(&self, data: Self::JsonUpdate) -> Self {
+    fn update_with_json(&self, data: &Self::JsonUpdate) -> Self {
         let mut new = self.clone();
-        new.name = data.name.unwrap_or(new.name);
+        new.name = data.name.clone().unwrap_or(new.name);
         new.icon_id = data.icon_id.unwrap_or(new.icon_id);
         new.allocated_memory = data.allocated_memory.unwrap_or(new.allocated_memory);
         new.version_id = data.version_id.unwrap_or(new.version_id);

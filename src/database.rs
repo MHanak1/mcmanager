@@ -3,9 +3,6 @@ use crate::database::objects::{
     InviteLink, Mod, ModLoader, Password, Session, User, Version, World,
 };
 use crate::database::types::{Id, Type};
-use argon2::password_hash::SaltString;
-use argon2::password_hash::rand_core::OsRng;
-use argon2::{Argon2, PasswordHasher};
 use rusqlite::{params, params_from_iter};
 use std::collections::HashMap;
 use std::error::Error;
@@ -254,6 +251,7 @@ impl Database {
         (new_filters, values)
     }
 
+    /// This should only be used during testing or during first setup to create an admin account
     pub fn create_user(&self, username: &str, password: &str) -> anyhow::Result<User> {
         let user = User {
             username: username.to_string(),
@@ -261,23 +259,11 @@ impl Database {
         };
         self.create_user_from(user, password)
     }
+    /// This should only be used during testing or during first setup to create an admin account
     pub fn create_user_from(&self, user: User, password: &str) -> anyhow::Result<User> {
         self.insert(&user, None)?;
 
-        let salt = SaltString::generate(&mut OsRng);
-        let argon = Argon2::default();
-
-        self.insert(
-            &Password {
-                user_id: user.id,
-                hash: argon
-                    .hash_password(password.as_bytes(), &salt)
-                    .expect("could not hash password")
-                    .to_string(),
-                salt,
-            },
-            None,
-        )?;
+        self.insert(&Password::new(user.id, password), None)?;
 
         Ok(user)
     }
@@ -308,6 +294,8 @@ impl Reject for DatabaseError {}
 pub fn manipulate_data() -> anyhow::Result<()> {
     use crate::database::types::Id;
     use chrono::DateTime;
+    use argon2::password_hash::SaltString;
+    use argon2::password_hash::rand_core::OsRng;
     use pretty_assertions::assert_eq;
     use log::{info};
 
@@ -503,20 +491,18 @@ pub fn manipulate_data() -> anyhow::Result<()> {
     assert_eq!(database.remove(&user_min, None)?, 1);
     assert_eq!(database.remove(&user_max, None)?, 1);
 
-    /*
     info!("checking if objects are actually removed");
-    assert_eq!(Err(rusqlite::Error::QueryReturnedNoRows), database.get_one::<ModLoader>(mod_loader.id, None));
-    assert_eq!(Err(rusqlite::Error::QueryReturnedNoRows), database.get_one::<Version>(version.id, None));
-    assert_eq!(Err(rusqlite::Error::QueryReturnedNoRows), database.get_one::<User>(user_min.id, None));
-    assert_eq!(Err(rusqlite::Error::QueryReturnedNoRows), database.get_one::<User>(user_max.id, None));
-    assert_eq!(Err(rusqlite::Error::QueryReturnedNoRows), database.get_one::<Password>(password.user_id, None));
-    assert_eq!(Err(rusqlite::Error::QueryReturnedNoRows), database.get_one::<Mod>(mc_mod_min.id, None));
-    assert_eq!(Err(rusqlite::Error::QueryReturnedNoRows), database.get_one::<Mod>(mc_mod_max.id, None));
-    assert_eq!(Err(rusqlite::Error::QueryReturnedNoRows), database.get_one::<World>(world_min.id, None));
-    assert_eq!(Err(rusqlite::Error::QueryReturnedNoRows), database.get_one::<World>(world_max.id, None));
-    assert_eq!(Err(rusqlite::Error::QueryReturnedNoRows), database.get_one::<Session>(session.user_id, None));
-    assert_eq!(Err(rusqlite::Error::QueryReturnedNoRows), database.get_one::<InviteLink>(invite_link.id, None));
-     */
+    assert!(database.get_one::<ModLoader>(mod_loader.id, None).is_err());
+    assert!(database.get_one::<Version>(version.id, None).is_err());
+    assert!(database.get_one::<User>(user_min.id, None).is_err());
+    assert!(database.get_one::<User>(user_max.id, None).is_err());
+    assert!(database.get_one::<Password>(password.user_id, None).is_err());
+    assert!(database.get_one::<Mod>(mc_mod_min.id, None).is_err());
+    assert!(database.get_one::<Mod>(mc_mod_max.id, None).is_err());
+    assert!(database.get_one::<World>(world_min.id, None).is_err());
+    assert!(database.get_one::<World>(world_max.id, None).is_err());
+    assert!(database.get_one::<Session>(session.user_id, None).is_err());
+    assert!(database.get_one::<InviteLink>(invite_link.id, None).is_err());
 
     Ok(())
 }

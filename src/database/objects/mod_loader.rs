@@ -83,10 +83,10 @@ pub struct JsonFrom {
 impl FromJson for ModLoader {
     type JsonFrom = JsonFrom;
 
-    fn from_json(data: Self::JsonFrom, _user: User) -> Self {
+    fn from_json(data: &Self::JsonFrom, _user: &User) -> Self {
         Self {
             id: Id::default(),
-            name: data.name,
+            name: data.name.clone(),
             can_load_mods: data.can_load_mods,
         }
     }
@@ -100,9 +100,9 @@ pub struct JsonUpdate {
 
 impl UpdateJson for ModLoader {
     type JsonUpdate = JsonUpdate;
-    fn update_with_json(&self, data: Self::JsonUpdate) -> Self {
+    fn update_with_json(&self, data: &Self::JsonUpdate) -> Self {
         let mut new = self.clone();
-        new.name = data.name.unwrap_or(new.name);
+        new.name = data.name.clone().unwrap_or(new.name);
         new.can_load_mods = data.can_load_mods.unwrap_or(new.can_load_mods);
         new
     }

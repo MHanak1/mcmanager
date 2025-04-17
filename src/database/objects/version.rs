@@ -83,10 +83,10 @@ pub struct JsonFrom {
 impl FromJson for Version {
     type JsonFrom = JsonFrom;
 
-    fn from_json(data: Self::JsonFrom, _user: User) -> Self {
+    fn from_json(data: &Self::JsonFrom, _user: &User) -> Self {
         Self {
             id: Id::default(),
-            minecraft_version: data.minecraft_version,
+            minecraft_version: data.minecraft_version.clone(),
             mod_loader_id: data.mod_loader_id,
         }
     }
@@ -100,9 +100,12 @@ pub struct JsonUpdate {
 
 impl UpdateJson for Version {
     type JsonUpdate = JsonUpdate;
-    fn update_with_json(&self, data: Self::JsonUpdate) -> Self {
+    fn update_with_json(&self, data: &Self::JsonUpdate) -> Self {
         let mut new = self.clone();
-        new.minecraft_version = data.minecraft_version.unwrap_or(new.minecraft_version);
+        new.minecraft_version = data
+            .minecraft_version
+            .clone()
+            .unwrap_or(new.minecraft_version);
         new.mod_loader_id = data.mod_loader_id.unwrap_or(new.mod_loader_id);
         new
     }

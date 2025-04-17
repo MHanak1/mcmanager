@@ -1,16 +1,12 @@
 pub use self::{password::Password, session::Session};
 use crate::api::handlers::{ApiCreate, ApiGet, ApiList, ApiRemove, ApiUpdate};
-use crate::api::util::rejections;
 use crate::config::CONFIG;
 use crate::database::Database;
 use crate::database::objects::{DbObject, FromJson, UpdateJson};
 use crate::database::types::{Access, Column, Id, Type};
-use log::error;
 use rusqlite::types::ToSqlOutput;
-use rusqlite::{Error, Row, ToSql};
+use rusqlite::{Row, ToSql};
 use serde::{Deserialize, Deserializer, Serialize};
-use std::sync::{Arc, Mutex};
-use warp::http::StatusCode;
 
 /// `id`: user's unique [`Id`]
 ///
@@ -84,18 +80,6 @@ impl DbObject for User {
             Column::new("enabled", Type::Boolean)
                 .not_null()
                 .default("true"),
-            /*
-            ("id", "UNSIGNED BIGINT PRIMARY KEY"),
-            ("name", "TEXT NOT NULL UNIQUE"),
-            ("avatar_id", "UNSIGNED BIGINT"),
-            ("memory_limit", "UNSIGNED INTEGER"),
-            ("player_limit", "UNSIGNED INTEGER"),
-            ("world_limit", "UNSIGNED INTEGER"),
-            ("active_world_limit", "UNSIGNED INTEGER"),
-            ("storage_limit", "UNSIGNED INTEGER"),
-            ("is_privileged", "BOOLEAN NOT NULL DEFAULT FALSE"),
-            ("enabled", "BOOLEAN NOT NULL DEFAULT TRUE"),
-             */
         ]
     }
     fn from_row(row: &Row) -> rusqlite::Result<Self>
@@ -204,10 +188,10 @@ pub struct JsonFrom {
 
 impl FromJson for User {
     type JsonFrom = JsonFrom;
-    fn from_json(data: Self::JsonFrom, _user: User) -> Self {
+    fn from_json(data: &Self::JsonFrom, _user: &User) -> Self {
         Self {
             id: Id::default(),
-            username: data.username,
+            username: data.username.clone(),
             avatar_id: data.avatar_id.unwrap_or(None),
             memory_limit: data
                 .memory_limit
@@ -255,9 +239,9 @@ pub struct JsonUpdate {
 }
 impl UpdateJson for User {
     type JsonUpdate = JsonUpdate;
-    fn update_with_json(&self, data: Self::JsonUpdate) -> Self {
+    fn update_with_json(&self, data: &Self::JsonUpdate) -> Self {
         let mut new = self.clone();
-        new.username = data.username.unwrap_or(new.username);
+        new.username = data.username.clone().unwrap_or(new.username);
         new.avatar_id = data.avatar_id.unwrap_or(new.avatar_id);
         new.memory_limit = data.memory_limit.unwrap_or(new.memory_limit);
         new.player_limit = data.player_limit.unwrap_or(new.player_limit);
@@ -273,62 +257,10 @@ impl UpdateJson for User {
 impl ApiList for User {}
 impl ApiGet for User {}
 impl ApiCreate for User {
-    fn api_create(
-        db_mutex: Arc<Mutex<Database>>,
-        user: User,
-        data: Self::JsonFrom,
-    ) -> Result<impl warp::Reply, warp::Rejection> {
-        if Self::can_create(&user) {
-            db_mutex.lock().map_or_else(
-                |err| {
-                    Err(warp::reject::custom(rejections::InternalServerError::from(
-                        err.to_string(),
-                    )))
-                },
-                |database| match database
-                    .create_user_from(Self::from_json(data.clone(), user), &data.password)
-                {
-                    Ok(new) => Ok(warp::reply::with_status(
-                        warp::reply::json(&new),
-                        StatusCode::CREATED,
-                    )),
-                    Err(err) => match err.downcast_ref::<Error>() {
-                        Some(err) => {
-                            if let Error::SqliteFailure(err, ..) = err {
-                                if let rusqlite::ffi::Error {
-                                    code: rusqlite::ErrorCode::ConstraintViolation,
-                                    ..
-                                } = *err
-                                {
-                                    Ok(warp::reply::with_status(
-                                        warp::reply::json(&"username already taken"),
-                                        StatusCode::CONFLICT,
-                                    ))
-                                } else {
-                                    error!("{err:?}");
-                                    Err(warp::reject::custom(
-                                        rejections::InternalServerError::from(err.to_string()),
-                                    ))
-                                }
-                            } else {
-                                error!("{err:?}");
-                                Err(warp::reject::custom(rejections::InternalServerError::from(
-                                    err.to_string(),
-                                )))
-                            }
-                        }
-                        _ => Err(warp::reject::custom(rejections::InternalServerError::from(
-                            err.to_string(),
-                        ))),
-                    },
-                },
-            )
-        } else {
-            Ok(warp::reply::with_status(
-                warp::reply::json(&"Unauthorized"),
-                StatusCode::UNAUTHORIZED,
-            ))
-        }
+    fn after_api_create(&self, database: &Database, json: &Self::JsonFrom) {
+        database
+            .insert(&Password::new(self.id, &json.password), None)
+            .expect("failed to create the password for the user.");
     }
 }
 impl ApiUpdate for User {}
@@ -338,6 +270,8 @@ pub mod password {
     use crate::database::objects::DbObject;
     use crate::database::types::{Access, Column, Id, Type};
     use argon2::password_hash::SaltString;
+    use argon2::password_hash::rand_core::OsRng;
+    use argon2::{Argon2, PasswordHasher};
     use rusqlite::types::ToSqlOutput;
     use rusqlite::{Row, ToSql};
     /// `user_id`: unique [`Id`] of the user to whom the password belongs
@@ -351,6 +285,22 @@ pub mod password {
         pub user_id: Id,
         pub salt: SaltString,
         pub hash: String,
+    }
+
+    impl Password {
+        pub(crate) fn new(user_id: Id, password: &str) -> Self {
+            let salt = SaltString::generate(&mut OsRng);
+            let argon = Argon2::default();
+
+            Self {
+                user_id,
+                hash: argon
+                    .hash_password(password.as_bytes(), &salt)
+                    .expect("could not hash password")
+                    .to_string(),
+                salt,
+            }
+        }
     }
 
     impl DbObject for Password {
@@ -466,12 +416,6 @@ pub mod session {
                 Column::new("expires", Type::Boolean)
                     .not_null()
                     .default("true"),
-                /*
-                ("user_id", "UNSIGNED INTEGER REFERENCES users(id)"),
-                ("token", "TEXT  PRIMARY KEY"),
-                ("created", "DATETIME NOT NULL"),
-                ("expires", "BOOLEAN NOT NULL DEFAULT TRUE"),
-                 */
             ]
         }
 
@@ -516,7 +460,7 @@ pub mod session {
 
     impl FromJson for Session {
         type JsonFrom = JsonFrom;
-        fn from_json(data: Self::JsonFrom, user: User) -> Self {
+        fn from_json(data: &Self::JsonFrom, user: &User) -> Self {
             Self {
                 user_id: user.id,
                 token: Token::default(),

@@ -95,7 +95,7 @@ pub struct JsonFrom {}
 impl FromJson for InviteLink {
     type JsonFrom = JsonFrom;
 
-    fn from_json(_data: Self::JsonFrom, user: User) -> Self {
+    fn from_json(_data: &Self::JsonFrom, user: &User) -> Self {
         Self {
             id: Id::default(),
             invite_token: Token::default(),
