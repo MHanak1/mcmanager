@@ -9,7 +9,7 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use warp::http::StatusCode;
-use warp::{Filter, reject};
+use warp::{Filter, Reply, reject};
 
 pub trait ApiList: DbObject
 where
@@ -128,6 +128,7 @@ where
                     )))
                 },
                 |database| {
+                    //in theory this is redundant, as database::insert checks it as well, but better safe than sorry
                     if !Self::can_create(&user) {
                         return Err(warp::reject::custom(rejections::Unauthorized));
                     }
@@ -309,6 +310,7 @@ struct TokenReply {
 //this in theory could be transformed into ApiCreate implementation, but it would require a fair amount of changes, and for now it's not causing any problems
 #[allow(clippy::unused_async)]
 pub async fn user_auth(
+    rate_limit_info: warp_rate_limit::RateLimitInfo,
     db_mutex: Arc<Mutex<Database>>,
     credentials: json_fields::Login,
 ) -> Result<impl warp::Reply, warp::Rejection> {
@@ -360,7 +362,7 @@ pub async fn user_info(user: User) -> Result<impl warp::Reply, warp::Rejection> 
 
 #[allow(clippy::unused_async)]
 pub async fn handle_rejection(
-    err: warp::Rejection,
+    rejection: warp::Rejection,
 ) -> Result<impl warp::Reply, std::convert::Infallible> {
     let code;
     let message;
@@ -371,48 +373,66 @@ pub async fn handle_rejection(
         message: String,
     }
 
-    if err.find::<rejections::NotFound>().is_some() {
+    if rejection.find::<rejections::NotFound>().is_some() {
         code = StatusCode::NOT_FOUND;
         message = "not found";
-    } else if let Some(error) = err.find::<rejections::InternalServerError>() {
+    } else if let Some(error) = rejection.find::<rejections::InternalServerError>() {
         error!("{}", error.error);
         code = StatusCode::INTERNAL_SERVER_ERROR;
         message = "internal server error";
-    } else if err.find::<rejections::InvalidBearerToken>().is_some() {
+    } else if rejection.find::<rejections::InvalidBearerToken>().is_some() {
         code = StatusCode::UNAUTHORIZED;
         message = "invalid brearer token";
-    } else if err.find::<rejections::Unauthorized>().is_some() {
+    } else if rejection.find::<rejections::Unauthorized>().is_some() {
         code = StatusCode::UNAUTHORIZED;
         message = "unauthorized";
-    } else if err.find::<rejections::BadRequest>().is_some() {
+    } else if rejection.find::<rejections::BadRequest>().is_some() {
         code = StatusCode::BAD_REQUEST;
         message = "bad request";
-    } else if err.find::<rejections::NotImplemented>().is_some() {
+    } else if rejection.find::<rejections::NotImplemented>().is_some() {
         code = StatusCode::NOT_IMPLEMENTED;
         message = "not implemented";
-    } else if err.find::<rejections::Conflict>().is_some() {
+    } else if rejection.find::<rejections::Conflict>().is_some() {
         code = StatusCode::CONFLICT;
         message = "conflict";
-    } else if err.find::<warp::reject::InvalidQuery>().is_some() {
+    } else if rejection.find::<warp::reject::InvalidQuery>().is_some() {
         code = StatusCode::BAD_REQUEST;
         message = "invalid query";
-    } else if err.find::<warp::reject::InvalidHeader>().is_some() {
+    } else if rejection.find::<warp::reject::InvalidHeader>().is_some() {
         code = StatusCode::BAD_REQUEST;
         message = "invalid header";
-    } else if err.find::<warp::reject::LengthRequired>().is_some() {
+    } else if rejection.find::<warp::reject::LengthRequired>().is_some() {
         code = StatusCode::LENGTH_REQUIRED;
         message = "length required";
-    } else if err.find::<warp::reject::MethodNotAllowed>().is_some() {
-        code = StatusCode::METHOD_NOT_ALLOWED;
-        message = "method not allowed";
-    } else if err.find::<warp::reject::PayloadTooLarge>().is_some() {
+    } else if rejection.find::<warp::reject::PayloadTooLarge>().is_some() {
         code = StatusCode::PAYLOAD_TOO_LARGE;
         message = "payload too large";
-    } else if err.find::<warp::reject::UnsupportedMediaType>().is_some() {
+    } else if rejection
+        .find::<warp::reject::UnsupportedMediaType>()
+        .is_some()
+    {
         code = StatusCode::UNSUPPORTED_MEDIA_TYPE;
         message = "unsupported media type";
+    } else if let Some(rejection) = rejection.find::<warp_rate_limit::RateLimitRejection>() {
+        let info = warp_rate_limit::get_rate_limit_info(rejection);
+
+        let mut response = warp::reply::with_status(
+            warp::reply::json(&ErrorMessage {
+                code: StatusCode::TOO_MANY_REQUESTS.as_u16(),
+                message: "too many requests".to_string(),
+            }),
+            StatusCode::TOO_MANY_REQUESTS,
+        )
+        .into_response();
+
+        let _ = warp_rate_limit::add_rate_limit_headers(response.headers_mut(), &info);
+
+        return Ok(response);
+    } else if rejection.find::<warp::reject::MethodNotAllowed>().is_some() {
+        code = StatusCode::METHOD_NOT_ALLOWED;
+        message = "method not allowed";
     } else {
-        error!("unhandled rejection: {err:?}");
+        error!("unhandled rejection: {rejection:?}");
         code = StatusCode::INTERNAL_SERVER_ERROR;
         message = "unhandled rejection";
     }
@@ -422,5 +442,5 @@ pub async fn handle_rejection(
         message: message.into(),
     });
 
-    Ok(warp::reply::with_status(json, code))
+    Ok(warp::reply::with_status(json, code).into_response())
 }

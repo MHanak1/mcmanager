@@ -20,7 +20,6 @@ async fn main() {
     run(database).await;
 }
 
-/// This is a piece of shit.
 async fn run(database: Database) {
     let listen_address = configuration::CONFIG
         .get::<String>("listen_address")
@@ -29,15 +28,14 @@ async fn run(database: Database) {
         .get::<u16>("listen_port")
         .expect("invalid listen_port");
 
-    // GET /hello/warp => 200 OK with body "Hello, warp!"
     util::dirs::init_dirs().expect("Failed to initialize the data directory");
 
     let db_mutex = Arc::new(Mutex::new(database));
 
-    //let header = warp::header::optional::<String>("user_token");
+    let public_routes_rate_limit = warp_rate_limit::RateLimitConfig::max_per_minute(10);
 
-    //LOGIN
     let login = warp::post()
+        .and(warp_rate_limit::with_rate_limit(public_routes_rate_limit))
         .and(warp::path!("api" / "login"))
         .and(warp::path::end())
         .and(filters::with_db(db_mutex.clone()))
@@ -85,7 +83,6 @@ async fn run(database: Database) {
         .or(InviteLink::get_filter(db_mutex.clone()))
         .or(InviteLink::remove_filter(db_mutex.clone()));
 
-    //let log = warp::log::custom(|info| info!("{} - {}: {}", info.method(), info.status(), info.path()));
     let log = warp::log("info");
 
     warp::serve(
