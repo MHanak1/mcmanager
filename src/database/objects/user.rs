@@ -11,7 +11,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 /// `id`: user's unique [`Id`]
 ///
-/// `name`: user's unique name
+/// `username`: user's unique name
 ///
 /// `memory_limit`: limit of user's total allocatable memory in MiB. [`None`] means no limit
 ///
@@ -68,7 +68,7 @@ impl DbObject for User {
     fn columns() -> Vec<Column> {
         vec![
             Column::new("id", Type::Id).primary_key(),
-            Column::new("name", Type::Text).not_null().unique(),
+            Column::new("username", Type::Text).not_null().unique(),
             Column::new("avatar_id", Type::Id),
             Column::new("memory_limit", Type::Integer(false)),
             Column::new("player_limit", Type::Integer(false)),

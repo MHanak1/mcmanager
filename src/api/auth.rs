@@ -11,7 +11,7 @@ pub fn try_user_auth(
     database: &Database,
 ) -> Result<Session, DatabaseError> {
     let user = database.conn.query_row(
-        &format!("SELECT * FROM {} WHERE name = ?1", User::table_name(),),
+        &format!("SELECT * FROM {} WHERE username = ?1", User::table_name(),),
         params![username],
         User::from_row,
     );

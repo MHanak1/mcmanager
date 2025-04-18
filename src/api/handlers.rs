@@ -26,24 +26,13 @@ where
             reject::custom(rejections::InternalServerError::from(err.to_string()))
         })?;
 
-        match database.list_filtered::<Self>(filters, Some(&user)) {
-            Ok(objects) => Ok(warp::reply::with_status(
-                warp::reply::json(&objects),
-                StatusCode::OK,
-            )),
-            Err(err) => {
-                //if the user does not have access to anything, instead of erroring out return an empty array
-                match err {
-                    DatabaseError::SqliteError(Error::QueryReturnedNoRows) => {
-                        Ok(warp::reply::with_status(
-                            warp::reply::json::<Vec<&str>>(&vec![]),
-                            StatusCode::OK,
-                        ))
-                    }
-                    _ => Err(handle_database_error(err)),
-                }
-            }
-        }
+        let objects = database
+            .list_filtered::<Self>(filters, Some(&user))
+            .map_err(handle_database_error)?;
+        Ok(warp::reply::with_status(
+            warp::reply::json(&objects),
+            StatusCode::OK,
+        ))
     }
 
     fn list_filter(

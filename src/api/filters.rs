@@ -1,7 +1,7 @@
 use crate::api::util::rejections;
 use crate::database::objects::{Session, User};
 use crate::database::{Database, DatabaseError};
-use log::{error};
+use log::error;
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::sync::{Arc, Mutex};
@@ -49,8 +49,11 @@ pub fn with_auth(
                             }
                         }
                     )?;
-                assert_eq!(session.len(), 1);
-                let session = session.first().cloned().expect("what the actual fuck");
+                let session = session.first().cloned();
+                if session.is_none() {
+                    return Err(warp::reject::custom(rejections::Unauthorized));
+                }
+                let session = session.expect("What the actual fuck");
 
                 database.get_one::<User>(session.user_id, None).map_err(|err| {
                     error!("Orphaned session found, token: {}, user: {}. deleting (note: this should never happen because of SQLite foreign key requirement",session.token, session.user_id);

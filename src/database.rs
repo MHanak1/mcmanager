@@ -173,6 +173,7 @@ impl Database {
     }
 
     #[allow(clippy::needless_pass_by_value)]
+    /// instead of returning [`rusqlite::Error::QueryReturnedNoRows`] it will return an empty vector
     pub fn list_filtered<T: DbObject>(
         &self,
         filters: HashMap<String, String>,
@@ -206,16 +207,20 @@ impl Database {
             .conn
             .prepare(&query)
             .map_err(DatabaseError::SqliteError)?;
-        let rows = stmt
-            .query_map(rusqlite::params_from_iter(params), T::from_row)
-            .map_err(DatabaseError::SqliteError)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(params), T::from_row);
 
-        Ok(rows
-            .filter_map(|row| match row {
-                Ok(row) => Some(row),
-                Err(_) => None,
-            })
-            .collect::<Vec<T>>())
+        match rows {
+            Err(err) => match err {
+                rusqlite::Error::QueryReturnedNoRows => Ok(vec![]),
+                _ => Err(DatabaseError::SqliteError(err)),
+            },
+            Ok(rows) => Ok(rows
+                .filter_map(|row| match row {
+                    Ok(row) => Some(row),
+                    Err(_) => None,
+                })
+                .collect::<Vec<T>>()),
+        }
     }
 
     //this code is absolute ass.
