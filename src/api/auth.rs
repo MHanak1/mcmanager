@@ -1,12 +1,15 @@
-use crate::database::Database;
 use crate::database::objects::{DbObject, Password, Session, User};
 use crate::database::types::Token;
-use anyhow::{Result, anyhow};
+use crate::database::{Database, DatabaseError};
 use argon2::PasswordHasher;
 use log::debug;
 use rusqlite::params;
 
-pub fn try_user_auth(username: &str, password: &str, database: &Database) -> Result<Session> {
+pub fn try_user_auth(
+    username: &str,
+    password: &str,
+    database: &Database,
+) -> Result<Session, DatabaseError> {
     let user = database.conn.query_row(
         &format!("SELECT * FROM {} WHERE name = ?1", User::table_name(),),
         params![username],
@@ -19,7 +22,7 @@ pub fn try_user_auth(username: &str, password: &str, database: &Database) -> Res
     if user.is_err() {
         bollocks_hash();
         debug!("rejecting auth for user {username}, user not found");
-        return Err(anyhow!("Invalid username or password"));
+        return Err(DatabaseError::Unauthorized);
     }
 
     let user = user?;
@@ -27,7 +30,7 @@ pub fn try_user_auth(username: &str, password: &str, database: &Database) -> Res
     if !user.enabled {
         debug!("rejecting auth for user {username}, user is disabled");
         bollocks_hash();
-        return Err(anyhow!("User disabled"));
+        return Err(DatabaseError::Unauthorized);
     }
 
     let user_password = database.get_one::<Password>(user.id, None)?;
@@ -38,7 +41,7 @@ pub fn try_user_auth(username: &str, password: &str, database: &Database) -> Res
 
     if password_hash.to_string() != user_password.hash {
         debug!("rejecting auth for user {username}, password is invalid");
-        return Err(anyhow!("Invalid username or password"));
+        return Err(DatabaseError::Unauthorized);
     }
 
     let new_session = Session {
@@ -61,15 +64,17 @@ fn bollocks_hash() {
     let _ = argon2.hash_password_into(b"RandomPassword", b"RandomSalt", &mut [0u8; 32]);
 }
 
-pub fn get_user(token: &str, database: &Database) -> Result<User> {
-    let session = database.conn.query_row(
-        &format!("SELECT * FROM {} WHERE token = ?1", Session::table_name(),),
-        params![token],
-        Session::from_row,
-    )?;
+pub fn get_user(token: &str, database: &Database) -> Result<User, DatabaseError> {
+    let session = database
+        .conn
+        .query_row(
+            &format!("SELECT * FROM {} WHERE token = ?1", Session::table_name(),),
+            params![token],
+            Session::from_row,
+        )
+        .map_err(DatabaseError::SqliteError)?;
 
-    match database.get_one::<User>(session.user_id, None) {
-        Ok(user) => Ok(user),
-        Err(_) => Err(anyhow!("User not found")),
-    }
+    database
+        .get_one::<User>(session.user_id, None)
+        .map_err(|_| DatabaseError::NotFound)
 }

@@ -179,29 +179,25 @@ impl Database {
         user: Option<&User>,
     ) -> Result<Vec<T>, DatabaseError> {
         let mut query = format!("SELECT * FROM {}", T::table_name());
-        //this... is so ass.
-        let mut added_where = false;
 
-        let fields = if filters.is_empty() {
-            vec![]
+        let (mut fields, params) = if filters.is_empty() {
+            (vec![], vec![])
         } else {
-            query += " WHERE ";
-            added_where = true;
-
-            let (filters_processed, fields) = Self::construct_filters::<T>(&filters);
-
-            for filter in filters_processed {
-                query += filter.as_str();
-                query += " AND ";
-            }
-            fields
+            Self::construct_filters::<T>(&filters)
         };
 
         if let Some(user) = user {
-            if !added_where {
-                query += " WHERE ";
-            }
-            query += T::view_access().access_filter::<T>(user).as_str();
+            fields.push(
+                T::view_access()
+                    .access_filter::<T>(user)
+                    .as_str()
+                    .to_string(),
+            );
+        }
+
+        if !fields.is_empty() {
+            query += " WHERE ";
+            query += fields.join(" AND ").as_str();
         }
 
         debug!("querying database: {query}");
@@ -211,7 +207,7 @@ impl Database {
             .prepare(&query)
             .map_err(DatabaseError::SqliteError)?;
         let rows = stmt
-            .query_map(rusqlite::params_from_iter(fields), T::from_row)
+            .query_map(rusqlite::params_from_iter(params), T::from_row)
             .map_err(DatabaseError::SqliteError)?;
 
         Ok(rows
@@ -232,7 +228,7 @@ impl Database {
             if let Some(column) = T::get_column(field) {
                 let mut value = value.clone();
 
-                //lawd isn't that a syntax
+                //look at this expression; study it even.
                 let query = if let Some(value_stripped) = value.strip_prefix("!") {
                     value = value_stripped.to_string();
                     format!("NOT {}", column.name)
@@ -286,6 +282,7 @@ impl Database {
 #[derive(Debug)]
 pub enum DatabaseError {
     Unauthorized,
+    NotFound,
     InternalServerError(String),
     SqliteError(rusqlite::Error),
 }
@@ -294,6 +291,7 @@ impl Display for DatabaseError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             DatabaseError::Unauthorized => write!(f, "Unauthorized"),
+            DatabaseError::NotFound => write!(f, "NotFound"),
             DatabaseError::InternalServerError(err) => write!(f, "Internal server error: {err}"),
             DatabaseError::SqliteError(err) => write!(f, "Sqlite error: {err}"),
         }
@@ -302,6 +300,12 @@ impl Display for DatabaseError {
 
 impl Error for DatabaseError {}
 impl Reject for DatabaseError {}
+
+impl From<rusqlite::Error> for DatabaseError {
+    fn from(error: rusqlite::Error) -> Self {
+        DatabaseError::SqliteError(error)
+    }
+}
 
 #[rustfmt::skip]
 #[test]
