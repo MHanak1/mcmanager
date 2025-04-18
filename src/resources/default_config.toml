@@ -1,7 +1,13 @@
 listen_address = "127.0.0.1"
 listen_port = 3030
-#maximum login request per minute. -1 to disable
-login_rate_limit = 10
+# maximum requests to public endpoints (like login) per n seconds
+# default: 3 requests per 10 seconds
+public_routes_rate_limit = 3
+public_routes_rate_limit_time_frame = 10
+# maximum requests to private endpoints (those which requre authentication) per minute
+# default: 25 requests per 5 seconds
+private_routes_rate_limit = 25
+private_routes_rate_limit_time_frame = 5
 
 [user_defaults]
 # total RAM limit (in MiB)

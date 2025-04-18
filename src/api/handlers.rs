@@ -5,11 +5,12 @@ use crate::database::types::Id;
 use crate::database::{Database, DatabaseError};
 use log::error;
 use rusqlite::{Error, ErrorCode};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use warp::http::StatusCode;
 use warp::{Filter, Reply, reject};
+use warp_rate_limit::{RateLimitConfig, RateLimitInfo};
 
 pub trait ApiList: DbObject
 where
@@ -18,6 +19,7 @@ where
 {
     //in theory the user filter should be done within the sql query, but for the sake of simplicity we do that when collecting the results
     fn api_list(
+        _rate_limit_info: RateLimitInfo,
         db_mutex: Arc<Mutex<Database>>,
         user: User,
         filters: HashMap<String, String>,
@@ -37,17 +39,19 @@ where
 
     fn list_filter(
         db_mutex: Arc<Mutex<Database>>,
+        rate_limit_config: RateLimitConfig,
     ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
         warp::path("api")
+            .and(warp_rate_limit::with_rate_limit(rate_limit_config))
             .and(warp::path(Self::table_name()))
             .and(warp::path::end())
             .and(warp::get())
             .and(filters::with_db(db_mutex.clone()))
             .and(filters::with_auth(db_mutex))
             .and(warp::query::<HashMap<String, String>>())
-            .and_then(
-                |db_mutex, user, filters| async move { Self::api_list(db_mutex, user, filters) },
-            )
+            .and_then(|rate_limit_info, db_mutex, user, filters| async move {
+                Self::api_list(rate_limit_info, db_mutex, user, filters)
+            })
     }
 }
 pub trait ApiGet: DbObject
@@ -56,6 +60,7 @@ where
     Self: Serialize,
 {
     fn api_get(
+        _rate_limit_info: RateLimitInfo,
         id: String,
         db_mutex: Arc<Mutex<Database>>,
         user: User,
@@ -77,15 +82,19 @@ where
 
     fn get_filter(
         db_mutex: Arc<Mutex<Database>>,
+        rate_limit_config: RateLimitConfig,
     ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
         warp::path("api")
+            .and(warp_rate_limit::with_rate_limit(rate_limit_config))
             .and(warp::path(Self::table_name()))
             .and(warp::path::param::<String>())
             .and(warp::path::end())
             .and(warp::get())
             .and(filters::with_db(db_mutex.clone()))
             .and(filters::with_auth(db_mutex))
-            .and_then(|id, db_mutex, user| async move { Self::api_get(id, db_mutex, user) })
+            .and_then(|rate_limit_info, id, db_mutex, user| async move {
+                Self::api_get(rate_limit_info, id, db_mutex, user)
+            })
     }
 }
 
@@ -95,6 +104,7 @@ where
     Self: Serialize,
 {
     fn api_create(
+        _rate_limit_info: RateLimitInfo,
         db_mutex: Arc<Mutex<Database>>,
         user: User,
         data: Self::JsonFrom,
@@ -153,8 +163,10 @@ where
 
     fn create_filter(
         db_mutex: Arc<Mutex<Database>>,
+        rate_limit_config: RateLimitConfig,
     ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
         warp::path("api")
+            .and(warp_rate_limit::with_rate_limit(rate_limit_config))
             .and(warp::path(Self::table_name()))
             .and(warp::path::end())
             .and(warp::post())
@@ -162,7 +174,9 @@ where
             .and(filters::with_db(db_mutex.clone()))
             .and(filters::with_auth(db_mutex))
             .and(warp::body::json())
-            .and_then(|db_mutex, user, data| async move { Self::api_create(db_mutex, user, data) })
+            .and_then(|rate_limit_info, db_mutex, user, data| async move {
+                Self::api_create(rate_limit_info, db_mutex, user, data)
+            })
     }
 }
 
@@ -172,6 +186,7 @@ where
     Self: serde::Serialize,
 {
     fn api_update(
+        _rate_limit_info: RateLimitInfo,
         db_mutex: Arc<Mutex<Database>>,
         id: String,
         user: User,
@@ -229,8 +244,10 @@ where
 
     fn update_filter(
         db_mutex: Arc<Mutex<Database>>,
+        rate_limit_config: RateLimitConfig,
     ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
         warp::path("api")
+            .and(warp_rate_limit::with_rate_limit(rate_limit_config))
             .and(warp::path(Self::table_name()))
             .and(warp::path::param::<String>())
             .and(warp::path::end())
@@ -239,8 +256,8 @@ where
             .and(filters::with_db(db_mutex.clone()))
             .and(filters::with_auth(db_mutex))
             .and(warp::body::json())
-            .and_then(|id, db_mutex, user, data| async move {
-                Self::api_update(db_mutex, id, user, data)
+            .and_then(|rate_limit_info, id, db_mutex, user, data| async move {
+                Self::api_update(rate_limit_info, db_mutex, id, user, data)
             })
     }
 }
@@ -251,6 +268,7 @@ where
     Self: serde::Serialize,
 {
     fn api_remove(
+        _rate_limit_info: RateLimitInfo,
         id: String,
         db_mutex: Arc<Mutex<Database>>,
         user: User,
@@ -298,15 +316,19 @@ where
 
     fn remove_filter(
         db_mutex: Arc<Mutex<Database>>,
+        rate_limit_config: RateLimitConfig,
     ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
         warp::path("api")
+            .and(warp_rate_limit::with_rate_limit(rate_limit_config))
             .and(warp::path(Self::table_name()))
             .and(warp::path::param::<String>())
             .and(warp::path::end())
             .and(warp::delete())
             .and(filters::with_db(db_mutex.clone()))
             .and(filters::with_auth(db_mutex))
-            .and_then(|id, db_mutex, user| async move { Self::api_remove(id, db_mutex, user) })
+            .and_then(|rate_limit_info, id, db_mutex, user| async move {
+                Self::api_remove(rate_limit_info, id, db_mutex, user)
+            })
     }
 }
 
@@ -329,28 +351,24 @@ fn handle_database_error(err: DatabaseError) -> warp::Rejection {
     }
 }
 
-mod json_fields {
-    use serde::Deserialize;
-
-    #[derive(Debug, Clone, Deserialize)]
-    pub struct Login {
-        pub username: String,
-        pub password: String,
-    }
-}
-
 #[derive(Serialize)]
 struct TokenReply {
     token: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct Login {
+    pub username: String,
+    pub password: String,
+}
+
 //this in theory could be transformed into ApiCreate implementation, but it would require a fair amount of changes, and for now it's not causing any problems
 #[allow(clippy::unused_async)]
 pub async fn user_auth(
-    _rate_limit_info: warp_rate_limit::RateLimitInfo,
+    _rate_limit_info: RateLimitInfo,
     db_mutex: Arc<Mutex<Database>>,
-    credentials: json_fields::Login,
-) -> Result<impl Reply, warp::Rejection> {
+    credentials: Login,
+) -> Result<impl warp::Reply, warp::Rejection> {
     let database = db_mutex
         .lock()
         .map_err(|err| reject::custom(rejections::InternalServerError::from(err.to_string())))?;

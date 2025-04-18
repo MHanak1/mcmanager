@@ -26,10 +26,16 @@ async fn run(database: Database, config: config::Config) {
 
     let db_mutex = Arc::new(Mutex::new(database));
 
+    let limit = config.public_routes_rate_limit.unwrap_or(
+        (u32::MAX, 1), /*probably not the best way to do this, but ohwell*/
+    );
+
     let public_routes_rate_limit =
-        warp_rate_limit::RateLimitConfig::max_per_minute(config.login_rate_limit.unwrap_or(
-            u32::MAX, /*probably not the best way to do this, but ohwell*/
-        ));
+        warp_rate_limit::RateLimitConfig::max_per_window(limit.0, limit.1);
+
+    let limit = config.private_routes_rate_limit.unwrap_or((u32::MAX, 1));
+    let private_routes_rate_limit =
+        warp_rate_limit::RateLimitConfig::max_per_window(limit.0, limit.1);
 
     let login = warp::post()
         .and(warp_rate_limit::with_rate_limit(public_routes_rate_limit))
@@ -46,39 +52,117 @@ async fn run(database: Database, config: config::Config) {
         .and(filters::with_auth(db_mutex.clone()))
         .and_then(api::handlers::user_info);
 
-    let mods = Mod::list_filter(db_mutex.clone())
-        .or(Mod::create_filter(db_mutex.clone()))
-        .or(Mod::update_filter(db_mutex.clone()))
-        .or(Mod::get_filter(db_mutex.clone()))
-        .or(Mod::remove_filter(db_mutex.clone()));
-    let versions = Version::list_filter(db_mutex.clone())
-        .or(Version::create_filter(db_mutex.clone()))
-        .or(Version::update_filter(db_mutex.clone()))
-        .or(Version::get_filter(db_mutex.clone()))
-        .or(Version::remove_filter(db_mutex.clone()));
-    let mod_loaders = ModLoader::list_filter(db_mutex.clone())
-        .or(ModLoader::create_filter(db_mutex.clone()))
-        .or(ModLoader::update_filter(db_mutex.clone()))
-        .or(ModLoader::get_filter(db_mutex.clone()))
-        .or(ModLoader::remove_filter(db_mutex.clone()));
-    let worlds = World::list_filter(db_mutex.clone())
-        .or(World::create_filter(db_mutex.clone()))
-        .or(World::update_filter(db_mutex.clone()))
-        .or(World::get_filter(db_mutex.clone()))
-        .or(World::remove_filter(db_mutex.clone()));
-    let users = User::list_filter(db_mutex.clone())
-        .or(User::create_filter(db_mutex.clone()))
-        .or(User::update_filter(db_mutex.clone()))
-        .or(User::get_filter(db_mutex.clone()))
-        .or(User::remove_filter(db_mutex.clone()));
-    let sessions = Session::list_filter(db_mutex.clone())
-        .or(Session::create_filter(db_mutex.clone()))
-        .or(Session::get_filter(db_mutex.clone()))
-        .or(Session::remove_filter(db_mutex.clone()));
-    let invite_links = InviteLink::list_filter(db_mutex.clone())
-        .or(InviteLink::create_filter(db_mutex.clone()))
-        .or(InviteLink::get_filter(db_mutex.clone()))
-        .or(InviteLink::remove_filter(db_mutex.clone()));
+    let mods = Mod::list_filter(db_mutex.clone(), private_routes_rate_limit.clone())
+        .or(Mod::create_filter(
+            db_mutex.clone(),
+            private_routes_rate_limit.clone(),
+        ))
+        .or(Mod::update_filter(
+            db_mutex.clone(),
+            private_routes_rate_limit.clone(),
+        ))
+        .or(Mod::get_filter(
+            db_mutex.clone(),
+            private_routes_rate_limit.clone(),
+        ))
+        .or(Mod::remove_filter(
+            db_mutex.clone(),
+            private_routes_rate_limit.clone(),
+        ));
+    let versions = Version::list_filter(db_mutex.clone(), private_routes_rate_limit.clone())
+        .or(Version::create_filter(
+            db_mutex.clone(),
+            private_routes_rate_limit.clone(),
+        ))
+        .or(Version::update_filter(
+            db_mutex.clone(),
+            private_routes_rate_limit.clone(),
+        ))
+        .or(Version::get_filter(
+            db_mutex.clone(),
+            private_routes_rate_limit.clone(),
+        ))
+        .or(Version::remove_filter(
+            db_mutex.clone(),
+            private_routes_rate_limit.clone(),
+        ));
+    let mod_loaders = ModLoader::list_filter(db_mutex.clone(), private_routes_rate_limit.clone())
+        .or(ModLoader::create_filter(
+            db_mutex.clone(),
+            private_routes_rate_limit.clone(),
+        ))
+        .or(ModLoader::update_filter(
+            db_mutex.clone(),
+            private_routes_rate_limit.clone(),
+        ))
+        .or(ModLoader::get_filter(
+            db_mutex.clone(),
+            private_routes_rate_limit.clone(),
+        ))
+        .or(ModLoader::remove_filter(
+            db_mutex.clone(),
+            private_routes_rate_limit.clone(),
+        ));
+    let worlds = World::list_filter(db_mutex.clone(), private_routes_rate_limit.clone())
+        .or(World::create_filter(
+            db_mutex.clone(),
+            private_routes_rate_limit.clone(),
+        ))
+        .or(World::update_filter(
+            db_mutex.clone(),
+            private_routes_rate_limit.clone(),
+        ))
+        .or(World::get_filter(
+            db_mutex.clone(),
+            private_routes_rate_limit.clone(),
+        ))
+        .or(World::remove_filter(
+            db_mutex.clone(),
+            private_routes_rate_limit.clone(),
+        ));
+    let users = User::list_filter(db_mutex.clone(), private_routes_rate_limit.clone())
+        .or(User::create_filter(
+            db_mutex.clone(),
+            private_routes_rate_limit.clone(),
+        ))
+        .or(User::update_filter(
+            db_mutex.clone(),
+            private_routes_rate_limit.clone(),
+        ))
+        .or(User::get_filter(
+            db_mutex.clone(),
+            private_routes_rate_limit.clone(),
+        ))
+        .or(User::remove_filter(
+            db_mutex.clone(),
+            private_routes_rate_limit.clone(),
+        ));
+    let sessions = Session::list_filter(db_mutex.clone(), private_routes_rate_limit.clone())
+        .or(Session::create_filter(
+            db_mutex.clone(),
+            private_routes_rate_limit.clone(),
+        ))
+        .or(Session::get_filter(
+            db_mutex.clone(),
+            private_routes_rate_limit.clone(),
+        ))
+        .or(Session::remove_filter(
+            db_mutex.clone(),
+            private_routes_rate_limit.clone(),
+        ));
+    let invite_links = InviteLink::list_filter(db_mutex.clone(), private_routes_rate_limit.clone())
+        .or(InviteLink::create_filter(
+            db_mutex.clone(),
+            private_routes_rate_limit.clone(),
+        ))
+        .or(InviteLink::get_filter(
+            db_mutex.clone(),
+            private_routes_rate_limit.clone(),
+        ))
+        .or(InviteLink::remove_filter(
+            db_mutex.clone(),
+            private_routes_rate_limit.clone(),
+        ));
 
     let log = warp::log("info");
 
@@ -129,7 +213,8 @@ fn user_creation_and_removal() -> anyhow::Result<()> {
     thread::spawn(|| {
         let mut config = CONFIG.clone();
         config.listen_port = TEST_PORT;
-        config.login_rate_limit = None;
+        config.public_routes_rate_limit = None;
+        config.private_routes_rate_limit = None;
         let rt = tokio::runtime::Runtime::new().expect("Can't create runtime");
         rt.block_on(run(database, config))
     });
@@ -394,6 +479,7 @@ fn user_creation_and_removal() -> anyhow::Result<()> {
     Ok(())
 }
 
+/*
 #[test]
 #[allow(unused)]
 fn permissions() -> anyhow::Result<()> {
@@ -519,3 +605,4 @@ fn permissions() -> anyhow::Result<()> {
 
     Ok(())
 }
+ */

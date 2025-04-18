@@ -6,7 +6,8 @@ use std::collections::HashMap;
 pub struct Config {
     pub listen_address: String,
     pub listen_port: u32,
-    pub login_rate_limit: Option<u32>,
+    pub public_routes_rate_limit: Option<(u32, u64)>,
+    pub private_routes_rate_limit: Option<(u32, u64)>,
     pub user_defaults: UserDefaults,
     pub world_defaults: WorldDefaults,
 }
@@ -17,7 +18,14 @@ impl TryFrom<config::Config> for Config {
         Ok(Self {
             listen_address: value.get_string("listen_address")?,
             listen_port: value.get_int("listen_port")? as u32,
-            login_rate_limit: value.get_int("login_rate_limit")?.try_into().ok(),
+            public_routes_rate_limit: Some((
+                value.get_int("public_routes_rate_limit")? as u32,
+                value.get_int("private_routes_rate_limit_time_frame")? as u64,
+            )),
+            private_routes_rate_limit: Some((
+                value.get_int("private_routes_rate_limit")? as u32,
+                value.get_int("private_routes_rate_limit_time_frame")? as u64,
+            )),
             user_defaults: UserDefaults::try_from(value.get_table("user_defaults")?)?,
             world_defaults: WorldDefaults::try_from(value.get_table("world_defaults")?)?,
         })
