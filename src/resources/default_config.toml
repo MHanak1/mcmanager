@@ -1,5 +1,7 @@
 listen_address = "127.0.0.1"
 listen_port = 3030
+#maximum login request per minute. -1 to disable
+login_rate_limit = 10
 
 [user_defaults]
 # total RAM limit (in MiB)

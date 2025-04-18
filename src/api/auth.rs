@@ -3,6 +3,7 @@ use crate::database::objects::{DbObject, Password, Session, User};
 use crate::database::types::Token;
 use anyhow::{Result, anyhow};
 use argon2::PasswordHasher;
+use log::debug;
 use rusqlite::params;
 
 pub fn try_user_auth(username: &str, password: &str, database: &Database) -> Result<Session> {
@@ -17,12 +18,14 @@ pub fn try_user_auth(username: &str, password: &str, database: &Database) -> Res
     //here we hash a random password, so no matter if provided username is correct or not it will take roughly the same time
     if user.is_err() {
         bollocks_hash();
+        debug!("rejecting auth for user {username}, user not found");
         return Err(anyhow!("Invalid username or password"));
     }
 
     let user = user?;
 
     if !user.enabled {
+        debug!("rejecting auth for user {username}, user is disabled");
         bollocks_hash();
         return Err(anyhow!("User disabled"));
     }
@@ -34,6 +37,7 @@ pub fn try_user_auth(username: &str, password: &str, database: &Database) -> Res
         .expect("failed to hash password");
 
     if password_hash.to_string() != user_password.hash {
+        debug!("rejecting auth for user {username}, password is invalid");
         return Err(anyhow!("Invalid username or password"));
     }
 
@@ -46,6 +50,8 @@ pub fn try_user_auth(username: &str, password: &str, database: &Database) -> Res
 
     //bypass perm check, we want all users to be able to log in
     database.insert(&new_session, None)?;
+
+    debug!("accepting auth for user {username}");
 
     Ok(new_session)
 }

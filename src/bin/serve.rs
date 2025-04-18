@@ -8,6 +8,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
+use test_log::test;
 use warp::Filter;
 
 #[tokio::main]
@@ -25,7 +26,10 @@ async fn run(database: Database, config: config::Config) {
 
     let db_mutex = Arc::new(Mutex::new(database));
 
-    let public_routes_rate_limit = warp_rate_limit::RateLimitConfig::max_per_minute(10);
+    let public_routes_rate_limit =
+        warp_rate_limit::RateLimitConfig::max_per_minute(config.login_rate_limit.unwrap_or(
+            u32::MAX, /*probably not the best way to do this, but ohwell*/
+        ));
 
     let login = warp::post()
         .and(warp_rate_limit::with_rate_limit(public_routes_rate_limit))
@@ -100,27 +104,32 @@ async fn run(database: Database, config: config::Config) {
 
 #[test]
 #[allow(unused)]
-fn object_creation_and_removal() -> anyhow::Result<()> {
+fn user_creation_and_removal() -> anyhow::Result<()> {
     const TEST_PORT: u32 = 3031;
 
+    use log::info;
     use mcmanager::config;
     use mcmanager::config::CONFIG;
+    use mcmanager::database::types::Id;
     use pretty_assertions::assert_eq;
     use reqwest::header;
     use serde::Deserialize;
+    use serde_with::serde_derive::Serialize;
     use std::thread;
+    use warp::body::BodyDeserializeError;
 
     let conn = rusqlite::Connection::open_in_memory().expect("Can't open database connection");
 
     let database = Database { conn };
     database.init().expect("Can't init database");
-    let mut user = database.create_user("Admin", "Password1")?;
+    let mut user = database.create_user("Admin", "Password0")?;
     user.is_privileged = true;
     database.update(&user, None)?;
 
     thread::spawn(|| {
         let mut config = CONFIG.clone();
         config.listen_port = TEST_PORT;
+        config.login_rate_limit = None;
         let rt = tokio::runtime::Runtime::new().expect("Can't create runtime");
         rt.block_on(run(database, config))
     });
@@ -137,10 +146,11 @@ fn object_creation_and_removal() -> anyhow::Result<()> {
         token: String,
     }
 
+    info!("logging in as admin");
     let token: TokenReply = serde_json::from_str(
         &client
             .post(format!("{url}/login"))
-            .body("{\"username\": \"Admin\", \"password\": \"Password1\"}")
+            .body("{\"username\": \"Admin\", \"password\": \"Password0\"}")
             .send()?
             .text()?,
     )?;
@@ -157,25 +167,229 @@ fn object_creation_and_removal() -> anyhow::Result<()> {
         )?
     );
 
+    info!("Creating User1 with minimal fields");
     let created: User = serde_json::from_str(
         &client
             .post(format!("{url}/users"))
             .header(header::AUTHORIZATION, format!("Bearer {token}"))
-            .body("{\"username\": \"User1\", \"password\": \"Password2\"}")
+            .body("{\"username\": \"User1\", \"password\": \"Password1\"}")
             .send()?
             .text()?,
     )?;
 
-    assert_eq!(created.username, "User1");
-    /*
-    assert_eq!(created.memory_limit, None);
-    assert_eq!(created.player_limit, None);
-    assert_eq!(created.world_limit, None);
-    assert_eq!(created.active_world_limit, None);
-    assert_eq!(created.storage_limit, None);
-    assert_eq!(created.is_privileged, false);
-    assert_eq!(created.enabled, true);
-     */
+    let mut usera = User::default();
+    usera.id = created.id;
+    usera.username = "User1".to_string();
+
+    assert_eq!(created, usera);
+
+    let _: TokenReply = serde_json::from_str(
+        &client
+            .post(format!("{url}/login"))
+            .body("{\"username\": \"User1\", \"password\": \"Password1\"}")
+            .send()?
+            .text()?,
+    )?;
+
+    #[derive(Serialize)]
+    struct UserSend {
+        username: String,
+        password: String,
+        avatar_id: Option<Id>,
+        memory_limit: Option<u32>,
+        player_limit: Option<u32>,
+        world_limit: Option<u32>,
+        active_world_limit: Option<u32>,
+        storage_limit: Option<u32>,
+        is_privileged: bool,
+        enabled: bool,
+    }
+
+    let mut userb = User {
+        id: Default::default(),
+        username: "User2".to_string(),
+        avatar_id: None,
+        memory_limit: None,
+        player_limit: None,
+        world_limit: None,
+        active_world_limit: None,
+        storage_limit: None,
+        is_privileged: false,
+        enabled: true,
+    };
+
+    info!("Creating User2 with all possible field set to null");
+    let created: User = serde_json::from_str(
+        &client
+            .post(format!("{url}/users"))
+            .header(header::AUTHORIZATION, format!("Bearer {token}"))
+            .body(
+                serde_json::to_string(&UserSend {
+                    username: userb.username.clone(),
+                    password: "Password2".to_string(),
+                    avatar_id: userb.avatar_id,
+                    memory_limit: userb.memory_limit,
+                    player_limit: userb.player_limit,
+                    world_limit: userb.world_limit,
+                    active_world_limit: userb.active_world_limit,
+                    storage_limit: userb.storage_limit,
+                    is_privileged: userb.is_privileged,
+                    enabled: userb.enabled,
+                })
+                .unwrap(),
+            )
+            .send()?
+            .text()?,
+    )?;
+
+    userb.id = created.id;
+
+    assert_eq!(created, userb);
+    println!(
+        "{:?}",
+        &client
+            .post(format!("{url}/login"))
+            .body("{\"username\": \"User2\", \"password\": \"Password2\"}")
+            .send()?
+            .text()?
+    );
+
+    let _: TokenReply = serde_json::from_str(
+        &client
+            .post(format!("{url}/login"))
+            .body("{\"username\": \"User2\", \"password\": \"Password2\"}")
+            .send()?
+            .text()?,
+    )?;
+
+    let tmp_id = Id::new_random();
+    let mut usera = User {
+        id: Default::default(),
+        username: "User3".to_string(),
+        avatar_id: Some(tmp_id),
+        memory_limit: Some(1234),
+        player_limit: Some(1234),
+        world_limit: Some(1234),
+        active_world_limit: Some(1234),
+        storage_limit: Some(1234),
+        is_privileged: true,
+        enabled: true,
+    };
+
+    info!("Creating User3 with all possible field set");
+    let userb: User = serde_json::from_str(
+        &client
+            .post(format!("{url}/users"))
+            .header(header::AUTHORIZATION, format!("Bearer {token}"))
+            .body(
+                serde_json::to_string(&UserSend {
+                    username: usera.username.clone(),
+                    password: "Password3".to_string(),
+                    avatar_id: usera.avatar_id,
+                    memory_limit: usera.memory_limit,
+                    player_limit: usera.player_limit,
+                    world_limit: usera.world_limit,
+                    active_world_limit: usera.active_world_limit,
+                    storage_limit: usera.storage_limit,
+                    is_privileged: usera.is_privileged,
+                    enabled: usera.enabled,
+                })
+                .unwrap(),
+            )
+            .send()?
+            .text()?,
+    )?;
+
+    usera.id = userb.id;
+
+    assert_eq!(userb, usera);
+
+    let user_token: TokenReply = serde_json::from_str(
+        &client
+            .post(format!("{url}/login"))
+            .body("{\"username\": \"User3\", \"password\": \"Password3\"}")
+            .send()?
+            .text()?,
+    )?;
+    let user_token = user_token.token;
+
+    info!("Creating disabled User4");
+    let created: User = serde_json::from_str(
+        &client
+            .post(format!("{url}/users"))
+            .header(header::AUTHORIZATION, format!("Bearer {token}"))
+            .body("{\"username\": \"User4\", \"password\": \"Password4\", \"enabled\": false}")
+            .send()?
+            .text()?,
+    )?;
+
+    let reply: Result<TokenReply, serde_json::Error> = serde_json::from_str(
+        &client
+            .post(format!("{url}/login"))
+            .body("{\"username\": \"User4\", \"password\": \"Password4\"}")
+            .send()?
+            .text()?,
+    );
+
+    assert!(reply.is_err());
+
+    info!("enabling User5");
+    let created: User = serde_json::from_str(
+        &client
+            .put(format!("{url}/users/{}", created.id))
+            .header(header::AUTHORIZATION, format!("Bearer {token}"))
+            .body("{\"enabled\": true}")
+            .send()?
+            .text()?,
+    )?;
+
+    println!("{:?}", created);
+
+    let reply: Result<TokenReply, serde_json::Error> = serde_json::from_str(
+        &client
+            .post(format!("{url}/login"))
+            .body("{\"username\": \"User4\", \"password\": \"Password4\"}")
+            .send()?
+            .text()?,
+    );
+
+    assert!(reply.is_ok());
+
+    info!("updating User5 username");
+    let created: User = serde_json::from_str(
+        &client
+            .put(format!("{url}/users/{}", created.id))
+            .header(header::AUTHORIZATION, format!("Bearer {token}"))
+            .body("{\"username\": \"User4New\"}")
+            .send()?
+            .text()?,
+    )?;
+    let reply: Result<TokenReply, serde_json::Error> = serde_json::from_str(
+        &client
+            .post(format!("{url}/login"))
+            .body("{\"username\": \"User4New\", \"password\": \"Password4\"}")
+            .send()?
+            .text()?,
+    );
+    assert!(reply.is_ok());
+
+    info!("updating User5 password");
+    let created: User = serde_json::from_str(
+        &client
+            .put(format!("{url}/users/{}", created.id))
+            .header(header::AUTHORIZATION, format!("Bearer {token}"))
+            .body("{\"password\": \"Password4New\"}")
+            .send()?
+            .text()?,
+    )?;
+    let reply: Result<TokenReply, serde_json::Error> = serde_json::from_str(
+        &client
+            .post(format!("{url}/login"))
+            .body("{\"username\": \"User4New\", \"password\": \"Password4New\"}")
+            .send()?
+            .text()?,
+    );
+    assert!(reply.is_ok());
 
     Ok(())
 }

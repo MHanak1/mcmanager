@@ -8,6 +8,7 @@ use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSqlOutput, ValueRe
 use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt::{Debug, Display, Formatter};
+use test_log::test;
 
 pub(crate) const ID_MAX_VALUE: i64 = 281_474_976_710_655;
 

@@ -1,9 +1,10 @@
 pub use self::{password::Password, session::Session};
 use crate::api::handlers::{ApiCreate, ApiGet, ApiList, ApiRemove, ApiUpdate};
 use crate::config::CONFIG;
-use crate::database::Database;
 use crate::database::objects::{DbObject, FromJson, UpdateJson};
 use crate::database::types::{Access, Column, Id, Type};
+use crate::database::{Database, DatabaseError};
+use log::warn;
 use rusqlite::types::ToSqlOutput;
 use rusqlite::{Row, ToSql};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -257,13 +258,44 @@ impl UpdateJson for User {
 impl ApiList for User {}
 impl ApiGet for User {}
 impl ApiCreate for User {
-    fn after_api_create(&self, database: &Database, json: &Self::JsonFrom) {
+    fn after_api_create(
+        &self,
+        database: &Database,
+        json: &Self::JsonFrom,
+    ) -> Result<(), DatabaseError> {
+        println!("{}, {}", json.username, json.password);
         database
             .insert(&Password::new(self.id, &json.password), None)
             .expect("failed to create the password for the user.");
+        Ok(())
     }
 }
-impl ApiUpdate for User {}
+impl ApiUpdate for User {
+    fn after_api_update(
+        &self,
+        database: &Database,
+        json: &Self::JsonUpdate,
+    ) -> Result<(), DatabaseError> {
+        //the the password is first created then recreated so it can handle a missing password entry for the user
+        if let Some(password) = json.password.clone() {
+            match database.get_one::<Password>(self.id, None) {
+                Ok(password) => {
+                    database
+                        .remove(&password, None)
+                        .expect("failed to remove the password for the user");
+                }
+                Err(err) => {
+                    warn!("password not found for the user {}: {}", self.username, err);
+                }
+            }
+
+            database
+                .insert(&Password::new(self.id, &password), None)
+                .expect("update the password for the user");
+        }
+        Ok(())
+    }
+}
 impl ApiRemove for User {}
 
 pub mod password {
@@ -392,16 +424,15 @@ pub mod session {
 
     impl DbObject for Session {
         fn view_access() -> Access {
-            Access::PrivilegedUser
+            Access::Owner("user_id")
         }
 
         fn update_access() -> Access {
             Access::PrivilegedUser
         }
 
-        //TODO: this probably should be creatable by users as well
         fn create_access() -> Access {
-            Access::PrivilegedUser
+            Access::User
         }
 
         fn table_name() -> &'static str {
@@ -477,6 +508,7 @@ pub mod session {
         expires: bool,
     }
 
+    //this is for not leaking the session tokens
     impl Serialize for Session {
         fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
         where

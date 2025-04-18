@@ -134,11 +134,15 @@ where
                     }
 
                     let object = Self::from_json(&data, &user);
-                    object.before_api_create(&database, &data);
+                    object
+                        .before_api_create(&database, &data)
+                        .map_err(handle_database_error)?;
 
                     match database.insert(&object, Some(&user)) {
                         Ok(_) => {
-                            object.after_api_create(&database, &data);
+                            object
+                                .after_api_create(&database, &data)
+                                .map_err(handle_database_error)?;
                             Ok(warp::reply::with_status(
                                 warp::reply::with_header(
                                     warp::reply::json(&object),
@@ -160,9 +164,25 @@ where
     }
 
     #[allow(unused)]
-    fn before_api_create(&self, database: &Database, json: &Self::JsonFrom) {}
+    /// runs before the database entry creation
+    fn before_api_create(
+        &self,
+        database: &Database,
+        json: &Self::JsonFrom,
+    ) -> Result<(), DatabaseError> {
+        Ok(())
+    }
     #[allow(unused)]
-    fn after_api_create(&self, database: &Database, json: &Self::JsonFrom) {}
+    /// runs after the database entry creation
+    ///
+    /// this returns a [`Result`], but there is no mechanism to undo the entry creation. if this fails it should probably cause the program to panic
+    fn after_api_create(
+        &self,
+        database: &Database,
+        json: &Self::JsonFrom,
+    ) -> Result<(), DatabaseError> {
+        Ok(())
+    }
 
     fn create_filter(
         db_mutex: Arc<Mutex<Database>>,
@@ -201,11 +221,15 @@ where
                     database.get_one(id, Some(&user)).map_or_else(
                         |err| Err(handle_database_error(err)),
                         |object: Self| {
-                            object.before_api_update(&database, &data);
+                            object
+                                .before_api_update(&database, &data)
+                                .map_err(handle_database_error)?;
                             let object = object.update_with_json(&data);
                             match database.update(&object, Some(&user)) {
                                 Ok(_) => {
-                                    object.after_api_update(&database, &data);
+                                    object
+                                        .after_api_update(&database, &data)
+                                        .map_err(handle_database_error)?;
                                     Ok(warp::reply::with_status(
                                         warp::reply::json(&object),
                                         StatusCode::OK,
@@ -222,9 +246,25 @@ where
         )
     }
     #[allow(unused)]
-    fn before_api_update(&self, database: &Database, json: &Self::JsonUpdate) {}
+    /// runs before the database entry update
+    fn before_api_update(
+        &self,
+        database: &Database,
+        json: &Self::JsonUpdate,
+    ) -> Result<(), DatabaseError> {
+        Ok(())
+    }
     #[allow(unused)]
-    fn after_api_update(&self, database: &Database, json: &Self::JsonUpdate) {}
+    /// runs after the database entry update
+    ///
+    /// this returns a [`Result`], but there is no mechanism to undo the entry update. if this fails it should probably cause the program to panic
+    fn after_api_update(
+        &self,
+        database: &Database,
+        json: &Self::JsonUpdate,
+    ) -> Result<(), DatabaseError> {
+        Ok(())
+    }
 
     fn update_filter(
         db_mutex: Arc<Mutex<Database>>,
@@ -263,10 +303,14 @@ where
                 },
                 |database| match database.get_one::<Self>(id, Some(&user)) {
                     Ok(object) => {
-                        object.before_api_delete(&database);
+                        object
+                            .before_api_delete(&database)
+                            .map_err(handle_database_error)?;
                         match database.remove(&object, Some(&user)) {
                             Ok(_) => {
-                                object.after_api_delete(&database);
+                                object
+                                    .after_api_delete(&database)
+                                    .map_err(handle_database_error)?;
                                 Ok(warp::reply::with_status(
                                     warp::reply::json(&""),
                                     StatusCode::NO_CONTENT,
@@ -284,9 +328,17 @@ where
     }
 
     #[allow(unused)]
-    fn before_api_delete(&self, database: &Database) {}
+    /// runs before the database entry deletion
+    fn before_api_delete(&self, database: &Database) -> Result<(), DatabaseError> {
+        Ok(())
+    }
     #[allow(unused)]
-    fn after_api_delete(&self, database: &Database) {}
+    /// runs after the database entry deletion
+    ///
+    /// this returns a [`Result`], but there is no mechanism to undo the entry deletion. if this fails it should probably cause the program to panic
+    fn after_api_delete(&self, database: &Database) -> Result<(), DatabaseError> {
+        Ok(())
+    }
 
     fn remove_filter(
         db_mutex: Arc<Mutex<Database>>,

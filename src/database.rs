@@ -3,17 +3,16 @@ use crate::database::objects::{
     InviteLink, Mod, ModLoader, Password, Session, User, Version, World,
 };
 use crate::database::types::{Id, Type};
+use log::debug;
 use rusqlite::{params, params_from_iter};
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
+use test_log::test;
 use warp::reject::Reject;
 
 pub mod objects;
 pub mod types;
-
-#[cfg(test)]
-use crate::database::types::Token;
 
 #[derive(Debug)]
 pub struct Database {
@@ -47,24 +46,25 @@ impl Database {
             }
         }
         value.before_create(self);
-        let result = self.conn.execute(
-            &format!(
-                "INSERT INTO {} ({}) VALUES ({})",
-                T::table_name(),
-                T::columns()
-                    .iter()
-                    .map(|column| column.name.to_string())
-                    .collect::<Vec<String>>()
-                    .join(", "),
-                T::columns()
-                    .iter()
-                    .enumerate()
-                    .map(|i| { format!("?{}", i.0 + 1) })
-                    .collect::<Vec<String>>()
-                    .join(", ")
-            ),
-            params_from_iter(value.params()),
+
+        let query = &format!(
+            "INSERT INTO {} ({}) VALUES ({})",
+            T::table_name(),
+            T::columns()
+                .iter()
+                .map(|column| column.name.to_string())
+                .collect::<Vec<String>>()
+                .join(", "),
+            T::columns()
+                .iter()
+                .enumerate()
+                .map(|i| { format!("?{}", i.0 + 1) })
+                .collect::<Vec<String>>()
+                .join(", ")
         );
+        debug!("querying database: {query}");
+
+        let result = self.conn.execute(query, params_from_iter(value.params()));
         value.after_create(self);
         match result {
             Ok(result) => Ok(result),
@@ -83,27 +83,28 @@ impl Database {
             }
         }
         value.before_update(self);
-        let result = self.conn.execute(
-            &format!(
-                "UPDATE {} SET {} WHERE {} = {}{}",
-                T::table_name(),
-                T::columns()
-                    .iter()
-                    .enumerate()
-                    .map(|(id, column)| { format!("{} = ?{}", column.name, id + 1) })
-                    .collect::<Vec<String>>()
-                    .join(", "),
-                T::columns()[T::id_column_index()].name,
-                value.get_id().as_i64(),
-                match user {
-                    Some(user) => {
-                        format!(" AND {}", T::update_access().access_filter::<T>(user))
-                    }
-                    None => String::new(),
+
+        let query = &format!(
+            "UPDATE {} SET {} WHERE {} = {}{}",
+            T::table_name(),
+            T::columns()
+                .iter()
+                .enumerate()
+                .map(|(id, column)| { format!("{} = ?{}", column.name, id + 1) })
+                .collect::<Vec<String>>()
+                .join(", "),
+            T::columns()[T::id_column_index()].name,
+            value.get_id().as_i64(),
+            match user {
+                Some(user) => {
+                    format!(" AND {}", T::update_access().access_filter::<T>(user))
                 }
-            ),
-            params_from_iter(value.params()),
+                None => String::new(),
+            }
         );
+        debug!("querying database: {query}");
+
+        let result = self.conn.execute(query, params_from_iter(value.params()));
         value.after_update(self);
         match result {
             Ok(result) => Ok(result),
@@ -122,20 +123,21 @@ impl Database {
             }
         }
         value.before_delete(self);
-        let result = self.conn.execute(
-            &format!(
-                "DELETE FROM {} WHERE {} = ?1{}",
-                T::table_name(),
-                T::columns()[T::id_column_index()].name,
-                match user {
-                    Some(user) => {
-                        format!(" AND {}", T::update_access().access_filter::<T>(user))
-                    }
-                    None => String::new(),
-                },
-            ),
-            params![value.get_id()],
+
+        let query = &format!(
+            "DELETE FROM {} WHERE {} = ?1{}",
+            T::table_name(),
+            T::columns()[T::id_column_index()].name,
+            match user {
+                Some(user) => {
+                    format!(" AND {}", T::update_access().access_filter::<T>(user))
+                }
+                None => String::new(),
+            },
         );
+        debug!("querying database: {query}");
+
+        let result = self.conn.execute(query, params![value.get_id()]);
         value.after_delete(self);
         match result {
             Ok(result) => Ok(result),
@@ -144,21 +146,23 @@ impl Database {
     }
 
     pub fn get_one<T: DbObject>(&self, id: Id, user: Option<&User>) -> Result<T, DatabaseError> {
-        match self.conn.query_row(
-            &format!(
-                "SELECT * FROM {} WHERE {} = ?1{}",
-                T::table_name(),
-                T::columns()[T::id_column_index()].name,
-                match user {
-                    Some(user) => {
-                        format!(" AND {}", T::view_access().access_filter::<T>(user))
-                    }
-                    None => String::new(),
+        let query = &format!(
+            "SELECT * FROM {} WHERE {} = ?1{}",
+            T::table_name(),
+            T::columns()[T::id_column_index()].name,
+            match user {
+                Some(user) => {
+                    format!(" AND {}", T::view_access().access_filter::<T>(user))
                 }
-            ),
-            params![id],
-            |row| T::from_row(row),
-        ) {
+                None => String::new(),
+            }
+        );
+
+        debug!("querying database: {query}");
+        match self
+            .conn
+            .query_row(query, params![id], |row| T::from_row(row))
+        {
             Ok(result) => Ok(result),
             Err(err) => Err(DatabaseError::SqliteError(err)),
         }
@@ -174,11 +178,16 @@ impl Database {
         filters: HashMap<String, String>,
         user: Option<&User>,
     ) -> Result<Vec<T>, DatabaseError> {
-        let mut query = format!("SELECT * FROM {} WHERE ", T::table_name());
+        let mut query = format!("SELECT * FROM {}", T::table_name());
+        //this... is so ass.
+        let mut added_where = false;
 
         let fields = if filters.is_empty() {
             vec![]
         } else {
+            query += " WHERE ";
+            added_where = true;
+
             let (filters_processed, fields) = Self::construct_filters::<T>(&filters);
 
             for filter in filters_processed {
@@ -189,8 +198,13 @@ impl Database {
         };
 
         if let Some(user) = user {
+            if !added_where {
+                query += " WHERE ";
+            }
             query += T::view_access().access_filter::<T>(user).as_str();
         }
+
+        debug!("querying database: {query}");
 
         let mut stmt = self
             .conn
@@ -298,6 +312,8 @@ pub fn manipulate_data() -> anyhow::Result<()> {
     use argon2::password_hash::rand_core::OsRng;
     use pretty_assertions::assert_eq;
     use log::{info};
+    use crate::database::types::Token;
+    //use crate::database::types::Type::Token;
 
     let conn = rusqlite::Connection::open_in_memory()?;
 
