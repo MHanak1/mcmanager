@@ -34,6 +34,7 @@ log = "0.4.27"
 env_logger = "0.11.8"
 warp-rate-limit = "0.3.0"
 test-log = "0.2.17"
+subprocess = "0.2.9"
 
 [dev-dependencies]
 reqwest = { version = "0.12.15", features = ["blocking"] }

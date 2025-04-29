@@ -8,11 +8,17 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
+use std::thread;
 use test_log::test;
 use warp::Filter;
 
 #[tokio::main]
 async fn main() {
+    thread::spawn(|| loop {
+        mcmanager::minecraft::server::refresh_local_servers();
+        thread::sleep(std::time::Duration::from_millis(1000));
+    });
+
     env_logger::init();
     let conn = rusqlite::Connection::open(Path::new(&util::dirs::data_dir().join("database.db")))
         .expect("failed to open the database");
@@ -21,7 +27,7 @@ async fn main() {
     run(database, config::CONFIG.clone()).await;
 }
 
-async fn run(database: Database, config: config::Config) {
+pub async fn run(database: Database, config: config::Config) {
     util::dirs::init_dirs().expect("Failed to initialize the data directory");
 
     let db_mutex = Arc::new(Mutex::new(database));

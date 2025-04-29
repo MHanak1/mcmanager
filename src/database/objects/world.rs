@@ -1,9 +1,14 @@
 use crate::api::handlers::{ApiCreate, ApiGet, ApiList, ApiRemove, ApiUpdate};
+use crate::minecraft;
+use crate::minecraft::server::{InternalServer, MinecraftServer, MinecraftServerStatus};
 use crate::database::objects::{DbObject, FromJson, UpdateJson, User};
 use crate::database::types::{Access, Column, Id, Type};
+use crate::database::{Database, DatabaseError};
+use argon2::Version;
 use rusqlite::types::ToSqlOutput;
 use rusqlite::{Row, ToSql};
 use serde::{Deserialize, Deserializer, Serialize};
+use warp::serve;
 
 /// `id`: world's unique [`Id`]
 ///
@@ -166,6 +171,59 @@ impl UpdateJson for World {
 
 impl ApiList for World {}
 impl ApiGet for World {}
-impl ApiCreate for World {}
-impl ApiUpdate for World {}
+impl ApiCreate for World {
+    fn after_api_create(
+        &self,
+        database: &Database,
+        json: &Self::JsonFrom,
+    ) -> Result<(), DatabaseError> {
+        let result = minecraft::server::InternalServer::new(self, database)
+            .map_err(|err| DatabaseError::InternalServerError(err.to_string()))?;
+        Ok(())
+    }
+}
+impl ApiUpdate for World {
+    fn after_api_update(
+        &self,
+        database: &Database,
+        json: &Self::JsonUpdate,
+    ) -> Result<(), DatabaseError> {
+        let mut servers = minecraft::server::SERVERS.lock().expect("Failed to lock servers");
+        let mut server = servers.iter_mut().find_map(|server| {
+            if server.id() == self.id {
+                Some(server)
+            } else {
+                None
+            }
+        });
+        if server.is_none() {
+            servers.push(Box::new(
+                InternalServer::new(self, database).map_err(
+                    |err| DatabaseError::InternalServerError(err.to_string()),
+                )?
+            ));
+            server = servers.last_mut();
+        }
+        let mut server = server.expect("what the fuck");
+
+        if self.enabled {
+            match server.status() {
+                MinecraftServerStatus::Running => {Err(DatabaseError::InternalServerError("Server is already running".parse().unwrap()))}
+                MinecraftServerStatus::Stopping => {Err(DatabaseError::InternalServerError("Server is currently stopping".parse().unwrap()))}
+                MinecraftServerStatus::Exited(_) => {
+                    server
+                        .start(database)
+                        .map_err(|err| DatabaseError::InternalServerError(err.to_string()))?;
+                    Ok(())
+                }
+            }
+        }
+        else {
+            server
+                .stop(database)
+                .map_err(|err| DatabaseError::InternalServerError(err.to_string()))?;
+            Ok(())
+        }
+    }
+}
 impl ApiRemove for World {}

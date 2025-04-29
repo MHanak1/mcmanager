@@ -1,6 +1,9 @@
 use anyhow::Context;
+use config::Value;
+use core::time::Duration;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
+use std::ops::Range;
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -8,6 +11,7 @@ pub struct Config {
     pub listen_port: u32,
     pub public_routes_rate_limit: Option<(u32, u64)>,
     pub private_routes_rate_limit: Option<(u32, u64)>,
+    pub world: WorldConfig,
     pub user_defaults: UserDefaults,
     pub world_defaults: WorldDefaults,
 }
@@ -26,8 +30,38 @@ impl TryFrom<config::Config> for Config {
                 value.get_int("private_routes_rate_limit")? as u32,
                 value.get_int("private_routes_rate_limit_time_frame")? as u64,
             )),
+            world: WorldConfig::try_from(value.get_table("world")?)?,
             user_defaults: UserDefaults::try_from(value.get_table("user_defaults")?)?,
             world_defaults: WorldDefaults::try_from(value.get_table("world_defaults")?)?,
+        })
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct WorldConfig {
+    pub stop_timeout: Duration,
+    pub port_range: Range<u16>
+}
+impl TryFrom<HashMap<String, config::Value>> for WorldConfig {
+    type Error = anyhow::Error;
+
+    fn try_from(value: HashMap<String, Value>) -> Result<Self, Self::Error> {
+        Ok(Self {
+            stop_timeout: Duration::from_secs(
+                value
+                    .get("stop_timeout")
+                    .context("couldn't get stop_timeout")?
+                    .clone()
+                    .into_int()?
+                    .try_into()?,
+            ),
+            port_range: {
+                let values = value.get("port_range").context("couldn't get port_range")?.to_string().clone();
+                let mut values = values.splitn(2, "-");
+                let min = values.next().context("couldn't get port_range")?.parse::<u16>().context("couldn't parse port_range")?;
+                let max = values.next().context("couldn't get port_range")?.parse::<u16>().context("couldn't parse port_range")?;
+                min..max
+            },
         })
     }
 }
