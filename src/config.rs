@@ -1,8 +1,11 @@
+use crate::util;
 use anyhow::Context;
 use config::Value;
 use core::time::Duration;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
+use std::fs::File;
+use std::io::Write;
 use std::ops::Range;
 
 #[derive(Debug, Clone)]
@@ -40,7 +43,7 @@ impl TryFrom<config::Config> for Config {
 #[derive(Clone, Debug)]
 pub struct WorldConfig {
     pub stop_timeout: Duration,
-    pub port_range: Range<u16>
+    pub port_range: Range<u16>,
 }
 impl TryFrom<HashMap<String, config::Value>> for WorldConfig {
     type Error = anyhow::Error;
@@ -56,11 +59,23 @@ impl TryFrom<HashMap<String, config::Value>> for WorldConfig {
                     .try_into()?,
             ),
             port_range: {
-                let values = value.get("port_range").context("couldn't get port_range")?.to_string().clone();
+                let values = value
+                    .get("port_range")
+                    .context("couldn't get port_range")?
+                    .to_string()
+                    .clone();
                 let mut values = values.splitn(2, "-");
-                let min = values.next().context("couldn't get port_range")?.parse::<u16>().context("couldn't parse port_range")?;
-                let max = values.next().context("couldn't get port_range")?.parse::<u16>().context("couldn't parse port_range")?;
-                min..max
+                let min = values
+                    .next()
+                    .context("couldn't get port_range")?
+                    .parse::<u16>()
+                    .context("couldn't parse port_range")?;
+                let max = values
+                    .next()
+                    .context("couldn't get port_range")?
+                    .parse::<u16>()
+                    .context("couldn't parse port_range")?;
+                min..max + 1
             },
         })
     }
@@ -134,11 +149,27 @@ impl TryFrom<HashMap<String, config::Value>> for WorldDefaults {
 }
 
 pub static CONFIG: Lazy<Config> = Lazy::new(|| {
+    let config_path = util::dirs::base_dir().join("config.toml");
+
+    if !config_path.exists() {
+        let mut config_file = File::create(&config_path).expect("failed to create config file");
+        config_file
+            .write_all(include_bytes!("resources/default_config.toml"))
+            .expect("failed to write default config file");
+    }
+
     Config::try_from(
         config::Config::builder()
             .add_source(config::File::from_str(
                 include_str!("resources/default_config.toml"),
                 config::FileFormat::Toml,
+            ))
+            .add_source(config::File::with_name(
+                util::dirs::base_dir()
+                    .join("config.toml")
+                    .display()
+                    .to_string()
+                    .as_str(),
             ))
             .build()
             .expect("failed to parse config"),

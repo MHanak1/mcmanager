@@ -17,7 +17,7 @@ pub fn parse_minecraft_properties(file: &str) -> HashMap<String, String> {
 pub fn create_minecraft_properties(properties: HashMap<String, String>) -> String {
     let mut file = String::new();
     for (key, value) in properties {
-        file.push_str(&format!("{}={}\n", key, value));
+        file.push_str(&format!("{key}={value}\n"));
     }
     file
 }

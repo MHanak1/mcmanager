@@ -9,10 +9,17 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use warp::http::StatusCode;
-use warp::{Filter, Reply, reject};
+use warp::{Filter, Rejection, Reply, reject};
 use warp_rate_limit::{RateLimitConfig, RateLimitInfo};
 
-pub trait ApiList: DbObject
+pub trait ApiObject: DbObject {
+    fn filters(
+        db_mutex: Arc<Mutex<Database>>,
+        rate_limit_config: RateLimitConfig,
+    ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone;
+}
+
+pub trait ApiList: ApiObject
 where
     Self: Sized,
     Self: Serialize,
@@ -40,7 +47,8 @@ where
     fn list_filter(
         db_mutex: Arc<Mutex<Database>>,
         rate_limit_config: RateLimitConfig,
-    ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
+    ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone + Send + Sync
+    {
         warp::path("api")
             .and(warp_rate_limit::with_rate_limit(rate_limit_config))
             .and(warp::path(Self::table_name()))
@@ -54,7 +62,7 @@ where
             })
     }
 }
-pub trait ApiGet: DbObject
+pub trait ApiGet: ApiObject
 where
     Self: Sized,
     Self: Serialize,
@@ -83,7 +91,8 @@ where
     fn get_filter(
         db_mutex: Arc<Mutex<Database>>,
         rate_limit_config: RateLimitConfig,
-    ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
+    ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone + Send + Sync
+    {
         warp::path("api")
             .and(warp_rate_limit::with_rate_limit(rate_limit_config))
             .and(warp::path(Self::table_name()))
@@ -98,7 +107,7 @@ where
     }
 }
 
-pub trait ApiCreate: DbObject + FromJson
+pub trait ApiCreate: ApiObject + FromJson
 where
     Self: Sized,
     Self: Serialize,
@@ -164,7 +173,8 @@ where
     fn create_filter(
         db_mutex: Arc<Mutex<Database>>,
         rate_limit_config: RateLimitConfig,
-    ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
+    ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone + Send + Sync
+    {
         warp::path("api")
             .and(warp_rate_limit::with_rate_limit(rate_limit_config))
             .and(warp::path(Self::table_name()))
@@ -180,7 +190,7 @@ where
     }
 }
 
-pub trait ApiUpdate: DbObject + UpdateJson
+pub trait ApiUpdate: ApiObject + UpdateJson
 where
     Self: Sized,
     Self: serde::Serialize,
@@ -245,7 +255,8 @@ where
     fn update_filter(
         db_mutex: Arc<Mutex<Database>>,
         rate_limit_config: RateLimitConfig,
-    ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
+    ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone + Send + Sync
+    {
         warp::path("api")
             .and(warp_rate_limit::with_rate_limit(rate_limit_config))
             .and(warp::path(Self::table_name()))
@@ -262,7 +273,7 @@ where
     }
 }
 
-pub trait ApiRemove: DbObject
+pub trait ApiRemove: ApiObject
 where
     Self: Sized,
     Self: serde::Serialize,
@@ -317,7 +328,8 @@ where
     fn remove_filter(
         db_mutex: Arc<Mutex<Database>>,
         rate_limit_config: RateLimitConfig,
-    ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
+    ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone + Send + Sync
+    {
         warp::path("api")
             .and(warp_rate_limit::with_rate_limit(rate_limit_config))
             .and(warp::path(Self::table_name()))
@@ -332,7 +344,7 @@ where
     }
 }
 
-fn handle_database_error(err: DatabaseError) -> warp::Rejection {
+pub(crate) fn handle_database_error(err: DatabaseError) -> warp::Rejection {
     error!("{err}");
     match err {
         DatabaseError::Unauthorized => reject::custom(rejections::Unauthorized),

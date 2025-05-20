@@ -8,6 +8,8 @@ use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSqlOutput, ValueRe
 use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt::{Debug, Display, Formatter};
+use std::hash::{Hash, Hasher};
+use std::str::FromStr;
 use test_log::test;
 
 pub(crate) const ID_MAX_VALUE: i64 = 281_474_976_710_655;
@@ -322,6 +324,12 @@ impl<'de> Deserialize<'de> for Id {
     }
 }
 
+impl Hash for Id {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.id.hash(state);
+    }
+}
+
 impl From<Id> for i64 {
     fn from(value: Id) -> Self {
         value.id
@@ -445,6 +453,15 @@ impl From<String> for Token {
         Self { token: value }
     }
 }
+
+impl FromStr for Token {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        Self::from_string_ckecked(s.to_string())
+    }
+}
+
 impl FromSql for Token {
     fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
         Ok(Self {

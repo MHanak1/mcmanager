@@ -1,14 +1,20 @@
-use crate::api::handlers::{ApiCreate, ApiGet, ApiList, ApiRemove, ApiUpdate};
-use crate::minecraft;
-use crate::minecraft::server::{InternalServer, MinecraftServer, MinecraftServerStatus};
+use crate::api::filters;
+use crate::api::handlers::{ApiCreate, ApiGet, ApiList, ApiObject, ApiRemove, ApiUpdate};
+use crate::api::util::rejections;
 use crate::database::objects::{DbObject, FromJson, UpdateJson, User};
 use crate::database::types::{Access, Column, Id, Type};
 use crate::database::{Database, DatabaseError};
-use argon2::Version;
+use crate::minecraft;
+use crate::minecraft::server;
+use crate::minecraft::server::MinecraftServerStatus;
+use crate::minecraft::server::internal::InternalServer;
 use rusqlite::types::ToSqlOutput;
 use rusqlite::{Row, ToSql};
-use serde::{Deserialize, Deserializer, Serialize};
-use warp::serve;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::sync::{Arc, Mutex};
+use warp::http::StatusCode;
+use warp::{Filter, Rejection, Reply, reject};
+use warp_rate_limit::{RateLimitConfig, RateLimitInfo};
 
 /// `id`: world's unique [`Id`]
 ///
@@ -23,7 +29,7 @@ use warp::serve;
 /// `version_id`: references [`Version`]
 ///
 /// `enabled`: whether a server hosting this world should be running or not
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Deserialize)]
 pub struct World {
     pub id: Id,
     pub owner_id: Id,
@@ -112,6 +118,26 @@ impl DbObject for World {
         ]
     }
 }
+/*
+impl World {
+    pub fn status(&self) -> MinecraftServerStatus {
+        match minecraft::server::SERVERS
+            .lock()
+            .expect("couldn't get servers")
+            .iter()
+            .find_map(|server| {
+                if server.id() == self.id {
+                    Some(server)
+                } else {
+                    None
+                }
+            }) {
+            Some(server) => *server.status(),
+            None => MinecraftServerStatus::Exited(0),
+        }
+    }
+}
+*/
 
 // Any value that is present is considered Some value, including null.
 fn deserialize_some<'de, T, D>(deserializer: D) -> Result<Option<T>, D::Error>
@@ -147,6 +173,35 @@ impl FromJson for World {
     }
 }
 
+#[derive(Serialize)]
+pub struct JsonTo {
+    pub id: Id,
+    pub owner_id: Id,
+    pub name: String,
+    pub icon_id: Option<Id>,
+    pub allocated_memory: u32,
+    pub version_id: Id,
+    pub enabled: bool,
+}
+
+impl Serialize for World {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        JsonTo {
+            id: self.id,
+            owner_id: self.owner_id,
+            name: self.name.clone(),
+            icon_id: self.icon_id,
+            allocated_memory: self.allocated_memory,
+            version_id: self.version_id,
+            enabled: self.enabled,
+        }
+        .serialize(serializer)
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct JsonUpdate {
     pub name: Option<String>,
@@ -169,15 +224,44 @@ impl UpdateJson for World {
     }
 }
 
+impl ApiObject for World {
+    fn filters(
+        db_mutex: Arc<Mutex<Database>>,
+        rate_limit_config: RateLimitConfig,
+    ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
+        Self::list_filter(db_mutex.clone(), rate_limit_config.clone())
+            .or(Self::status_filter(
+                db_mutex.clone(),
+                rate_limit_config.clone(),
+            ))
+            .or(Self::get_filter(
+                db_mutex.clone(),
+                rate_limit_config.clone(),
+            ))
+            .or(Self::create_filter(
+                db_mutex.clone(),
+                rate_limit_config.clone(),
+            ))
+            .or(Self::update_filter(
+                db_mutex.clone(),
+                rate_limit_config.clone(),
+            ))
+            .or(Self::remove_filter(
+                db_mutex.clone(),
+                rate_limit_config.clone(),
+            ))
+    }
+}
+
 impl ApiList for World {}
 impl ApiGet for World {}
 impl ApiCreate for World {
     fn after_api_create(
         &self,
-        database: &Database,
-        json: &Self::JsonFrom,
+        _database: &Database,
+        _json: &Self::JsonFrom,
     ) -> Result<(), DatabaseError> {
-        let result = minecraft::server::InternalServer::new(self, database)
+        minecraft::server::internal::InternalServer::new(self)
             .map_err(|err| DatabaseError::InternalServerError(err.to_string()))?;
         Ok(())
     }
@@ -185,45 +269,80 @@ impl ApiCreate for World {
 impl ApiUpdate for World {
     fn after_api_update(
         &self,
-        database: &Database,
-        json: &Self::JsonUpdate,
+        _database: &Database,
+        _json: &Self::JsonUpdate,
     ) -> Result<(), DatabaseError> {
-        let mut servers = minecraft::server::SERVERS.lock().expect("Failed to lock servers");
-        let mut server = servers.iter_mut().find_map(|server| {
-            if server.id() == self.id {
-                Some(server)
-            } else {
-                None
-            }
-        });
+        let mut server = server::get_server(self.id);
         if server.is_none() {
-            servers.push(Box::new(
-                InternalServer::new(self, database).map_err(
-                    |err| DatabaseError::InternalServerError(err.to_string()),
-                )?
-            ));
-            server = servers.last_mut();
+            server::add_server(Box::new(
+                InternalServer::new(self)
+                    .map_err(|err| DatabaseError::InternalServerError(err.to_string()))?,
+            ))
+            .map_err(|err| DatabaseError::InternalServerError(err.to_string()))?;
+            server = server::get_server(self.id);
         }
-        let mut server = server.expect("what the fuck");
+        let server = server.expect("what the fuck");
+        let mut server = server.lock().expect("failed to lock server");
 
         if self.enabled {
-            match server.status() {
-                MinecraftServerStatus::Running => {Err(DatabaseError::InternalServerError("Server is already running".parse().unwrap()))}
-                MinecraftServerStatus::Stopping => {Err(DatabaseError::InternalServerError("Server is currently stopping".parse().unwrap()))}
-                MinecraftServerStatus::Exited(_) => {
-                    server
-                        .start(database)
-                        .map_err(|err| DatabaseError::InternalServerError(err.to_string()))?;
-                    Ok(())
-                }
-            }
-        }
-        else {
             server
-                .stop(database)
+                .start()
+                .map_err(|err| DatabaseError::InternalServerError(err.to_string()))?;
+            Ok(())
+        } else {
+            server
+                .stop()
                 .map_err(|err| DatabaseError::InternalServerError(err.to_string()))?;
             Ok(())
         }
     }
 }
 impl ApiRemove for World {}
+
+impl World {
+    #[allow(clippy::needless_pass_by_value)]
+    fn world_get_status(
+        _rate_limit_info: RateLimitInfo,
+        id: String,
+        db_mutex: Arc<Mutex<Database>>,
+        user: User,
+    ) -> Result<impl warp::Reply, warp::Rejection> {
+        let id = Id::from_string(&id).map_err(|_| reject::custom(rejections::NotFound))?;
+        let database = db_mutex.lock().map_err(|err| {
+            reject::custom(rejections::InternalServerError::from(err.to_string()))
+        })?;
+
+        database
+            .get_one::<Self>(id, Some(&user))
+            .map_err(crate::api::handlers::handle_database_error)?;
+
+        let server = server::get_server(id);
+        let status = match server {
+            Some(server) => *server.lock().expect("failed to get server").status(),
+            None => MinecraftServerStatus::Exited(0),
+        };
+
+        Ok(warp::reply::with_status(
+            warp::reply::json(&status),
+            StatusCode::OK,
+        ))
+    }
+
+    pub fn status_filter(
+        db_mutex: Arc<Mutex<Database>>,
+        rate_limit_config: RateLimitConfig,
+    ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
+        warp::path("api")
+            .and(warp_rate_limit::with_rate_limit(rate_limit_config))
+            .and(warp::path(Self::table_name()))
+            .and(warp::path::param::<String>())
+            .and(warp::path("status"))
+            .and(warp::path::end())
+            .and(warp::get())
+            .and(filters::with_db(db_mutex.clone()))
+            .and(filters::with_auth(db_mutex))
+            .and_then(|rate_limit_info, id, db_mutex, user| async move {
+                Self::world_get_status(rate_limit_info, id, db_mutex, user)
+            })
+    }
+}

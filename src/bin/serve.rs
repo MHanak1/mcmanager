@@ -1,9 +1,10 @@
 use mcmanager::api::filters;
-use mcmanager::api::handlers::{ApiCreate, ApiGet, ApiList, ApiRemove, ApiUpdate};
+use mcmanager::api::handlers::ApiObject;
 use mcmanager::config;
 use mcmanager::database::Database;
 use mcmanager::database::objects::{InviteLink, Mod, ModLoader, Session, User, Version, World};
 use mcmanager::{api, util};
+use std::io::Write;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::Path;
 use std::str::FromStr;
@@ -13,10 +14,12 @@ use test_log::test;
 use warp::Filter;
 
 #[tokio::main]
-async fn main() {
-    thread::spawn(|| loop {
-        mcmanager::minecraft::server::refresh_local_servers();
-        thread::sleep(std::time::Duration::from_millis(1000));
+async fn main() -> anyhow::Result<()> {
+    thread::spawn(|| {
+        loop {
+            mcmanager::minecraft::server::util::refresh_servers();
+            thread::sleep(std::time::Duration::from_millis(1000));
+        }
     });
 
     env_logger::init();
@@ -24,7 +27,14 @@ async fn main() {
         .expect("failed to open the database");
     let database = Database { conn };
     database.init().expect("failed to initialize database");
+    let config_path = util::dirs::base_dir().join("config.toml");
+    if !config_path.exists() {
+        let mut config_file = std::fs::File::create(config_path)?;
+        config_file.write_all(include_bytes!("../resources/default_config.toml"))?;
+    }
+
     run(database, config::CONFIG.clone()).await;
+    Ok(())
 }
 
 pub async fn run(database: Database, config: config::Config) {
@@ -58,6 +68,7 @@ pub async fn run(database: Database, config: config::Config) {
         .and(filters::with_auth(db_mutex.clone()))
         .and_then(api::handlers::user_info);
 
+    /*
     let mods = Mod::list_filter(db_mutex.clone(), private_routes_rate_limit.clone())
         .or(Mod::create_filter(
             db_mutex.clone(),
@@ -110,6 +121,10 @@ pub async fn run(database: Database, config: config::Config) {
             private_routes_rate_limit.clone(),
         ));
     let worlds = World::list_filter(db_mutex.clone(), private_routes_rate_limit.clone())
+        .or(World::status_filter (
+            db_mutex.clone(),
+            private_routes_rate_limit.clone(),
+        ))
         .or(World::create_filter(
             db_mutex.clone(),
             private_routes_rate_limit.clone(),
@@ -169,19 +184,41 @@ pub async fn run(database: Database, config: config::Config) {
             db_mutex.clone(),
             private_routes_rate_limit.clone(),
         ));
+     */
 
     let log = warp::log("info");
 
     warp::serve(
         login
             .or(user_info)
-            .or(mods)
-            .or(versions)
-            .or(mod_loaders)
-            .or(worlds)
-            .or(users)
-            .or(sessions)
-            .or(invite_links)
+            .or(Mod::filters(
+                db_mutex.clone(),
+                private_routes_rate_limit.clone(),
+            ))
+            .or(Version::filters(
+                db_mutex.clone(),
+                private_routes_rate_limit.clone(),
+            ))
+            .or(ModLoader::filters(
+                db_mutex.clone(),
+                private_routes_rate_limit.clone(),
+            ))
+            .or(World::filters(
+                db_mutex.clone(),
+                private_routes_rate_limit.clone(),
+            ))
+            .or(User::filters(
+                db_mutex.clone(),
+                private_routes_rate_limit.clone(),
+            ))
+            .or(Session::filters(
+                db_mutex.clone(),
+                private_routes_rate_limit.clone(),
+            ))
+            .or(InviteLink::filters(
+                db_mutex.clone(),
+                private_routes_rate_limit.clone(),
+            ))
             .recover(api::handlers::handle_rejection)
             .with(log),
     )

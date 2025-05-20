@@ -1,5 +1,5 @@
 pub use self::{password::Password, session::Session};
-use crate::api::handlers::{ApiCreate, ApiGet, ApiList, ApiRemove, ApiUpdate};
+use crate::api::handlers::{ApiCreate, ApiGet, ApiList, ApiObject, ApiRemove, ApiUpdate};
 use crate::config::CONFIG;
 use crate::database::objects::{DbObject, FromJson, UpdateJson};
 use crate::database::types::{Access, Column, Id, Type};
@@ -8,6 +8,9 @@ use log::warn;
 use rusqlite::types::ToSqlOutput;
 use rusqlite::{Row, ToSql};
 use serde::{Deserialize, Deserializer, Serialize};
+use std::sync::{Arc, Mutex};
+use warp::{Filter, Rejection, Reply};
+use warp_rate_limit::RateLimitConfig;
 
 /// `id`: user's unique [`Id`]
 ///
@@ -255,6 +258,31 @@ impl UpdateJson for User {
     }
 }
 
+impl ApiObject for User {
+    fn filters(
+        db_mutex: Arc<Mutex<Database>>,
+        rate_limit_config: RateLimitConfig,
+    ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
+        Self::list_filter(db_mutex.clone(), rate_limit_config.clone())
+            .or(Self::get_filter(
+                db_mutex.clone(),
+                rate_limit_config.clone(),
+            ))
+            .or(Self::create_filter(
+                db_mutex.clone(),
+                rate_limit_config.clone(),
+            ))
+            .or(Self::update_filter(
+                db_mutex.clone(),
+                rate_limit_config.clone(),
+            ))
+            .or(Self::remove_filter(
+                db_mutex.clone(),
+                rate_limit_config.clone(),
+            ))
+    }
+}
+
 impl ApiList for User {}
 impl ApiGet for User {}
 impl ApiCreate for User {
@@ -400,13 +428,18 @@ pub mod password {
 }
 
 pub mod session {
-    use crate::api::handlers::{ApiCreate, ApiGet, ApiList, ApiRemove};
+    use crate::api::handlers::{ApiCreate, ApiGet, ApiList, ApiObject, ApiRemove};
+    use crate::database::Database;
     use crate::database::objects::{DbObject, FromJson, User};
     use crate::database::types::{Access, Column, Id, Token, Type};
     use chrono::{DateTime, Utc};
     use rusqlite::types::ToSqlOutput;
     use rusqlite::{Row, ToSql};
     use serde::{Deserialize, Serialize, Serializer};
+    use std::sync::{Arc, Mutex};
+    use warp::{Filter, Rejection, Reply};
+    use warp_rate_limit::RateLimitConfig;
+
     /// `user_id`: unique [`Id`] of the user who created the session
     ///
     /// `token`: the session [`Token`]
@@ -520,6 +553,27 @@ pub mod session {
                 expires: self.expires,
             }
             .serialize(serializer)
+        }
+    }
+
+    impl ApiObject for Session {
+        fn filters(
+            db_mutex: Arc<Mutex<Database>>,
+            rate_limit_config: RateLimitConfig,
+        ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
+            Self::list_filter(db_mutex.clone(), rate_limit_config.clone())
+                .or(Self::get_filter(
+                    db_mutex.clone(),
+                    rate_limit_config.clone(),
+                ))
+                .or(Self::create_filter(
+                    db_mutex.clone(),
+                    rate_limit_config.clone(),
+                ))
+                .or(Self::remove_filter(
+                    db_mutex.clone(),
+                    rate_limit_config.clone(),
+                ))
         }
     }
 

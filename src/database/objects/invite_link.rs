@@ -1,4 +1,5 @@
-use crate::api::handlers::{ApiCreate, ApiGet, ApiList, ApiRemove};
+use crate::api::handlers::{ApiCreate, ApiGet, ApiList, ApiObject, ApiRemove};
+use crate::database::Database;
 use crate::database::objects::{DbObject, FromJson, User};
 use crate::database::types::{Access, Column, Id, Token, Type};
 use chrono::{DateTime, Utc};
@@ -6,6 +7,9 @@ use rusqlite::types::ToSqlOutput;
 use rusqlite::{Row, ToSql};
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
+use std::sync::{Arc, Mutex};
+use warp::{Filter, Rejection, Reply};
+use warp_rate_limit::RateLimitConfig;
 
 /// `id`: unique [`Id`] of the invite link
 ///
@@ -105,6 +109,26 @@ impl FromJson for InviteLink {
     }
 }
 
+impl ApiObject for InviteLink {
+    fn filters(
+        db_mutex: Arc<Mutex<Database>>,
+        rate_limit_config: RateLimitConfig,
+    ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
+        Self::list_filter(db_mutex.clone(), rate_limit_config.clone())
+            .or(Self::get_filter(
+                db_mutex.clone(),
+                rate_limit_config.clone(),
+            ))
+            .or(Self::create_filter(
+                db_mutex.clone(),
+                rate_limit_config.clone(),
+            ))
+            .or(Self::remove_filter(
+                db_mutex.clone(),
+                rate_limit_config.clone(),
+            ))
+    }
+}
 impl ApiList for InviteLink {}
 impl ApiGet for InviteLink {}
 impl ApiCreate for InviteLink {}

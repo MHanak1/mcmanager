@@ -6,6 +6,10 @@ pub mod rejections {
     impl Reject for NotFound {}
 
     #[derive(Debug)]
+    pub struct MethodNotAllowed;
+    impl Reject for MethodNotAllowed {}
+
+    #[derive(Debug)]
     pub struct InternalServerError {
         pub error: String,
     }

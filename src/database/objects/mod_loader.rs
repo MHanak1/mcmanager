@@ -1,10 +1,14 @@
-use crate::api::handlers::{ApiCreate, ApiGet, ApiList, ApiRemove, ApiUpdate};
+use crate::api::handlers::{ApiCreate, ApiGet, ApiList, ApiObject, ApiRemove, ApiUpdate};
+use crate::database::Database;
 use crate::database::objects::{DbObject, FromJson, UpdateJson, User};
 use crate::database::types::{Access, Column, Id, Type};
 use rusqlite::types::ToSqlOutput;
 use rusqlite::{Row, ToSql};
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
+use std::sync::{Arc, Mutex};
+use warp::{Filter, Rejection, Reply};
+use warp_rate_limit::RateLimitConfig;
 
 /// `id`: the mod loader's unique [`Id`]
 ///
@@ -105,6 +109,31 @@ impl UpdateJson for ModLoader {
         new.name = data.name.clone().unwrap_or(new.name);
         new.can_load_mods = data.can_load_mods.unwrap_or(new.can_load_mods);
         new
+    }
+}
+
+impl ApiObject for ModLoader {
+    fn filters(
+        db_mutex: Arc<Mutex<Database>>,
+        rate_limit_config: RateLimitConfig,
+    ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
+        Self::list_filter(db_mutex.clone(), rate_limit_config.clone())
+            .or(Self::get_filter(
+                db_mutex.clone(),
+                rate_limit_config.clone(),
+            ))
+            .or(Self::create_filter(
+                db_mutex.clone(),
+                rate_limit_config.clone(),
+            ))
+            .or(Self::update_filter(
+                db_mutex.clone(),
+                rate_limit_config.clone(),
+            ))
+            .or(Self::remove_filter(
+                db_mutex.clone(),
+                rate_limit_config.clone(),
+            ))
     }
 }
 
