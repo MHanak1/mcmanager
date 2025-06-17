@@ -17,6 +17,7 @@ pub struct Config {
     pub world: WorldConfig,
     pub user_defaults: UserDefaults,
     pub world_defaults: WorldDefaults,
+    pub velocity: VelocityConfig,
 }
 
 impl TryFrom<config::Config> for Config {
@@ -36,6 +37,7 @@ impl TryFrom<config::Config> for Config {
             world: WorldConfig::try_from(value.get_table("world")?)?,
             user_defaults: UserDefaults::try_from(value.get_table("user_defaults")?)?,
             world_defaults: WorldDefaults::try_from(value.get_table("world_defaults")?)?,
+            velocity: VelocityConfig::try_from(value.get_table("velocity")?)?,
         })
     }
 }
@@ -44,6 +46,7 @@ impl TryFrom<config::Config> for Config {
 pub struct WorldConfig {
     pub stop_timeout: Duration,
     pub port_range: Range<u16>,
+    pub java_launch_command: String,
 }
 impl TryFrom<HashMap<String, config::Value>> for WorldConfig {
     type Error = anyhow::Error;
@@ -77,6 +80,10 @@ impl TryFrom<HashMap<String, config::Value>> for WorldConfig {
                     .context("couldn't parse port_range")?;
                 min..max + 1
             },
+            java_launch_command: value
+                .get("java_launch_command")
+                .context("couldn't get lava_launch_command")?
+                .to_string(),
         })
     }
 }
@@ -144,6 +151,31 @@ impl TryFrom<HashMap<String, config::Value>> for WorldDefaults {
                 .context("couldn't get allocated_memory")?
                 .clone()
                 .into_int()? as u32,
+        })
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct VelocityConfig {
+    pub port: u16,
+    pub executable_name: String,
+}
+
+impl TryFrom<HashMap<String, config::Value>> for VelocityConfig {
+    type Error = anyhow::Error;
+
+    fn try_from(value: HashMap<String, config::Value>) -> Result<Self, Self::Error> {
+        Ok(Self {
+            port: value
+                .get("port")
+                .context("couldn't get velocity port")?
+                .clone()
+                .into_int()? as u16,
+            executable_name: value
+                .get("executable_name")
+                .context("couldn't get velocity executable_name")?
+                .clone()
+                .to_string(),
         })
     }
 }

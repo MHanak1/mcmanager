@@ -1,8 +1,11 @@
+use log::{error, info};
 use mcmanager::api::filters;
 use mcmanager::api::handlers::ApiObject;
 use mcmanager::config;
+use mcmanager::config::CONFIG;
 use mcmanager::database::Database;
 use mcmanager::database::objects::{InviteLink, Mod, ModLoader, Session, User, Version, World};
+use mcmanager::minecraft::velocity::{InternalVelocityServer, VelocityServer};
 use mcmanager::{api, util};
 use std::io::Write;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -18,6 +21,21 @@ async fn main() -> anyhow::Result<()> {
     thread::spawn(|| {
         loop {
             mcmanager::minecraft::server::util::refresh_servers();
+            thread::sleep(std::time::Duration::from_millis(1000));
+        }
+    });
+
+    thread::spawn(|| {
+        info!("starting velocity at {}", CONFIG.velocity.port);
+        let mut velocity_server = InternalVelocityServer::new()
+        .expect("failed to create a velocity server");
+        velocity_server
+            .start()
+            .expect("failed to start a velocity server");
+        loop {
+            if let Err(err) = velocity_server.update() {
+                error!("failed to update velocity server: {err}");
+            }
             thread::sleep(std::time::Duration::from_millis(1000));
         }
     });

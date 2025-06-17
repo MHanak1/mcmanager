@@ -9,16 +9,14 @@ use std::sync::{Arc, Mutex};
 use warp::{Filter, Rejection, Reply};
 use warp_rate_limit::RateLimitConfig;
 
-/// `id`: version's unique [`Id`]
-///
-/// `minecraft_version`: version string displayed to the client (like "1.20.1")
-///
-/// `mod_loader_id`: references [`ModLoader`]
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 #[allow(clippy::struct_field_names)]
 pub struct Version {
+    /// version's unique [`Id`]
     pub id: Id,
+    /// version string displayed to the client (like "1.20.1")
     pub minecraft_version: String,
+    /// which [`ModLoader`] does the version use
     pub mod_loader_id: Id,
 }
 

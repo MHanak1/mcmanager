@@ -52,29 +52,40 @@ pub trait DbObject {
     }
 
     #[allow(unused)]
+    /// Called before the object gets inserted into the database
     fn before_create(&self, database: &Database) {}
     #[allow(unused)]
+    /// Called after the object gets inserted into the database
     fn before_update(&self, database: &Database) {}
     #[allow(unused)]
+    /// Called before the object gets updated in the database
     fn before_delete(&self, database: &Database) {}
     #[allow(unused)]
+    /// Called after the object gets updated the database
     fn after_create(&self, database: &Database) {}
     #[allow(unused)]
+    /// Called before the object gets removed from the database
     fn after_update(&self, database: &Database) {}
     #[allow(unused)]
+    /// Called before the object gets removed from the database
     fn after_delete(&self, database: &Database) {}
 
+    /// the name of the table SQL table the object will be stored in. used also for api routing
     fn table_name() -> &'static str;
 
+    /// a vector of [`Column`]s to be stored in the database
     fn columns() -> Vec<Column>;
-    /// Returns object's Id
+    /// convert the object from [`Row`]
     fn from_row(row: &Row) -> rusqlite::Result<Self>
     where
         Self: Sized;
+    /// returns object's [`Id`]
     fn get_id(&self) -> Id;
+    /// the index of the column with the [`Id`] of the object. default is 0
     fn id_column_index() -> usize {
         0
     }
+    /// returns a [`Column`] at a specified index
     fn get_column(name: &str) -> Option<Column> {
         Self::columns()
             .iter()
@@ -82,10 +93,12 @@ pub trait DbObject {
             .map(|c| c.to_owned())
     }
 
+    /// returns the index of a column with the specified name
     fn get_column_index(name: &str) -> Option<usize> {
         Self::columns().iter().position(|c| c.name == name)
     }
 
+    /// generate the string needed to generate a SQL table
     fn database_descriptor() -> String {
         Self::columns()
             .iter()
@@ -94,6 +107,7 @@ pub trait DbObject {
             .join(", ")
     }
 
+    /// a vector of [`ToSqlOutput`] from every field of the object
     fn params(&self) -> Vec<ToSqlOutput>;
 }
 

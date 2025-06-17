@@ -16,27 +16,23 @@ use warp::http::StatusCode;
 use warp::{Filter, Rejection, Reply, reject};
 use warp_rate_limit::{RateLimitConfig, RateLimitInfo};
 
-/// `id`: world's unique [`Id`]
-///
-/// `owner_id`: references [`User`]
-///
-/// `name`: world's name
-///
-/// `icon_id`: id of the icon stored in the filesystem (data/icons)
-///
-/// `allocated_memory`: amount of memory allocated to the server in MiB
-///
-/// `version_id`: references [`Version`]
-///
-/// `enabled`: whether a server hosting this world should be running or not
-#[derive(Debug, PartialEq, Eq, Clone, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub struct World {
+    /// world's unique [`Id`]
     pub id: Id,
+    /// references [`User`]
     pub owner_id: Id,
+    /// world's name
     pub name: String,
+    /// the subdomain the the server will be under
+    pub hostname: String,
+    /// id of the icon stored in the filesystem (data/icons)
     pub icon_id: Option<Id>,
+    /// amount of memory allocated to the server in MiB
     pub allocated_memory: u32,
+    /// references [`Version`]
     pub version_id: Id,
+    /// whether a server hosting this world should be running or not
     pub enabled: bool,
 }
 
@@ -64,6 +60,7 @@ impl DbObject for World {
                 .not_null()
                 .references("users(id)"),
             Column::new("name", Type::Text).not_null(),
+            Column::new("hostname", Type::Text).not_null().unique(),
             Column::new("icon_id", Type::Id),
             Column::new("allocated_memory", Type::Integer(false)),
             Column::new("version_id", Type::Id)
@@ -83,10 +80,11 @@ impl DbObject for World {
             id: row.get(0)?,
             owner_id: row.get(1)?,
             name: row.get(2)?,
-            icon_id: row.get(3)?,
-            allocated_memory: row.get(4)?,
-            version_id: row.get(5)?,
-            enabled: row.get(6)?,
+            hostname: row.get(3)?,
+            icon_id: row.get(4)?,
+            allocated_memory: row.get(5)?,
+            version_id: row.get(6)?,
+            enabled: row.get(7)?,
         })
     }
     fn get_id(&self) -> Id {
@@ -101,6 +99,9 @@ impl DbObject for World {
                 .to_sql()
                 .expect("failed to convert the value to sql"),
             self.name
+                .to_sql()
+                .expect("failed to convert the value to sql"),
+            self.hostname
                 .to_sql()
                 .expect("failed to convert the value to sql"),
             self.icon_id
@@ -151,6 +152,7 @@ where
 #[derive(Debug, Clone, Deserialize)]
 pub struct JsonFrom {
     pub name: String,
+    pub hostname: String,
     pub icon_id: Option<Id>,
     pub allocated_memory: Option<u32>,
     pub version_id: Id,
@@ -163,6 +165,7 @@ impl FromJson for World {
             id: Id::default(),
             owner_id: user.id,
             name: data.name.clone(),
+            hostname: data.hostname.clone(),
             icon_id: data.icon_id,
             allocated_memory: data
                 .allocated_memory
@@ -173,38 +176,10 @@ impl FromJson for World {
     }
 }
 
-#[derive(Serialize)]
-pub struct JsonTo {
-    pub id: Id,
-    pub owner_id: Id,
-    pub name: String,
-    pub icon_id: Option<Id>,
-    pub allocated_memory: u32,
-    pub version_id: Id,
-    pub enabled: bool,
-}
-
-impl Serialize for World {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        JsonTo {
-            id: self.id,
-            owner_id: self.owner_id,
-            name: self.name.clone(),
-            icon_id: self.icon_id,
-            allocated_memory: self.allocated_memory,
-            version_id: self.version_id,
-            enabled: self.enabled,
-        }
-        .serialize(serializer)
-    }
-}
-
 #[derive(Debug, Clone, Deserialize)]
 pub struct JsonUpdate {
     pub name: Option<String>,
+    pub hostname: Option<String>,
     #[serde(default, deserialize_with = "deserialize_some")]
     pub icon_id: Option<Option<Id>>,
     pub allocated_memory: Option<u32>,
@@ -216,6 +191,7 @@ impl UpdateJson for World {
     fn update_with_json(&self, data: &Self::JsonUpdate) -> Self {
         let mut new = self.clone();
         new.name = data.name.clone().unwrap_or(new.name);
+        new.hostname = data.hostname.clone().unwrap_or(new.hostname);
         new.icon_id = data.icon_id.unwrap_or(new.icon_id);
         new.allocated_memory = data.allocated_memory.unwrap_or(new.allocated_memory);
         new.version_id = data.version_id.unwrap_or(new.version_id);
@@ -280,10 +256,15 @@ impl ApiUpdate for World {
             ))
             .map_err(|err| DatabaseError::InternalServerError(err.to_string()))?;
             server = server::get_server(self.id);
+            assert!(server.is_some());
         }
-        let server = server.expect("what the fuck");
+        let server = server.unwrap();
         let mut server = server.lock().expect("failed to lock server");
 
+        server
+            .update_world(self.clone())
+            .map_err(|err| DatabaseError::InternalServerError(err.to_string()))
+        /*
         if self.enabled {
             server
                 .start()
@@ -295,6 +276,7 @@ impl ApiUpdate for World {
                 .map_err(|err| DatabaseError::InternalServerError(err.to_string()))?;
             Ok(())
         }
+         */
     }
 }
 impl ApiRemove for World {}
@@ -318,9 +300,27 @@ impl World {
 
         let server = server::get_server(id);
         let status = match server {
-            Some(server) => *server.lock().expect("failed to get server").status(),
-            None => MinecraftServerStatus::Exited(0),
+            Some(server) => server.lock().expect("failed to get server").status(),
+            None => Ok(MinecraftServerStatus::Exited(0)),
+        }.map_err(|err| warp::reject::custom(rejections::InternalServerError::from(err)))?;
+
+        #[derive(Serialize)]
+        struct Status {
+            status: String,
+            code: u32,
+        }
+
+        let status = match status {
+            MinecraftServerStatus::Running => Status {
+                status: "running".to_string(),
+                code: 0,
+            },
+            MinecraftServerStatus::Exited(code) => Status {
+                status: "exited".to_string(),
+                code
+            }
         };
+
 
         Ok(warp::reply::with_status(
             warp::reply::json(&status),

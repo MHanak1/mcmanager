@@ -12,34 +12,27 @@ use std::sync::{Arc, Mutex};
 use warp::{Filter, Rejection, Reply};
 use warp_rate_limit::RateLimitConfig;
 
-/// `id`: user's unique [`Id`]
-///
-/// `username`: user's unique name
-///
-/// `memory_limit`: limit of user's total allocatable memory in MiB. [`None`] means no limit
-///
-/// `player_limit`: per-world player limit. [`None`] means no limit
-///
-/// `world_limit`: how many worlds can a user create. [`None`] means no limit
-///
-/// `active_world_limit`: how many worlds can be enabled at a time. [`None`] means no limit
-///
-/// `storage_limit`: how much storage is available to a user in MiB. [`None`] means no limit
-///
-/// `is_privileged`: whether a user has administrative privileges, this means they can manage other users and create new accounts
-///
-/// `enabled`: whether the user can access the API
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub struct User {
+    /// user's unique [`Id`]
     pub id: Id,
+    /// user's unique name
     pub username: String,
+    /// [`Id`] of the avatar stored in the filesystem (data/avatars)
     pub avatar_id: Option<Id>,
+    /// limit of user's total allocatable memory in MiB. [`None`] means no limit
     pub memory_limit: Option<u32>,
+    /// per-world player limit. [`None`] means no limit
     pub player_limit: Option<u32>,
+    /// how many worlds can a user create. [`None`] means no limit
     pub world_limit: Option<u32>,
+    /// how many worlds can be enabled at a time. [`None`] means no limit
     pub active_world_limit: Option<u32>,
+    /// how much storage is available to a user in MiB. [`None`] means no limit
     pub storage_limit: Option<u32>,
+    /// whether a user has administrative privileges, this means they can manage other users and create new accounts
     pub is_privileged: bool,
+    /// whether the user can access the API
     pub enabled: bool,
 }
 

@@ -11,18 +11,15 @@ use std::sync::{Arc, Mutex};
 use warp::{Filter, Rejection, Reply};
 use warp_rate_limit::RateLimitConfig;
 
-/// `id`: unique [`Id`] of the invite link
-///
-/// `invite_token`: a [`Token`] that allows for creation of an account. expires after use.
-///
-/// `creator_id`: the user who created the link
-///
-/// `created`: when was the link created (to allow for link expiry)
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub struct InviteLink {
+    /// Unique [`Id`] of the invite link
     pub id: Id,
+    /// A [`Token`] that allows for creation of an account. expires after use.
     pub invite_token: Token,
+    /// The user who created the link
     pub creator_id: Id,
+    /// When was the link created (to allow for link expiry)
     pub created: DateTime<Utc>,
 }
 

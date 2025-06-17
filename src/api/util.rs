@@ -1,4 +1,5 @@
 pub mod rejections {
+    use std::error::Error;
     use warp::reject::Reject;
 
     #[derive(Debug)]
@@ -14,9 +15,11 @@ pub mod rejections {
         pub error: String,
     }
 
-    impl From<String> for InternalServerError {
-        fn from(value: String) -> Self {
-            Self { error: value }
+    impl<T: ToString> From<T> for InternalServerError {
+        fn from(value: T) -> Self {
+            Self {
+                error: value.to_string(),
+            }
         }
     }
 

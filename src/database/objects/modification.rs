@@ -10,24 +10,19 @@ use std::sync::{Arc, Mutex};
 use warp::{Filter, Rejection, Reply};
 use warp_rate_limit::RateLimitConfig;
 
-/// `id`: mod's unique [`Id`]
-///
-/// `owner_id`: references [`User`]
-///
-/// `version_id`: references [`Version`]
-///
-/// `name`: name displayed to the client
-///
-/// `description`: mod's description
-///
-/// `icon_id`: id of the icon stored in the filesystem (data/icons)
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub struct Mod {
+    /// Mod's unique [`Id`]
     pub id: Id,
+    /// [`User`] who created nad owns the mod
     pub owner_id: Id,
+    /// Minecraft's [`Version`] the mod is compatible with
     pub version_id: Id,
+    /// Name displayed to the client
     pub name: String,
+    /// Mod's description
     pub description: String,
+    /// [`Id`] of the icon stored in the filesystem (data/icons)
     pub icon_id: Option<Id>,
 }
 

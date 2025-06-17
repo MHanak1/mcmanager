@@ -1,7 +1,8 @@
 use crate::database::objects::World;
 use crate::database::types::Id;
 use anyhow::{Context, Result, anyhow};
-use serde::{Serialize, Serializer};
+use log::error;
+use serde::{Deserialize, Serialize, Serializer};
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::{Arc, LazyLock, Mutex};
@@ -10,7 +11,13 @@ type ServerMutex = Arc<Mutex<Box<dyn MinecraftServer>>>;
 static SERVERS: LazyLock<Mutex<HashMap<Id, ServerMutex>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Server {
+    pub world: World,
+    pub status: MinecraftServerStatus,
+}
+
+#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 pub enum MinecraftServerStatus {
     Running,
     Exited(u32),
@@ -33,69 +40,45 @@ pub fn add_server(server: Box<dyn MinecraftServer>) -> anyhow::Result<()> {
     }
 }
 
+pub fn remove_server(id: &Id) -> anyhow::Result<()> {
+    match SERVERS.lock() {
+        Ok(mut servers) => {
+            servers.remove(id);
+            Ok(())
+        }
+        Err(err) => Err(anyhow!("failed to lock servers: {}", err)),
+    }
+}
+
+pub fn get_all_servers() -> Vec<ServerMutex> {
+    SERVERS
+        .lock()
+        .unwrap()
+        .values()
+        .map(|server| server.clone())
+        .collect()
+}
+
 pub fn get_all_worlds() -> Vec<World> {
     SERVERS
         .lock()
         .unwrap()
         .values()
-        .map(|server| {
-            server
-                .lock()
-                .expect("failed to lock server")
-                .world()
-                .clone()
-        })
+        .filter_map(|server| server.lock().expect("failed to lock server").world().ok())
         .collect()
 }
 
-impl Serialize for MinecraftServerStatus {
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        match self {
-            MinecraftServerStatus::Running => serializer.serialize_str("running"),
-            MinecraftServerStatus::Exited(code) => {
-                serializer.serialize_str(&format!("exited: {code}"))
-            }
-        }
-    }
-}
-
+/*
 pub trait MinecraftServer: Send {
-    fn initialise_files(&self) -> Result<()> {
-        let port = self
-            .port()
-            .context("Port not set, cannot initialise files")?;
-
-        let properties = self
-            .read_file("server.properties")
-            .unwrap_or(include_str!("../resources/server.properties").to_string());
-        let mut properties = crate::minecraft::util::parse_minecraft_properties(&properties);
-        properties.insert(String::from("query.port"), format!("{port}"));
-        properties.insert(String::from("server-port"), format!("{port}",));
-
-        let properties = crate::minecraft::util::create_minecraft_properties(properties);
-        self.write_file("server.properties", &properties)?;
-
-        self.write_file("eula.txt", "eula=true")?;
-
-        Ok(())
-    }
     fn start(&mut self) -> Result<()>;
     fn stop(&mut self) -> Result<()>;
     fn id(&self) -> Id;
-    fn status(&self) -> &MinecraftServerStatus;
+    fn world_and_status(&self) -> Result<Server>;
+    fn status(&self) -> MinecraftServerStatus;
+    fn world(&self) -> World;
     fn port(&self) -> Option<u16>;
     fn host(&self) -> String;
-    fn world(&self) -> World;
-    fn set_world(&mut self, world: World);
-    fn update_world(&mut self, world: World) -> Result<()> {
-        self.stop()?;
-        self.set_world(world);
-        self.start()?;
-        Ok(())
-    }
+    fn set_world(&mut self, world: World) -> Result<()>;
     fn refresh(&mut self);
     fn read_console(&mut self) -> Result<String>;
     fn write_console(&mut self, data: &[u8]) -> Result<()>;
@@ -103,15 +86,32 @@ pub trait MinecraftServer: Send {
     fn write_file(&self, path: &str, data: &str) -> Result<()>;
     fn remove_file(&self, path: &str) -> Result<()>;
 }
+ */
+
+pub trait MinecraftServer: Send {
+    fn update_world(&mut self, world: World) -> Result<()>;
+    fn id(&self) -> Id;
+    fn world(&self) -> Result<World>;
+    fn status(&self) -> Result<MinecraftServerStatus>;
+    /// to which port is the server bound to
+    fn port(&self) -> Option<u16>;
+    /// under what subdomain is the server avaliable)
+    fn host(&self) -> String;
+    /// Where the minecraft server resides
+    fn hostname(&self) -> Option<String>;
+    /// updates the status of the server. this should return false if the server is updated through somewhere else
+    fn refresh(&mut self) -> bool;
+}
 
 pub mod internal {
+    use crate::config::CONFIG;
     use crate::database::objects::World;
     use crate::database::types::Id;
-    use crate::minecraft::server::{MinecraftServer, MinecraftServerStatus};
+    use crate::minecraft::server::{MinecraftServer, MinecraftServerStatus, Server};
     use crate::util;
     use anyhow::Result;
     use anyhow::{Context, bail};
-    use log::{debug, info, warn};
+    use log::{debug, error, info, warn};
     use std::collections::HashSet;
     use std::fs::File;
     use std::io::{Read, Write};
@@ -128,7 +128,7 @@ pub mod internal {
             .world
             .port_range
             .clone()
-            .find(|&port| !servers.contains(&port))
+            .find(|&port| !servers.contains(&port) && port != CONFIG.velocity.port)
     }
 
     pub struct InternalServer {
@@ -136,22 +136,48 @@ pub mod internal {
         world: World,
         directory: PathBuf,
         port: Option<u16>,
+        hostname: String,
         process: Option<Popen>,
     }
     impl InternalServer {
         pub fn new(world: &World) -> Result<Self> {
-            Ok(Self {
+            let mut new = Self {
                 status: MinecraftServerStatus::Exited(0),
                 world: world.clone(),
                 directory: util::dirs::worlds_dir()
                     .join(format!("{}/{}", world.owner_id, world.id)),
                 port: None,
+                hostname: world.hostname.clone(),
                 process: None,
-            })
+            };
+            if world.enabled {
+                new.start()?;
+            }
+            Ok(new)
+        }
+
+        fn initialise_files(&self) -> Result<()> {
+            let port = self
+                .port()
+                .context("Port not set, cannot initialise files")?;
+
+            let properties = self
+                .read_file("server.properties")
+                .unwrap_or(include_str!("../resources/server.properties").to_string());
+            let mut properties = crate::minecraft::util::parse_minecraft_properties(&properties);
+            properties.insert(String::from("query.port"), format!("{port}"));
+            properties.insert(String::from("server-port"), format!("{port}",));
+
+            let properties = crate::minecraft::util::create_minecraft_properties(properties);
+            self.write_file("server.properties", &properties)?;
+
+            self.write_file("eula.txt", "eula=true")?;
+
+            Ok(())
         }
     }
 
-    impl MinecraftServer for InternalServer {
+    impl InternalServer {
         fn start(&mut self) -> Result<()> {
             let jar_path =
                 util::dirs::versions_dir().join(format!("{}.jar", self.world.version_id));
@@ -164,7 +190,8 @@ pub mod internal {
             }
 
             if self.process.is_some() {
-                bail!("server already running");
+                debug!("server already running");
+                return Ok(());
             }
 
             let port = get_free_local_port().context("No free ports left")?;
@@ -177,10 +204,14 @@ pub mod internal {
 
             self.initialise_files()?;
             debug!("starting server {}", self.id());
-            let command = Exec::cmd("java")
-                .arg("-jar")
-                .arg(jar_path.display().to_string())
-                .arg("-nogui")
+            let command = CONFIG.world.java_launch_command.clone();
+            let command = command.replace("%jar%", jar_path.display().to_string().as_str());
+            let command = command.replace(
+                "%max_mem%",
+                &format!("-Xmx{}m", self.world.allocated_memory),
+            );
+            println!("{command}");
+            let command = Exec::shell(command)
                 .cwd(self.directory.clone())
                 .stdin(subprocess::Redirection::Pipe)
                 .stdout(subprocess::Redirection::Pipe)
@@ -188,7 +219,8 @@ pub mod internal {
                 .popen()
                 .inspect_err(|_| {
                     self.status = MinecraftServerStatus::Exited(1);
-                })?;
+                })
+                .expect(":<");
 
             self.process = Some(command);
 
@@ -231,53 +263,6 @@ pub mod internal {
             } else {
                 debug!("Not stopping {}, because it's not running", self.world.id);
                 Ok(())
-            }
-        }
-        fn id(&self) -> Id {
-            self.world.id
-        }
-        fn status(&self) -> &MinecraftServerStatus {
-            &self.status
-        }
-
-        fn port(&self) -> Option<u16> {
-            self.port
-        }
-
-        fn host(&self) -> String {
-            "0.0.0.0".to_string()
-        }
-
-        fn world(&self) -> World {
-            self.world.clone()
-        }
-
-        fn set_world(&mut self, world: World) {
-            self.world = world;
-        }
-
-        fn refresh(&mut self) {
-            if let Some(process) = self.process.as_mut() {
-                if let Some(exit_status) = process.poll() {
-                    self.process = None;
-                    match exit_status {
-                        ExitStatus::Exited(code) => {
-                            self.status = MinecraftServerStatus::Exited(code);
-                        }
-                        _ => {
-                            self.status = MinecraftServerStatus::Exited(1);
-                        }
-                    }
-                    info!(
-                        "freed the port {} of {} because the server running on it has exited",
-                        self.port.unwrap_or(0),
-                        self.world.id
-                    );
-                    TAKEN_LOCAL_PORTS
-                        .lock()
-                        .expect("failed to lock local ports")
-                        .remove(&self.port.unwrap_or(0));
-                }
             }
         }
 
@@ -348,6 +333,104 @@ pub mod internal {
         }
     }
 
+    impl MinecraftServer for InternalServer {
+        fn update_world(&mut self, world: World) -> Result<()> {
+            let old = self.world()?;
+            if old.allocated_memory != world.allocated_memory || old.version_id != world.version_id
+            {
+                self.stop()?;
+            }
+
+            let enabled = world.enabled;
+
+            self.hostname = world.hostname.clone();
+            self.world = world;
+
+            if enabled {
+                self.start()?;
+            } else {
+                self.stop()?;
+            }
+            Ok(())
+        }
+
+        fn id(&self) -> Id {
+            self.world.id
+        }
+
+        fn world(&self) -> Result<World, anyhow::Error> {
+            Ok(self.world.clone())
+        }
+
+        fn status(&self) -> Result<MinecraftServerStatus, anyhow::Error> {
+            Ok(self.status)
+        }
+
+        fn port(&self) -> Option<u16> {
+            self.port
+        }
+
+        fn host(&self) -> String {
+            "localhost".to_string()
+        }
+
+        fn hostname(&self) -> Option<String> {
+            Some(self.hostname.clone())
+        }
+
+        fn refresh(&mut self) -> bool {
+            if let Some(process) = self.process.as_mut() {
+                if let Some(exit_status) = process.poll() {
+                    self.process = None;
+                    match exit_status {
+                        ExitStatus::Exited(code) => {
+                            self.status = MinecraftServerStatus::Exited(code);
+                        }
+                        _ => {
+                            self.status = MinecraftServerStatus::Exited(1);
+                        }
+                    }
+                    info!(
+                        "freed the port {} of {} because the server running on it has exited",
+                        self.port.unwrap_or(0),
+                        self.world.id
+                    );
+                    TAKEN_LOCAL_PORTS
+                        .lock()
+                        .expect("failed to lock local ports")
+                        .remove(&self.port.unwrap_or(0));
+                }
+            }
+
+            /*
+            match self.status {
+                MinecraftServerStatus::Exited(code) => {
+                    if self.world.enabled {
+                        match self.start() {
+                            Err(err) => {
+                                error!("error updating a server: {}", err);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                MinecraftServerStatus::Running => {
+                    if !self.world.enabled {
+                        match self.stop() {
+                            Err(err) => {
+                                error!("error updating a server: {}", err);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+             */
+
+            true
+        }
+    }
+
     impl Drop for InternalServer {
         fn drop(&mut self) {
             if let Some(mut process) = self.process.take() {
@@ -357,12 +440,113 @@ pub mod internal {
     }
 }
 
+pub mod external {
+    use crate::database::objects::World;
+    use crate::database::types::Id;
+    use crate::minecraft::server::{MinecraftServer, MinecraftServerStatus, Server};
+    use anyhow::Result;
+    use log::error;
+    use serde::Serialize;
+
+    pub struct MinimanagerServer {
+        host: String,
+        port: u16,
+        hostname: String,
+        world: World,
+    }
+
+    impl MinimanagerServer {
+        pub fn new(host: String, port: u16, world: World) -> Self {
+            Self {
+                host,
+                port,
+                hostname: world.hostname.clone(),
+                world,
+            }
+        }
+
+        fn world_and_status(&self) -> Result<Server> {
+            let client = reqwest::blocking::Client::new();
+            let response: Server = serde_json::from_str(
+                &client
+                    .get(format!("{}:{}/{}", self.host, self.port, self.id()))
+                    .body("{\"enabled\": true}")
+                    .send()?
+                    .text()?,
+            )?;
+            Ok(response)
+        }
+    }
+
+    impl MinecraftServer for MinimanagerServer {
+        fn update_world(&mut self, world: World) -> Result<()> {
+            self.hostname = world.hostname.clone();
+            self.world = world;
+            let client = reqwest::blocking::Client::new();
+            /*let response: Server = serde_json::from_str(
+                &client
+                    .get(format!("{}:{}/{}", self.host, self.port, self.id()))
+                    .body(serde_json::to_string(&self.world).unwrap())
+                    .send()?
+                    .text()?,
+            )?;
+             */
+            let _ =  &client
+                .get(format!("{}:{}/{}", self.host, self.port, self.id()))
+                .body(serde_json::to_string(&self.world).unwrap())
+                .send()?;
+
+            Ok(())
+        }
+
+        fn id(&self) -> Id {
+            self.world.id
+        }
+
+        fn world(&self) -> Result<World, anyhow::Error> {
+            match self.world_and_status() {
+                Ok(server) => Ok(server.world),
+                Err(err) => {
+                    error!("failed to get server status: {err}");
+                    Ok(self.world.clone())
+                }
+            }
+        }
+
+        fn status(&self) -> Result<MinecraftServerStatus, anyhow::Error> {
+            match self.world_and_status() {
+                Ok(server) => Ok(server.status),
+                Err(err) => {
+                    error!("failed to get server status: {err}");
+                    Ok(MinecraftServerStatus::Exited(1))
+                }
+            }
+        }
+
+        fn port(&self) -> Option<u16> {
+            Some(self.port)
+        }
+
+        fn host(&self) -> String {
+            self.host.clone()
+        }
+
+        fn hostname(&self) -> Option<String> {
+            Some(self.hostname.clone())
+        }
+
+        fn refresh(&mut self) -> bool {
+            false
+        }
+    }
+}
+
 pub mod util {
     use crate::minecraft::server::SERVERS;
 
     pub fn refresh_servers() {
         for (_id, server) in SERVERS.lock().expect("couldn't get servers").iter_mut() {
-            server.lock().expect("failed to lock server").refresh()
+            server.lock().expect("failed to lock server").refresh();
         }
     }
 }

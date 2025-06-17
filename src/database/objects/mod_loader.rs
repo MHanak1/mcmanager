@@ -10,15 +10,13 @@ use std::sync::{Arc, Mutex};
 use warp::{Filter, Rejection, Reply};
 use warp_rate_limit::RateLimitConfig;
 
-/// `id`: the mod loader's unique [`Id`]
-///
-/// `name`: mod loader's name (like "Fabric" or "Vanilla")
-///
-/// `can_load_mods`: if the mod loader actually can load mods
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub struct ModLoader {
+    /// The mod loader's unique [`Id`]
     pub id: Id,
+    /// Mod loader's name (like "Fabric" or "Vanilla")
     pub name: String,
+    /// If the mod loader actually can load mods (Generally false for Vanilla)
     pub can_load_mods: bool,
 }
 

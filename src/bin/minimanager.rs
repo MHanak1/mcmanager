@@ -7,10 +7,12 @@ use mcmanager::database::objects::World;
 use mcmanager::database::types::Id;
 use mcmanager::minecraft::server;
 use mcmanager::minecraft::server::internal::InternalServer;
+use mcmanager::minecraft::server::{MinecraftServerStatus};
 use mcmanager::{api, config::Config, util::dirs};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::str::FromStr;
 use std::{io::Write, thread};
+use warp::http::StatusCode;
 use warp::{Filter, Reply, reject};
 
 #[tokio::main]
@@ -58,6 +60,7 @@ async fn run(config: Config) -> Result<()> {
         .and(warp::get())
         .and(with_bearer_token())
         .and_then(|id: String, token: String| async move {
+            println!("hii");
             let id = Id::from_string(&id);
             if id.is_err() {
                 return Err(warp::reject::custom(rejections::BadRequest));
@@ -73,12 +76,26 @@ async fn run(config: Config) -> Result<()> {
         });
 
     let create_world = warp::path!()
-        .and(warp::post())
+        .and(warp::post().or(warp::put()).unify())
         .and(with_bearer_token())
         .and(warp::body::json())
         .and_then(|token: String, world: World| async move {
             if token == SECRETS.api_secret.to_string() {
                 create_or_update_server(world)
+            } else {
+                Err(reject::custom(rejections::Unauthorized))
+            }
+        });
+
+    let remove_world = warp::path!(String / "remove")
+        .and(warp::post())
+        .and(with_bearer_token())
+        .and_then(|token: String, id: String| async move {
+            if token == SECRETS.api_secret.to_string() {
+                match Id::from_string(&id) {
+                    Ok(id) => world_remove(id),
+                    _ => Err(reject::custom(rejections::BadRequest)),
+                }
             } else {
                 Err(reject::custom(rejections::Unauthorized))
             }
@@ -90,6 +107,7 @@ async fn run(config: Config) -> Result<()> {
         list_worlds
             .or(get_world)
             .or(create_world)
+            .or(remove_world)
             .recover(api::handlers::handle_rejection)
             .with(log),
     )
@@ -111,10 +129,39 @@ fn world_list() -> std::result::Result<impl Reply, warp::Rejection> {
 fn world_get(id: Id) -> std::result::Result<impl Reply, warp::Rejection> {
     match server::get_server(id) {
         Some(server) => match server.lock() {
-            Ok(server) => Ok(warp::reply::json(&server.world())),
-            Err(err) => Err(warp::reject::custom(rejections::InternalServerError::from(
-                err.to_string(),
-            ))),
+            Ok(server) => Ok(warp::reply::json(&server.world().map_err(|err| {
+                warp::reject::custom(rejections::InternalServerError::from(err))
+            })?)),
+            Err(err) => Err(reject::custom(rejections::InternalServerError::from(err))),
+        },
+        None => Err(reject::custom(rejections::NotFound)),
+    }
+}
+
+fn world_remove(id: Id) -> std::result::Result<impl Reply, warp::Rejection> {
+    match server::get_server(id) {
+        Some(server) => match server.lock() {
+            Ok(mut server) => {
+                match server.status().map_err(|err| {
+                    warp::reject::custom(rejections::InternalServerError::from(err))
+                })? {
+                    MinecraftServerStatus::Running => Ok(warp::reply::with_status(
+                        warp::reply::json(&"server still running"),
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                    )),
+                    MinecraftServerStatus::Exited(_) => {
+                        //TODO: when server is removed it's files should probably be removed as well
+                        server::remove_server(&id).map_err(|err| {
+                            reject::custom(rejections::InternalServerError::from(err))
+                        })?;
+                        Ok(warp::reply::with_status(
+                            warp::reply::json(&"removed"),
+                            StatusCode::OK,
+                        ))
+                    }
+                }
+            }
+            Err(err) => Err(reject::custom(rejections::InternalServerError::from(err))),
         },
         None => Err(reject::custom(rejections::NotFound)),
     }
@@ -138,6 +185,7 @@ fn create_or_update_server(world: World) -> std::result::Result<impl Reply, warp
             let server = Box::new(InternalServer::new(&world).map_err(|err| {
                 reject::custom(rejections::InternalServerError::from(err.to_string()))
             })?);
+
             server::add_server(server).map_err(|err| {
                 warp::reject::custom(rejections::InternalServerError::from(err.to_string()))
             })?;
@@ -154,7 +202,9 @@ fn create_or_update_server(world: World) -> std::result::Result<impl Reply, warp
     let server = server.lock().expect("failed to lock server");
 
     println!("Created server {:?}", server.world());
-    Ok(warp::reply::json(&server.world()))
+    Ok(warp::reply::json(&server.world().map_err(|err| {
+        warp::reject::custom(rejections::InternalServerError::from(err))
+    })?))
 }
 
 mod secrets {

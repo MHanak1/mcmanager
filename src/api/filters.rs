@@ -53,7 +53,7 @@ pub fn with_auth(
                 if session.is_none() {
                     return Err(warp::reject::custom(rejections::Unauthorized));
                 }
-                let session = session.expect("What the actual fuck");
+                let session = session.unwrap();
 
                 database.get_one::<User>(session.user_id, None).map_err(|err| {
                     error!("Orphaned session found, token: {}, user: {}. deleting (note: this should never happen because of SQLite foreign key requirement",session.token, session.user_id);

@@ -1,4 +1,6 @@
-listen_address = "127.0.0.1"
+# address of the api server
+listen_address = "0.0.0.0"
+# port of the API server
 listen_port = 3030
 # maximum requests to public endpoints (like login) per n seconds
 # default: 3 requests per 10 seconds
@@ -9,12 +11,22 @@ public_routes_rate_limit_time_frame = 10
 private_routes_rate_limit = 25
 private_routes_rate_limit_time_frame = 5
 
+[velocity]
+# on which port the velocity proxy should run. it should usually be the default minecraft port so 25565
+port = 25565
+# what is the velocity executable called. it should be placed in the data/velocity directory. for now you will have download it yourself.
+executable_name = "velocity.jar"
+hostname = "example.net" # under what domain is the server running on. the servers will be avaliable at server_name.example.net
+
 [world]
 # how long should mcmanager wait for the server to gracefully shut down before killing it
 stop_timeout = 15
-# in what range should ports be assigned to servers
-port_range = "25000-26000"
-#port_range = "25565-25565"
+# in what range should ports be assigned to servers. it can overlap with the velocity port as this one will be skipped
+port_range = "24000-25000"
+# what command should be used to launch the minecraft server.
+# you can also use this to run the servers in something like firejail
+# to somewhat improve the security of local servers.
+java_launch_command = "java -jar -Xms512m %max_mem% %jar% -nogui"
 
 [user_defaults]
 # total RAM limit (in MiB)
