@@ -10,7 +10,7 @@ use crate::minecraft::server::MinecraftServerStatus;
 use crate::minecraft::server::internal::InternalServer;
 use rusqlite::types::ToSqlOutput;
 use rusqlite::{Row, ToSql};
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::sync::{Arc, Mutex};
 use warp::http::StatusCode;
 use warp::{Filter, Rejection, Reply, reject};
@@ -62,7 +62,7 @@ impl DbObject for World {
             Column::new("name", Type::Text).not_null(),
             Column::new("hostname", Type::Text).not_null().unique(),
             Column::new("icon_id", Type::Id),
-            Column::new("allocated_memory", Type::Integer(false)),
+            Column::new("allocated_memory", Type::Integer(false)).not_null(),
             Column::new("version_id", Type::Id)
                 .not_null()
                 .references("versions(id)"),
@@ -140,6 +140,35 @@ impl World {
 }
 */
 
+#[allow(unused)]
+fn is_valid_hostname(hostname: &str) -> bool {
+    //in theory this could be done through regex, but this is simpler and i don't want to add a new dependency just for this
+    const ALLOWED_CHARS: &str = "abcdefghijklmnopqrstuvwzyz01234567890";
+
+    for char in hostname.chars() {
+        if !ALLOWED_CHARS.contains(char) {
+            return false;
+        }
+    }
+    true
+}
+
+fn into_valid_hostname(hostname: &str) -> String {
+    const ALLOWED_CHARS: &str = "abcdefghijklmnopqrstuvwzyz01234567890-";
+
+    let hostname = hostname.to_ascii_lowercase();
+    let mut new_hostname = String::with_capacity(hostname.len());
+
+    for char in hostname.chars() {
+        if ALLOWED_CHARS.contains(char) {
+            new_hostname.push(char);
+        } else if char.is_whitespace() {
+            new_hostname.push('-');
+        }
+    }
+    new_hostname
+}
+
 // Any value that is present is considered Some value, including null.
 fn deserialize_some<'de, T, D>(deserializer: D) -> Result<Option<T>, D::Error>
 where
@@ -165,7 +194,7 @@ impl FromJson for World {
             id: Id::default(),
             owner_id: user.id,
             name: data.name.clone(),
-            hostname: data.hostname.clone(),
+            hostname: into_valid_hostname(&data.hostname),
             icon_id: data.icon_id,
             allocated_memory: data
                 .allocated_memory
@@ -210,6 +239,10 @@ impl ApiObject for World {
                 db_mutex.clone(),
                 rate_limit_config.clone(),
             ))
+            .or(Self::config_filter(
+                db_mutex.clone(),
+                rate_limit_config.clone(),
+            ))
             .or(Self::get_filter(
                 db_mutex.clone(),
                 rate_limit_config.clone(),
@@ -232,10 +265,26 @@ impl ApiObject for World {
 impl ApiList for World {}
 impl ApiGet for World {}
 impl ApiCreate for World {
+    fn before_api_create(
+        database: &Database,
+        json: &mut Self::JsonFrom,
+    ) -> Result<(), DatabaseError> {
+        json.hostname = into_valid_hostname(&json.hostname);
+        if !database
+            .list_filtered::<World>(
+                vec![(String::from("hostname"), json.hostname.clone())],
+                None,
+            )?
+            .is_empty()
+        {
+            json.hostname += &rand::random_range(0..100000).to_string();
+        }
+        Ok(())
+    }
     fn after_api_create(
         &self,
         _database: &Database,
-        _json: &Self::JsonFrom,
+        _json: &mut Self::JsonFrom,
     ) -> Result<(), DatabaseError> {
         minecraft::server::internal::InternalServer::new(self)
             .map_err(|err| DatabaseError::InternalServerError(err.to_string()))?;
@@ -243,10 +292,36 @@ impl ApiCreate for World {
     }
 }
 impl ApiUpdate for World {
+    fn before_api_update(
+        &self,
+        database: &Database,
+        json: &mut Self::JsonUpdate,
+    ) -> Result<(), DatabaseError> {
+        if let Some(hostname) = &json.hostname {
+            json.hostname = Some(into_valid_hostname(hostname))
+        }
+        if let Some(hostname) = &json.hostname {
+            if database
+                .list_filtered::<World>(
+                    vec![
+                        (String::from("hostname"), hostname.clone()),
+                        (String::from("id"), format!("!{}", self.id.as_i64())),
+                    ],
+                    None,
+                )?
+                .is_empty()
+            {
+                json.hostname = Some(hostname.clone());
+            } else {
+                json.hostname = Some(hostname.clone() + &rand::random_range(0..100000).to_string());
+            }
+        }
+        Ok(())
+    }
     fn after_api_update(
         &self,
         _database: &Database,
-        _json: &Self::JsonUpdate,
+        _json: &mut Self::JsonUpdate,
     ) -> Result<(), DatabaseError> {
         let mut server = server::get_server(self.id);
         if server.is_none() {
@@ -302,7 +377,8 @@ impl World {
         let status = match server {
             Some(server) => server.lock().expect("failed to get server").status(),
             None => Ok(MinecraftServerStatus::Exited(0)),
-        }.map_err(|err| warp::reject::custom(rejections::InternalServerError::from(err)))?;
+        }
+        .map_err(|err| warp::reject::custom(rejections::InternalServerError::from(err)))?;
 
         #[derive(Serialize)]
         struct Status {
@@ -317,10 +393,9 @@ impl World {
             },
             MinecraftServerStatus::Exited(code) => Status {
                 status: "exited".to_string(),
-                code
-            }
+                code,
+            },
         };
-
 
         Ok(warp::reply::with_status(
             warp::reply::json(&status),
@@ -343,6 +418,63 @@ impl World {
             .and(filters::with_auth(db_mutex))
             .and_then(|rate_limit_info, id, db_mutex, user| async move {
                 Self::world_get_status(rate_limit_info, id, db_mutex, user)
+            })
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    fn get_server_config(
+        _rate_limit_info: RateLimitInfo,
+        id: String,
+        _db_mutex: Arc<Mutex<Database>>,
+        _user: User,
+    ) -> Result<impl warp::Reply, warp::Rejection> {
+        let id = Id::from_string(&id).map_err(|_| reject::custom(rejections::NotFound))?;
+        //TODO: check if the player can actually access this
+        /*
+        let database = db_mutex.lock().map_err(|err| {
+            reject::custom(rejections::InternalServerError::from(err.to_string()))
+        })?;
+        let world = database
+            .get_one::<Self>(id, Some(&user))
+            .map_err(crate::api::handlers::handle_database_error)?;
+
+         */
+
+        let server = match server::get_server(id) {
+            Some(server) => server,
+            //TODO: if the server is not running, then it should be created, and then its config read.
+            None => return Err(warp::reject::custom(rejections::NotFound)),
+        };
+
+        let server = server
+            .lock()
+            .map_err(|err| warp::reject::custom(rejections::InternalServerError::from(err)))?;
+
+        let config = server
+            .config()
+            .map_err(|err| warp::reject::custom(rejections::InternalServerError::from(err)))?;
+
+        Ok(warp::reply::with_status(
+            warp::reply::json(&config),
+            StatusCode::OK,
+        ))
+    }
+
+    pub fn config_filter(
+        db_mutex: Arc<Mutex<Database>>,
+        rate_limit_config: RateLimitConfig,
+    ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
+        warp::path("api")
+            .and(warp_rate_limit::with_rate_limit(rate_limit_config))
+            .and(warp::path(Self::table_name()))
+            .and(warp::path::param::<String>())
+            .and(warp::path("config"))
+            .and(warp::path::end())
+            .and(warp::get())
+            .and(filters::with_db(db_mutex.clone()))
+            .and(filters::with_auth(db_mutex))
+            .and_then(|rate_limit_info, id, db_mutex, user| async move {
+                Self::get_server_config(rate_limit_info, id, db_mutex, user)
             })
     }
 }

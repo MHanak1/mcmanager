@@ -4,12 +4,10 @@ listen_address = "0.0.0.0"
 listen_port = 3030
 # maximum requests to public endpoints (like login) per n seconds
 # default: 3 requests per 10 seconds
-public_routes_rate_limit = 3
-public_routes_rate_limit_time_frame = 10
+public_routes_rate_limit = [3, 10]
 # maximum requests to private endpoints (those which requre authentication) per minute
 # default: 25 requests per 5 seconds
-private_routes_rate_limit = 25
-private_routes_rate_limit_time_frame = 5
+private_routes_rate_limit = [25, 5]
 
 [velocity]
 # on which port the velocity proxy should run. it should usually be the default minecraft port so 25565
@@ -22,23 +20,33 @@ hostname = "example.net" # under what domain is the server running on. the serve
 # how long should mcmanager wait for the server to gracefully shut down before killing it
 stop_timeout = 15
 # in what range should ports be assigned to servers. it can overlap with the velocity port as this one will be skipped
-port_range = "24000-25000"
+port_range = [24000, 25000]
 # what command should be used to launch the minecraft server.
 # you can also use this to run the servers in something like firejail
 # to somewhat improve the security of local servers.
 java_launch_command = "java -jar -Xms512m %max_mem% %jar% -nogui"
 
 [user_defaults]
-# total RAM limit (in MiB)
+# total RAM limit (in MiB) (maybe implemented)
 memory_limit = 4096
-# Per-world player limit
-player_limit = 10
-# total wolds the user can have enabled
+# Per-world player limit (not implemented)
 world_limit = 10
-# amount of worlds that user can have enabled at a time
+# amount of worlds that user can have enabled at a time (not implemented)
 active_world_limit = 3
-# total amount of storage avaliable to the user (in MiB)
+# total amount of storage avaliable to the user (in MiB) (not implemented)
 storage_limit = 10240
+# here you can set limits, or lock, different values in the server.properties files for players.
+# adding a field to the blacklist will keep it at the default value.
+# adding anything to the whitelist will make only these values editable
+# to limit values, you can prepend them with < or >, which will set the maximum or the minimum.
+# you can limit non-numeric values by separating allowed values with | (for example gamemode = "survival|spectrator|adventure".
+# this will only allow those three values, and will revert to the default if a different value was present
+
+#you will probably want to create your own whitelist, as the default blacklist only covers things needed for proper functioning of the server
+config_blacklist = ["enable-rcon", "online-mode", "query.port", "server-port"]
+config_whitelist = []
+
+config_limits = { render-distance = "<12", max-players = "<20"}
 
 
 [world_defaults]

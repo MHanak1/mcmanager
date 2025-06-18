@@ -1,5 +1,4 @@
 pub mod rejections {
-    use std::error::Error;
     use warp::reject::Reject;
 
     #[derive(Debug)]

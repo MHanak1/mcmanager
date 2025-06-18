@@ -1,8 +1,7 @@
 use crate::database::objects::World;
 use crate::database::types::Id;
-use anyhow::{Context, Result, anyhow};
-use log::error;
-use serde::{Deserialize, Serialize, Serializer};
+use anyhow::{Result, anyhow};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::{Arc, LazyLock, Mutex};
@@ -21,6 +20,86 @@ pub struct Server {
 pub enum MinecraftServerStatus {
     Running,
     Exited(u32),
+}
+
+pub mod config {
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Debug, Serialize, Deserialize)]
+    #[serde(rename_all = "lowercase")]
+    pub enum Difficulty {
+        Peaceful,
+        Easy,
+        Normal,
+        Hard,
+    }
+
+    #[derive(Debug, Serialize, Deserialize)]
+    #[serde(rename_all = "lowercase")]
+    pub enum Gamemode {
+        Survival,
+        Creative,
+        Adventure,
+        Spectator,
+    }
+
+    #[derive(Debug, Serialize, Deserialize)]
+    #[serde(rename_all = "kebab-case")]
+    pub struct MinecraftServerConfig {
+        allow_flight: bool,
+        allow_nether: bool,
+        broadcast_console_to_ops: bool,
+        broadcast_rcon_to_ops: bool,
+        bug_report_link: String,
+        difficulty: Difficulty,
+        enable_command_block: bool,
+        enable_jmx_monitoring: bool,
+        enable_query: bool,
+        // don't allow rcon, wa ain't got ports for that
+        enforce_secure_profile: bool,
+        enforce_whitelist: bool,
+        entity_brodcast_range_percentage: u32,
+        force_gamemode: bool,
+        function_permission_level: u32,
+        gamemode: Gamemode,
+        generate_structures: bool,
+        generator_settings: String,
+        hardcore: bool,
+        hide_online_players: bool,
+        initial_disabled_packs: String,
+        initial_enabled_packs: String,
+        level_name: String,
+        level_seed: String,
+        level_type: String,
+        log_ips: bool,
+        max_chained_neighbor_updates: u32,
+        // don't allow to change max_players
+        max_tick_time: u32,
+        max_world_size: u32,
+        motd: String,
+        network_compression_threshold: u32,
+        // don't allow to change online-mode, this would break velocity forwarding.
+        op_permission_level: u32,
+        pause_whan_empty_seconds: u32,
+        player_idle_timeout: u32,
+        pvp: bool,
+        rate_limit: u32,
+        require_resource_pack: bool,
+        resource_pack: String,
+        resource_pack_id: String,
+        resource_pack_prompt: String,
+        resource_pack_sha1: String,
+        // don't allow to change server-ip or server-port
+        simulation_distance: u32,
+        spawn_monsters: bool,
+        spawn_protection: u32,
+        sync_chunk_writes: bool,
+        text_filtering_config: String,
+        text_filtering_version: u32,
+        use_native_transport: bool,
+        view_distance: u32,
+        white_list: bool,
+    }
 }
 
 pub fn get_server(id: Id) -> Option<ServerMutex> {
@@ -51,12 +130,7 @@ pub fn remove_server(id: &Id) -> anyhow::Result<()> {
 }
 
 pub fn get_all_servers() -> Vec<ServerMutex> {
-    SERVERS
-        .lock()
-        .unwrap()
-        .values()
-        .map(|server| server.clone())
-        .collect()
+    SERVERS.lock().unwrap().values().cloned().collect()
 }
 
 pub fn get_all_worlds() -> Vec<World> {
@@ -89,9 +163,11 @@ pub trait MinecraftServer: Send {
  */
 
 pub trait MinecraftServer: Send {
-    fn update_world(&mut self, world: World) -> Result<()>;
-    fn id(&self) -> Id;
     fn world(&self) -> Result<World>;
+    fn update_world(&mut self, world: World) -> Result<()>;
+    fn config(&self) -> Result<HashMap<String, String>>;
+    fn set_config(&mut self, config: HashMap<String, String>) -> Result<()>;
+    fn id(&self) -> Id;
     fn status(&self) -> Result<MinecraftServerStatus>;
     /// to which port is the server bound to
     fn port(&self) -> Option<u16>;
@@ -107,16 +183,17 @@ pub mod internal {
     use crate::config::CONFIG;
     use crate::database::objects::World;
     use crate::database::types::Id;
-    use crate::minecraft::server::{MinecraftServer, MinecraftServerStatus, Server};
+    use crate::minecraft::server::{MinecraftServer, MinecraftServerStatus};
     use crate::util;
     use anyhow::Result;
     use anyhow::{Context, bail};
-    use log::{debug, error, info, warn};
-    use std::collections::HashSet;
+    use log::{debug, info, warn};
+    use std::collections::{HashMap, HashSet};
     use std::fs::File;
     use std::io::{Read, Write};
     use std::path::PathBuf;
     use std::sync::{LazyLock, Mutex};
+    use std::time::Duration;
     use subprocess::{Exec, ExitStatus, Popen};
 
     pub(crate) static TAKEN_LOCAL_PORTS: LazyLock<Mutex<HashSet<u16>>> =
@@ -236,7 +313,9 @@ pub mod internal {
                     let _ = process.kill();
                 }
 
-                let result = process.wait_timeout(crate::config::CONFIG.world.stop_timeout)?;
+                let result = process.wait_timeout(Duration::from_secs(
+                    crate::config::CONFIG.world.stop_timeout,
+                ))?;
                 TAKEN_LOCAL_PORTS
                     .lock()
                     .expect("failed to lock local ports")
@@ -266,6 +345,7 @@ pub mod internal {
             }
         }
 
+        /*
         fn read_console(&mut self) -> Result<String> {
             let mut output = String::new();
 
@@ -290,6 +370,7 @@ pub mod internal {
             }
             Ok(output)
         }
+         */
 
         fn write_console(&mut self, data: &[u8]) -> Result<()> {
             match self.process {
@@ -327,10 +408,12 @@ pub mod internal {
             Ok(())
         }
 
+        /*
         fn remove_file(&self, path: &str) -> Result<()> {
             std::fs::remove_file(self.directory.join(path))?;
             Ok(())
         }
+         */
     }
 
     impl MinecraftServer for InternalServer {
@@ -429,6 +512,21 @@ pub mod internal {
 
             true
         }
+
+        fn config(&self) -> Result<HashMap<String, String>> {
+            let properties = self
+                .read_file("server.properties")
+                .unwrap_or(include_str!("../resources/server.properties").to_string());
+            Ok(crate::minecraft::util::parse_minecraft_properties(
+                &properties,
+            ))
+        }
+
+        fn set_config(&mut self, config: HashMap<String, String>) -> Result<()> {
+            let properties = crate::minecraft::util::create_minecraft_properties(config);
+            self.write_file("server.properties", &properties)?;
+            Ok(())
+        }
     }
 
     impl Drop for InternalServer {
@@ -446,7 +544,7 @@ pub mod external {
     use crate::minecraft::server::{MinecraftServer, MinecraftServerStatus, Server};
     use anyhow::Result;
     use log::error;
-    use serde::Serialize;
+    use std::collections::HashMap;
 
     pub struct MinimanagerServer {
         host: String,
@@ -491,7 +589,7 @@ pub mod external {
                     .text()?,
             )?;
              */
-            let _ =  &client
+            let _ = &client
                 .get(format!("{}:{}/{}", self.host, self.port, self.id()))
                 .body(serde_json::to_string(&self.world).unwrap())
                 .send()?;
@@ -537,6 +635,14 @@ pub mod external {
 
         fn refresh(&mut self) -> bool {
             false
+        }
+
+        fn config(&self) -> Result<HashMap<String, String>> {
+            todo!()
+        }
+
+        fn set_config(&mut self, _config: HashMap<String, String>) -> Result<()> {
+            todo!()
         }
     }
 }

@@ -6,7 +6,6 @@ use crate::database::{Database, DatabaseError};
 use log::error;
 use rusqlite::{Error, ErrorCode};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use warp::http::StatusCode;
 use warp::{Filter, Rejection, Reply, reject};
@@ -29,7 +28,7 @@ where
         _rate_limit_info: RateLimitInfo,
         db_mutex: Arc<Mutex<Database>>,
         user: User,
-        filters: HashMap<String, String>,
+        filters: Vec<(String, String)>,
     ) -> Result<impl Reply, warp::Rejection> {
         let database = db_mutex.lock().map_err(|err| {
             reject::custom(rejections::InternalServerError::from(err.to_string()))
@@ -56,7 +55,7 @@ where
             .and(warp::get())
             .and(filters::with_db(db_mutex.clone()))
             .and(filters::with_auth(db_mutex))
-            .and(warp::query::<HashMap<String, String>>())
+            .and(warp::query::<Vec<(String, String)>>())
             .and_then(|rate_limit_info, db_mutex, user, filters| async move {
                 Self::api_list(rate_limit_info, db_mutex, user, filters)
             })
@@ -118,6 +117,7 @@ where
         user: User,
         data: Self::JsonFrom,
     ) -> Result<impl Reply, warp::Rejection> {
+        let mut data = data;
         //in theory this is redundant, as database::insert checks it as well, but better safe than sorry
         if !Self::can_create(&user) {
             return Err(reject::custom(rejections::Unauthorized));
@@ -126,17 +126,16 @@ where
             reject::custom(rejections::InternalServerError::from(err.to_string()))
         })?;
 
+        Self::before_api_create(&database, &mut data).map_err(handle_database_error)?;
+
         let object = Self::from_json(&data, &user);
-        object
-            .before_api_create(&database, &data)
-            .map_err(handle_database_error)?;
 
         let _ = database
             .insert(&object, Some(&user))
             .map_err(handle_database_error)?;
 
         object
-            .after_api_create(&database, &data)
+            .after_api_create(&database, &mut data)
             .map_err(handle_database_error)?;
 
         Ok(warp::reply::with_status(
@@ -152,9 +151,8 @@ where
     #[allow(unused)]
     /// runs before the database entry creation
     fn before_api_create(
-        &self,
         database: &Database,
-        json: &Self::JsonFrom,
+        json: &mut Self::JsonFrom,
     ) -> Result<(), DatabaseError> {
         Ok(())
     }
@@ -165,7 +163,7 @@ where
     fn after_api_create(
         &self,
         database: &Database,
-        json: &Self::JsonFrom,
+        json: &mut Self::JsonFrom,
     ) -> Result<(), DatabaseError> {
         Ok(())
     }
@@ -202,6 +200,7 @@ where
         user: User,
         data: Self::JsonUpdate,
     ) -> Result<impl Reply, warp::Rejection> {
+        let mut data = data;
         let database = db_mutex.lock().map_err(|err| {
             reject::custom(rejections::InternalServerError::from(err.to_string()))
         })?;
@@ -213,7 +212,7 @@ where
             .map_err(handle_database_error)?;
 
         object
-            .before_api_update(&database, &data)
+            .before_api_update(&database, &mut data)
             .map_err(handle_database_error)?;
 
         let object = object.update_with_json(&data);
@@ -223,7 +222,7 @@ where
             .map_err(handle_database_error)?;
 
         object
-            .after_api_update(&database, &data)
+            .after_api_update(&database, &mut data)
             .map_err(handle_database_error)?;
 
         Ok(warp::reply::with_status(
@@ -236,7 +235,7 @@ where
     fn before_api_update(
         &self,
         database: &Database,
-        json: &Self::JsonUpdate,
+        json: &mut Self::JsonUpdate,
     ) -> Result<(), DatabaseError> {
         Ok(())
     }
@@ -247,7 +246,7 @@ where
     fn after_api_update(
         &self,
         database: &Database,
-        json: &Self::JsonUpdate,
+        json: &mut Self::JsonUpdate,
     ) -> Result<(), DatabaseError> {
         Ok(())
     }

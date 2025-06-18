@@ -2,7 +2,6 @@ use crate::api::util::rejections;
 use crate::database::objects::{Session, User};
 use crate::database::{Database, DatabaseError};
 use log::error;
-use std::collections::HashMap;
 use std::convert::Infallible;
 use std::sync::{Arc, Mutex};
 use warp::{Filter, Rejection};
@@ -37,7 +36,7 @@ pub fn with_auth(
                     }
                 )?;
 
-                let session = database.list_filtered::<Session>(HashMap::from([("token".to_string(), token)]), None)
+                let session = database.list_filtered::<Session>(vec![("token".to_string(), token)], None)
                     .map_err(
                         |err|
                         match err {

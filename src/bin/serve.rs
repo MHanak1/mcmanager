@@ -27,8 +27,8 @@ async fn main() -> anyhow::Result<()> {
 
     thread::spawn(|| {
         info!("starting velocity at {}", CONFIG.velocity.port);
-        let mut velocity_server = InternalVelocityServer::new()
-        .expect("failed to create a velocity server");
+        let mut velocity_server =
+            InternalVelocityServer::new().expect("failed to create a velocity server");
         velocity_server
             .start()
             .expect("failed to start a velocity server");
@@ -60,14 +60,12 @@ pub async fn run(database: Database, config: config::Config) {
 
     let db_mutex = Arc::new(Mutex::new(database));
 
-    let limit = config.public_routes_rate_limit.unwrap_or(
-        (u32::MAX, 1), /*probably not the best way to do this, but ohwell*/
-    );
+    let limit = config.public_routes_rate_limit;
 
     let public_routes_rate_limit =
         warp_rate_limit::RateLimitConfig::max_per_window(limit.0, limit.1);
 
-    let limit = config.private_routes_rate_limit.unwrap_or((u32::MAX, 1));
+    let limit = config.private_routes_rate_limit;
     let private_routes_rate_limit =
         warp_rate_limit::RateLimitConfig::max_per_window(limit.0, limit.1);
 
@@ -274,8 +272,9 @@ fn user_creation_and_removal() -> anyhow::Result<()> {
     thread::spawn(|| {
         let mut config = CONFIG.clone();
         config.listen_port = TEST_PORT;
-        config.public_routes_rate_limit = None;
-        config.private_routes_rate_limit = None;
+        // essentially disables the rate limit
+        config.public_routes_rate_limit = (10000000, 1);
+        config.private_routes_rate_limit = (1000000, 1);
         let rt = tokio::runtime::Runtime::new().expect("Can't create runtime");
         rt.block_on(run(database, config))
     });
@@ -343,7 +342,6 @@ fn user_creation_and_removal() -> anyhow::Result<()> {
         password: String,
         avatar_id: Option<Id>,
         memory_limit: Option<u32>,
-        player_limit: Option<u32>,
         world_limit: Option<u32>,
         active_world_limit: Option<u32>,
         storage_limit: Option<u32>,
@@ -356,7 +354,6 @@ fn user_creation_and_removal() -> anyhow::Result<()> {
         username: "User2".to_string(),
         avatar_id: None,
         memory_limit: None,
-        player_limit: None,
         world_limit: None,
         active_world_limit: None,
         storage_limit: None,
@@ -375,7 +372,6 @@ fn user_creation_and_removal() -> anyhow::Result<()> {
                     password: "Password2".to_string(),
                     avatar_id: userb.avatar_id,
                     memory_limit: userb.memory_limit,
-                    player_limit: userb.player_limit,
                     world_limit: userb.world_limit,
                     active_world_limit: userb.active_world_limit,
                     storage_limit: userb.storage_limit,
@@ -414,7 +410,6 @@ fn user_creation_and_removal() -> anyhow::Result<()> {
         username: "User3".to_string(),
         avatar_id: Some(tmp_id),
         memory_limit: Some(1234),
-        player_limit: Some(1234),
         world_limit: Some(1234),
         active_world_limit: Some(1234),
         storage_limit: Some(1234),
@@ -433,7 +428,6 @@ fn user_creation_and_removal() -> anyhow::Result<()> {
                     password: "Password3".to_string(),
                     avatar_id: usera.avatar_id,
                     memory_limit: usera.memory_limit,
-                    player_limit: usera.player_limit,
                     world_limit: usera.world_limit,
                     active_world_limit: usera.active_world_limit,
                     storage_limit: usera.storage_limit,

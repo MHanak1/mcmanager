@@ -1,12 +1,10 @@
 use crate::config::CONFIG;
-use crate::database::objects::World;
 use crate::minecraft::server;
-use crate::minecraft::server::internal::TAKEN_LOCAL_PORTS;
-use crate::minecraft::server::{MinecraftServerStatus};
+use crate::minecraft::server::MinecraftServerStatus;
+use crate::util;
 use crate::util::dirs;
-use crate::{minecraft, util};
 use anyhow::{Context, bail};
-use log::{debug, error, info, warn};
+use log::{error, warn};
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::PathBuf;
@@ -81,6 +79,7 @@ impl VelocityServer for InternalVelocityServer {
     fn stop(&mut self) -> anyhow::Result<ExitStatus> {
         if let Some(mut process) = self.process.take() {
             //try to kill velocity, if it fails, terminate it.
+            #[allow(clippy::collapsible_if)]
             if process.kill().is_err() {
                 if process.terminate().is_err() {
                     bail!("failed to terminate velocity");
@@ -120,7 +119,7 @@ impl VelocityServer for InternalVelocityServer {
     }
 
     fn status(&self) -> MinecraftServerStatus {
-        self.status.clone()
+        self.status
     }
 
     fn update_server_list(hosts: &[(String, String)]) -> anyhow::Result<()> {
@@ -173,13 +172,10 @@ impl VelocityServer for InternalVelocityServer {
 
             //self.process.unwrap().communicate(Some("velocity reload\n"))?;
             let mut process = self.process.take().context("Failed to get process")?;
-            match process.stdin.take() {
-                Some(mut stdin) => {
-                    stdin.write_all(b"velocity reload\n")?;
-                    stdin.flush()?;
-                    process.stdin = Some(stdin);
-                }
-                None => {}
+            if let Some(mut stdin) = process.stdin.take() {
+                stdin.write_all(b"velocity reload\n")?;
+                stdin.flush()?;
+                process.stdin = Some(stdin);
             }
             self.process = Some(process);
         }

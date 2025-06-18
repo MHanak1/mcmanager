@@ -22,8 +22,6 @@ pub struct User {
     pub avatar_id: Option<Id>,
     /// limit of user's total allocatable memory in MiB. [`None`] means no limit
     pub memory_limit: Option<u32>,
-    /// per-world player limit. [`None`] means no limit
-    pub player_limit: Option<u32>,
     /// how many worlds can a user create. [`None`] means no limit
     pub world_limit: Option<u32>,
     /// how many worlds can be enabled at a time. [`None`] means no limit
@@ -67,7 +65,6 @@ impl DbObject for User {
             Column::new("username", Type::Text).not_null().unique(),
             Column::new("avatar_id", Type::Id),
             Column::new("memory_limit", Type::Integer(false)),
-            Column::new("player_limit", Type::Integer(false)),
             Column::new("world_limit", Type::Integer(false)),
             Column::new("active_world_limit", Type::Integer(false)),
             Column::new("storage_limit", Type::Integer(false)),
@@ -88,12 +85,11 @@ impl DbObject for User {
             username: row.get(1)?,
             avatar_id: row.get(2)?,
             memory_limit: row.get(3)?,
-            player_limit: row.get(4)?,
-            world_limit: row.get(5)?,
-            active_world_limit: row.get(6)?,
-            storage_limit: row.get(7)?,
-            is_privileged: row.get(8)?,
-            enabled: row.get(9)?,
+            world_limit: row.get(4)?,
+            active_world_limit: row.get(5)?,
+            storage_limit: row.get(6)?,
+            is_privileged: row.get(7)?,
+            enabled: row.get(8)?,
         })
     }
 
@@ -113,9 +109,6 @@ impl DbObject for User {
                 .to_sql()
                 .expect("failed to convert the value to sql"),
             self.memory_limit
-                .to_sql()
-                .expect("failed to convert the value to sql"),
-            self.player_limit
                 .to_sql()
                 .expect("failed to convert the value to sql"),
             self.world_limit
@@ -144,7 +137,6 @@ impl Default for User {
             username: String::new(),
             avatar_id: None,
             memory_limit: Some(CONFIG.user_defaults.memory_limit),
-            player_limit: Some(CONFIG.user_defaults.player_limit),
             world_limit: Some(CONFIG.user_defaults.world_limit),
             active_world_limit: Some(CONFIG.user_defaults.active_world_limit),
             storage_limit: Some(CONFIG.user_defaults.storage_limit),
@@ -172,8 +164,6 @@ pub struct JsonFrom {
     #[serde(default, deserialize_with = "deserialize_some")]
     pub memory_limit: Option<Option<u32>>,
     #[serde(default, deserialize_with = "deserialize_some")]
-    pub player_limit: Option<Option<u32>>,
-    #[serde(default, deserialize_with = "deserialize_some")]
     pub world_limit: Option<Option<u32>>,
     #[serde(default, deserialize_with = "deserialize_some")]
     pub active_world_limit: Option<Option<u32>>,
@@ -193,9 +183,6 @@ impl FromJson for User {
             memory_limit: data
                 .memory_limit
                 .unwrap_or(Some(CONFIG.user_defaults.memory_limit)),
-            player_limit: data
-                .player_limit
-                .unwrap_or(Some(CONFIG.user_defaults.player_limit)),
             world_limit: data
                 .world_limit
                 .unwrap_or(Some(CONFIG.user_defaults.world_limit)),
@@ -222,8 +209,6 @@ pub struct JsonUpdate {
     #[serde(default, deserialize_with = "deserialize_some")]
     pub memory_limit: Option<Option<u32>>,
     #[serde(default, deserialize_with = "deserialize_some")]
-    pub player_limit: Option<Option<u32>>,
-    #[serde(default, deserialize_with = "deserialize_some")]
     pub world_limit: Option<Option<u32>>,
     #[serde(default, deserialize_with = "deserialize_some")]
     pub active_world_limit: Option<Option<u32>>,
@@ -241,7 +226,6 @@ impl UpdateJson for User {
         new.username = data.username.clone().unwrap_or(new.username);
         new.avatar_id = data.avatar_id.unwrap_or(new.avatar_id);
         new.memory_limit = data.memory_limit.unwrap_or(new.memory_limit);
-        new.player_limit = data.player_limit.unwrap_or(new.player_limit);
         new.world_limit = data.world_limit.unwrap_or(new.world_limit);
         new.active_world_limit = data.active_world_limit.unwrap_or(new.active_world_limit);
         new.storage_limit = data.storage_limit.unwrap_or(new.storage_limit);
@@ -282,7 +266,7 @@ impl ApiCreate for User {
     fn after_api_create(
         &self,
         database: &Database,
-        json: &Self::JsonFrom,
+        json: &mut Self::JsonFrom,
     ) -> Result<(), DatabaseError> {
         println!("{}, {}", json.username, json.password);
         database
@@ -295,7 +279,7 @@ impl ApiUpdate for User {
     fn after_api_update(
         &self,
         database: &Database,
-        json: &Self::JsonUpdate,
+        json: &mut Self::JsonUpdate,
     ) -> Result<(), DatabaseError> {
         //the the password is first created then recreated so it can handle a missing password entry for the user
         if let Some(password) = json.password.clone() {

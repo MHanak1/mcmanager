@@ -1,99 +1,32 @@
 use crate::util;
-use anyhow::Context;
-use config::Value;
-use core::time::Duration;
 use once_cell::sync::Lazy;
-use std::collections::HashMap;
+use serde::Deserialize;
 use std::fs::File;
 use std::io::Write;
 use std::ops::Range;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     pub listen_address: String,
     pub listen_port: u32,
-    pub public_routes_rate_limit: Option<(u32, u64)>,
-    pub private_routes_rate_limit: Option<(u32, u64)>,
+    pub public_routes_rate_limit: (u32, u64),
+    pub private_routes_rate_limit: (u32, u64),
     pub world: WorldConfig,
     pub user_defaults: UserDefaults,
     pub world_defaults: WorldDefaults,
     pub velocity: VelocityConfig,
 }
 
-impl TryFrom<config::Config> for Config {
-    type Error = anyhow::Error;
-    fn try_from(value: config::Config) -> Result<Self, Self::Error> {
-        Ok(Self {
-            listen_address: value.get_string("listen_address")?,
-            listen_port: value.get_int("listen_port")? as u32,
-            public_routes_rate_limit: Some((
-                value.get_int("public_routes_rate_limit")? as u32,
-                value.get_int("private_routes_rate_limit_time_frame")? as u64,
-            )),
-            private_routes_rate_limit: Some((
-                value.get_int("private_routes_rate_limit")? as u32,
-                value.get_int("private_routes_rate_limit_time_frame")? as u64,
-            )),
-            world: WorldConfig::try_from(value.get_table("world")?)?,
-            user_defaults: UserDefaults::try_from(value.get_table("user_defaults")?)?,
-            world_defaults: WorldDefaults::try_from(value.get_table("world_defaults")?)?,
-            velocity: VelocityConfig::try_from(value.get_table("velocity")?)?,
-        })
-    }
-}
-
-#[derive(Clone, Debug)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct WorldConfig {
-    pub stop_timeout: Duration,
+    pub stop_timeout: u64,
     pub port_range: Range<u16>,
     pub java_launch_command: String,
 }
-impl TryFrom<HashMap<String, config::Value>> for WorldConfig {
-    type Error = anyhow::Error;
-
-    fn try_from(value: HashMap<String, Value>) -> Result<Self, Self::Error> {
-        Ok(Self {
-            stop_timeout: Duration::from_secs(
-                value
-                    .get("stop_timeout")
-                    .context("couldn't get stop_timeout")?
-                    .clone()
-                    .into_int()?
-                    .try_into()?,
-            ),
-            port_range: {
-                let values = value
-                    .get("port_range")
-                    .context("couldn't get port_range")?
-                    .to_string()
-                    .clone();
-                let mut values = values.splitn(2, "-");
-                let min = values
-                    .next()
-                    .context("couldn't get port_range")?
-                    .parse::<u16>()
-                    .context("couldn't parse port_range")?;
-                let max = values
-                    .next()
-                    .context("couldn't get port_range")?
-                    .parse::<u16>()
-                    .context("couldn't parse port_range")?;
-                min..max + 1
-            },
-            java_launch_command: value
-                .get("java_launch_command")
-                .context("couldn't get lava_launch_command")?
-                .to_string(),
-        })
-    }
-}
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct UserDefaults {
     /// total RAM limit ( in MiB)
     pub memory_limit: u32,
-    /// Per-world player limit
-    pub player_limit: u32,
     /// total wolds the user can have enabled
     pub world_limit: u32,
     /// amount of worlds that user can have enabled at a time
@@ -102,82 +35,16 @@ pub struct UserDefaults {
     pub storage_limit: u32,
 }
 
-impl TryFrom<HashMap<String, config::Value>> for UserDefaults {
-    type Error = anyhow::Error;
-
-    fn try_from(value: HashMap<String, config::Value>) -> Result<Self, Self::Error> {
-        Ok(Self {
-            memory_limit: value
-                .get("memory_limit")
-                .context("couldn't get memory_limit")?
-                .clone()
-                .into_int()? as u32,
-            player_limit: value
-                .get("player_limit")
-                .context("couldn't get player_limit")?
-                .clone()
-                .into_int()? as u32,
-            world_limit: value
-                .get("world_limit")
-                .context("couldn't get world_limit")?
-                .clone()
-                .into_int()? as u32,
-            active_world_limit: value
-                .get("active_world_limit")
-                .context("couldn't get active_world_limit")?
-                .clone()
-                .into_int()? as u32,
-            storage_limit: value
-                .get("storage_limit")
-                .context("couldn't get active_world_limit")?
-                .clone()
-                .into_int()? as u32,
-        })
-    }
-}
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct WorldDefaults {
     /// Default amount of memory allocated to a server (in MiB)
     pub allocated_memory: u32,
 }
 
-impl TryFrom<HashMap<String, config::Value>> for WorldDefaults {
-    type Error = anyhow::Error;
-    fn try_from(value: HashMap<String, config::Value>) -> Result<Self, Self::Error> {
-        Ok(Self {
-            allocated_memory: value
-                .get("allocated_memory")
-                .context("couldn't get allocated_memory")?
-                .clone()
-                .into_int()? as u32,
-        })
-    }
-}
-
-#[derive(Clone, Debug)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct VelocityConfig {
     pub port: u16,
     pub executable_name: String,
-}
-
-impl TryFrom<HashMap<String, config::Value>> for VelocityConfig {
-    type Error = anyhow::Error;
-
-    fn try_from(value: HashMap<String, config::Value>) -> Result<Self, Self::Error> {
-        Ok(Self {
-            port: value
-                .get("port")
-                .context("couldn't get velocity port")?
-                .clone()
-                .into_int()? as u16,
-            executable_name: value
-                .get("executable_name")
-                .context("couldn't get velocity executable_name")?
-                .clone()
-                .to_string(),
-        })
-    }
 }
 
 pub static CONFIG: Lazy<Config> = Lazy::new(|| {
@@ -190,21 +57,22 @@ pub static CONFIG: Lazy<Config> = Lazy::new(|| {
             .expect("failed to write default config file");
     }
 
-    Config::try_from(
-        config::Config::builder()
-            .add_source(config::File::from_str(
-                include_str!("resources/default_config.toml"),
-                config::FileFormat::Toml,
-            ))
-            .add_source(config::File::with_name(
-                util::dirs::base_dir()
-                    .join("config.toml")
-                    .display()
-                    .to_string()
-                    .as_str(),
-            ))
-            .build()
-            .expect("failed to parse config"),
-    )
-    .expect("failed to parse config")
+    let config = config::Config::builder()
+        .add_source(config::File::from_str(
+            include_str!("resources/default_config.toml"),
+            config::FileFormat::Toml,
+        ))
+        .add_source(config::File::with_name(
+            util::dirs::base_dir()
+                .join("config.toml")
+                .display()
+                .to_string()
+                .as_str(),
+        ))
+        .build()
+        .expect("failed to parse config");
+
+    config
+        .try_deserialize::<Config>()
+        .expect("failed to parse config")
 });

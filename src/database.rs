@@ -5,7 +5,6 @@ use crate::database::objects::{
 use crate::database::types::{Id, Type};
 use log::debug;
 use rusqlite::{params, params_from_iter};
-use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 use test_log::test;
@@ -169,14 +168,14 @@ impl Database {
     }
 
     pub fn list_all<T: DbObject>(&self, user: Option<&User>) -> Result<Vec<T>, DatabaseError> {
-        self.list_filtered::<T>(HashMap::default(), user)
+        self.list_filtered::<T>(vec![], user)
     }
 
     #[allow(clippy::needless_pass_by_value)]
     /// instead of returning [`rusqlite::Error::QueryReturnedNoRows`] it will return an empty vector
     pub fn list_filtered<T: DbObject>(
         &self,
-        filters: HashMap<String, String>,
+        filters: Vec<(String, String)>,
         user: Option<&User>,
     ) -> Result<Vec<T>, DatabaseError> {
         let mut query = format!("SELECT * FROM {}", T::table_name());
@@ -225,7 +224,7 @@ impl Database {
 
     //this code is absolute ass.
     fn construct_filters<T: DbObject>(
-        filters: &HashMap<String, String>,
+        filters: &Vec<(String, String)>,
     ) -> (Vec<String>, Vec<String>) {
         let mut new_filters = vec![];
         let mut values = vec![];
@@ -347,7 +346,6 @@ pub fn manipulate_data() -> anyhow::Result<()> {
         username: String::new(),
         avatar_id: None,
         memory_limit: None,
-        player_limit: None,
         world_limit: None,
         active_world_limit: None,
         storage_limit: None,
@@ -360,7 +358,6 @@ pub fn manipulate_data() -> anyhow::Result<()> {
         username: "Username".to_string(),
         avatar_id: Some(Id::default()),
         memory_limit: Some(1024),
-        player_limit: Some(10),
         world_limit: Some(10),
         active_world_limit: Some(3),
         storage_limit: Some(10240),
@@ -396,6 +393,7 @@ pub fn manipulate_data() -> anyhow::Result<()> {
         id: Id::default(),
         owner_id: user_min.id,
         name: String::new(),
+        hostname: "".to_string(),
         icon_id: None,
         allocated_memory: 0,
         version_id: version.id,
@@ -406,6 +404,7 @@ pub fn manipulate_data() -> anyhow::Result<()> {
         id: Id::default(),
         owner_id: user_max.id,
         name: "World Name".to_string(),
+        hostname: "hostname".to_string(),
         icon_id: Some(Id::default()),
         allocated_memory: 1024,
         version_id: version.id,

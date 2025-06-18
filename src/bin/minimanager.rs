@@ -6,8 +6,8 @@ use mcmanager::api::util::rejections;
 use mcmanager::database::objects::World;
 use mcmanager::database::types::Id;
 use mcmanager::minecraft::server;
+use mcmanager::minecraft::server::MinecraftServerStatus;
 use mcmanager::minecraft::server::internal::InternalServer;
-use mcmanager::minecraft::server::{MinecraftServerStatus};
 use mcmanager::{api, config::Config, util::dirs};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::str::FromStr;
@@ -141,7 +141,7 @@ fn world_get(id: Id) -> std::result::Result<impl Reply, warp::Rejection> {
 fn world_remove(id: Id) -> std::result::Result<impl Reply, warp::Rejection> {
     match server::get_server(id) {
         Some(server) => match server.lock() {
-            Ok(mut server) => {
+            Ok(server) => {
                 match server.status().map_err(|err| {
                     warp::reject::custom(rejections::InternalServerError::from(err))
                 })? {
