@@ -50,7 +50,7 @@ impl VelocityServer for InternalVelocityServer {
         if self.process.is_some() {
             bail!("velocity already running");
         }
-        let config_path = dirs::data_dir().join("velocity_config.toml");
+        let config_path = dirs::base_dir().join("velocity_config.toml");
         if !config_path.exists() {
             let mut file = File::create(&config_path)?;
             file.write_all(include_bytes!("../resources/velocity_config.toml"))?;
@@ -61,8 +61,8 @@ impl VelocityServer for InternalVelocityServer {
         let command = Exec::shell(command)
             .cwd(self.path.clone())
             .stdin(subprocess::Redirection::Pipe)
-            .stdout(subprocess::Redirection::Merge)
-            .stderr(subprocess::Redirection::Merge)
+            .stdout(subprocess::Redirection::Pipe)
+            .stderr(subprocess::Redirection::Pipe)
             .popen()
             .inspect_err(|_| {
                 self.status = MinecraftServerStatus::Exited(1);
@@ -124,7 +124,7 @@ impl VelocityServer for InternalVelocityServer {
 
     fn update_server_list(hosts: &[(String, String)]) -> anyhow::Result<()> {
         let mut config = String::new();
-        let mut file = File::open(dirs::data_dir().join("velocity_config.toml"))?;
+        let mut file = File::open(dirs::base_dir().join("velocity_config.toml"))?;
         file.read_to_string(&mut config)?;
 
         let mut servers_string = String::new();

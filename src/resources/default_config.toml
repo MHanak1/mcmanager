@@ -9,6 +9,20 @@ public_routes_rate_limit = [3, 10]
 # default: 25 requests per 5 seconds
 private_routes_rate_limit = [25, 5]
 
+# how to launch and manage minecraft servers. avaliable: internal, remote, kubernetes
+minecraft_server_type = "internal"
+
+[internal] # run the servers as subprocesses of the API server
+# what to launch java with
+#   %command% is substituted for world:java_launch_command
+#   
+# if users are allowed to load their own mods using something like firejail should be very much considered.
+#launch_command = "%command%"
+launch_command = "firejail --caps.drop=all %command%"
+
+[remote] # run the servers on a separate system using minimanager
+address = "localhost:3031"
+
 [velocity]
 # on which port the velocity proxy should run. it should usually be the default minecraft port so 25565
 port = 25565
@@ -27,7 +41,7 @@ port_range = [24000, 25000]
 java_launch_command = "java -jar -Xms512m %max_mem% %jar% -nogui"
 
 [user_defaults]
-# total RAM limit (in MiB) (maybe implemented)
+# total allocable memory by user (in MiB) (not implemented)
 memory_limit = 4096
 # Per-world player limit (not implemented)
 world_limit = 10
@@ -36,17 +50,17 @@ active_world_limit = 3
 # total amount of storage avaliable to the user (in MiB) (not implemented)
 storage_limit = 10240
 # here you can set limits, or lock, different values in the server.properties files for players.
-# adding a field to the blacklist will keep it at the default value.
+# adding a field to the blacklist will hide the values from the user, and make them non-editable.
 # adding anything to the whitelist will make only these values editable
-# to limit values, you can prepend them with < or >, which will set the maximum or the minimum.
+# to limit values, you can prepend them with < or >, which will set the maximum or the minimum (inclusively).
 # you can limit non-numeric values by separating allowed values with | (for example gamemode = "survival|spectrator|adventure".
 # this will only allow those three values, and will revert to the default if a different value was present
 
 #you will probably want to create your own whitelist, as the default blacklist only covers things needed for proper functioning of the server
-config_blacklist = ["enable-rcon", "online-mode", "query.port", "server-port"]
+config_blacklist = ["enable-rcon", "online-mode", "query.port"]
 config_whitelist = []
 
-config_limits = { render-distance = "<12", max-players = "<20"}
+config_limits = {view-distance = "<12", simulation-distance = "<12", max-players = "<20"}
 
 
 [world_defaults]

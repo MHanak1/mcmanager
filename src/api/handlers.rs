@@ -30,13 +30,14 @@ where
         user: User,
         filters: Vec<(String, String)>,
     ) -> Result<impl Reply, warp::Rejection> {
-        let database = db_mutex.lock().map_err(|err| {
-            reject::custom(rejections::InternalServerError::from(err.to_string()))
-        })?;
-
-        let objects = database
-            .list_filtered::<Self>(filters, Some(&user))
-            .map_err(handle_database_error)?;
+        let objects = {
+            let database = db_mutex.lock().map_err(|err| {
+                reject::custom(rejections::InternalServerError::from(err.to_string()))
+            })?;
+            database
+                .list_filtered::<Self>(filters, Some(&user))
+                .map_err(handle_database_error)?
+        };
         Ok(warp::reply::with_status(
             warp::reply::json(&objects),
             StatusCode::OK,
@@ -73,13 +74,15 @@ where
         user: User,
     ) -> Result<impl warp::Reply, warp::Rejection> {
         let id = Id::from_string(&id).map_err(|_| reject::custom(rejections::NotFound))?;
-        let database = db_mutex.lock().map_err(|err| {
-            reject::custom(rejections::InternalServerError::from(err.to_string()))
-        })?;
+        let object = {
+            let database = db_mutex.lock().map_err(|err| {
+                reject::custom(rejections::InternalServerError::from(err.to_string()))
+            })?;
 
-        let object = database
-            .get_one::<Self>(id, Some(&user))
-            .map_err(handle_database_error)?;
+            database
+                .get_one::<Self>(id, Some(&user))
+                .map_err(handle_database_error)?
+        };
 
         Ok(warp::reply::with_status(
             warp::reply::json(&object),
@@ -122,21 +125,23 @@ where
         if !Self::can_create(&user) {
             return Err(reject::custom(rejections::Unauthorized));
         }
-        let database = db_mutex.lock().map_err(|err| {
-            reject::custom(rejections::InternalServerError::from(err.to_string()))
-        })?;
 
-        Self::before_api_create(&database, &mut data).map_err(handle_database_error)?;
+        let object = {
+            let database = db_mutex.lock().map_err(|err| {
+                reject::custom(rejections::InternalServerError::from(err.to_string()))
+            })?;
 
-        let object = Self::from_json(&data, &user);
+            Self::before_api_create(&database, &mut data).map_err(handle_database_error)?;
+            let object = Self::from_json(&data, &user);
+            let _ = database
+                .insert(&object, Some(&user))
+                .map_err(handle_database_error)?;
 
-        let _ = database
-            .insert(&object, Some(&user))
-            .map_err(handle_database_error)?;
-
-        object
-            .after_api_create(&database, &mut data)
-            .map_err(handle_database_error)?;
+            object
+                .after_api_create(&database, &mut data)
+                .map_err(handle_database_error)?;
+            object
+        };
 
         Ok(warp::reply::with_status(
             warp::reply::with_header(
@@ -201,29 +206,33 @@ where
         data: Self::JsonUpdate,
     ) -> Result<impl Reply, warp::Rejection> {
         let mut data = data;
-        let database = db_mutex.lock().map_err(|err| {
-            reject::custom(rejections::InternalServerError::from(err.to_string()))
-        })?;
+        let object = {
+            let database = db_mutex.lock().map_err(|err| {
+                reject::custom(rejections::InternalServerError::from(err.to_string()))
+            })?;
 
-        let id = Id::from_string(&id).map_err(|_| warp::reject::custom(rejections::NotFound))?;
+            let id =
+                Id::from_string(&id).map_err(|_| warp::reject::custom(rejections::NotFound))?;
 
-        let object = database
-            .get_one::<Self>(id, Some(&user))
-            .map_err(handle_database_error)?;
+            let object = database
+                .get_one::<Self>(id, Some(&user))
+                .map_err(handle_database_error)?;
 
-        object
-            .before_api_update(&database, &mut data)
-            .map_err(handle_database_error)?;
+            object
+                .before_api_update(&database, &mut data)
+                .map_err(handle_database_error)?;
 
-        let object = object.update_with_json(&data);
+            let object = object.update_with_json(&data);
 
-        let _ = database
-            .update(&object, Some(&user))
-            .map_err(handle_database_error)?;
+            let _ = database
+                .update(&object, Some(&user))
+                .map_err(handle_database_error)?;
 
-        object
-            .after_api_update(&database, &mut data)
-            .map_err(handle_database_error)?;
+            object
+                .after_api_update(&database, &mut data)
+                .map_err(handle_database_error)?;
+            object
+        };
 
         Ok(warp::reply::with_status(
             warp::reply::json(&object),
@@ -285,25 +294,27 @@ where
     ) -> Result<impl Reply, warp::Rejection> {
         let id = Id::from_string(&id).map_err(|_| reject::custom(rejections::NotFound))?;
 
-        let database = db_mutex.lock().map_err(|err| {
-            reject::custom(rejections::InternalServerError::from(err.to_string()))
-        })?;
+        {
+            let database = db_mutex.lock().map_err(|err| {
+                reject::custom(rejections::InternalServerError::from(err.to_string()))
+            })?;
 
-        let object = database
-            .get_one::<Self>(id, Some(&user))
-            .map_err(handle_database_error)?;
+            let object = database
+                .get_one::<Self>(id, Some(&user))
+                .map_err(handle_database_error)?;
 
-        object
-            .before_api_delete(&database)
-            .map_err(handle_database_error)?;
+            object
+                .before_api_delete(&database)
+                .map_err(handle_database_error)?;
 
-        let _ = database
-            .remove(&object, Some(&user))
-            .map_err(handle_database_error)?;
+            let _ = database
+                .remove(&object, Some(&user))
+                .map_err(handle_database_error)?;
 
-        object
-            .after_api_delete(&database)
-            .map_err(handle_database_error)?;
+            object
+                .after_api_delete(&database)
+                .map_err(handle_database_error)?;
+        };
 
         Ok(warp::reply::with_status(
             warp::reply::json(&""),
@@ -380,12 +391,14 @@ pub async fn user_auth(
     db_mutex: Arc<Mutex<Database>>,
     credentials: Login,
 ) -> Result<impl warp::Reply, warp::Rejection> {
-    let database = db_mutex
-        .lock()
-        .map_err(|err| reject::custom(rejections::InternalServerError::from(err.to_string())))?;
+    let session = {
+        let database = db_mutex.lock().map_err(|err| {
+            reject::custom(rejections::InternalServerError::from(err.to_string()))
+        })?;
 
-    let session = auth::try_user_auth(&credentials.username, &credentials.password, &database)
-        .map_err(handle_database_error)?;
+        auth::try_user_auth(&credentials.username, &credentials.password, &database)
+            .map_err(handle_database_error)?
+    };
 
     Ok(warp::reply::with_status(
         warp::reply::with_header(

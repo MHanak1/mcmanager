@@ -1,5 +1,5 @@
 use anyhow::Result;
-use mcmanager::database::objects::World;
+use mcmanager::database::objects::{User, World};
 use mcmanager::database::types::Id;
 use mcmanager::database::{Database, objects};
 use mcmanager::util;
@@ -11,36 +11,56 @@ fn main() -> Result<()> {
     let database = Database { conn };
     database.init().expect("Failed to init database");
 
-    let mut miguel = database.create_user("MHanak", "Password")?;
-    let _ = database.create_user("Dingus", "AAAAAAAAAAAAAAA")?;
-    let _ = database.create_user("Dorkus", "A")?;
-
-    miguel.is_privileged = true;
+    let miguel = database.create_user_from(
+        User {
+            id: Id::from_string("hhmVuPII")?,
+            username: "MHanak".to_string(),
+            is_privileged: true,
+            ..Default::default()
+        },
+        "Password",
+    )?;
+    let _ = database.create_user_from(
+        User {
+            id: Id::from_string("h9htSMj6")?,
+            username: "Dingus".to_string(),
+            ..Default::default()
+        },
+        "AAAAAAAAAAAAAAA",
+    )?;
+    let _ = database.create_user_from(
+        User {
+            id: Id::from_string("IKzN1kgH")?,
+            username: "Dorkus".to_string(),
+            ..Default::default()
+        },
+        "A",
+    )?;
 
     database
         .update(&miguel, None)
         .expect("Failed to update Miguel");
 
     let forge = objects::ModLoader {
-        id: Id::new_random(),
+        id: Id::from_string("Uz-rWPzk")?,
         name: "Forge".to_string(),
         can_load_mods: false,
     };
 
     let fabric = objects::ModLoader {
-        id: Id::new_random(),
+        id: Id::from_string("ZDkSeyGU")?,
         name: "Fabric".to_string(),
         can_load_mods: true,
     };
 
     let fabric1214 = objects::Version {
-        id: Id::new_random(),
+        id: Id::from_string("MWKefd0C")?,
         minecraft_version: "1.21.4".to_string(),
         mod_loader_id: fabric.id,
     };
 
     let forge1122 = objects::Version {
-        id: Id::new_random(),
+        id: Id::from_string("RPSz1TGj")?,
         minecraft_version: "1.12.2".to_string(),
         mod_loader_id: forge.id,
     };
@@ -52,7 +72,7 @@ fn main() -> Result<()> {
 
     database.insert(
         &World {
-            id: Id::default(),
+            id: Id::from_string("BUcrnbMq").unwrap(),
             owner_id: miguel.id,
             name: "Miguel's world".to_string(),
             hostname: "miguel".to_string(),
@@ -66,7 +86,7 @@ fn main() -> Result<()> {
 
     database.insert(
         &World {
-            id: Id::default(),
+            id: Id::from_string("GkAgtAmd").unwrap(),
             owner_id: miguel.id,
             name: "Fucky Wucky world".to_string(),
             hostname: "fky-wky".to_string(),
@@ -80,12 +100,12 @@ fn main() -> Result<()> {
 
     database.insert(
         &World {
-            id: Id::default(),
+            id: Id::from_string("Iar-FBHJ").unwrap(),
             owner_id: miguel.id,
             name: "Dingusland".to_string(),
             hostname: "dingusland".to_string(),
             icon_id: None,
-            allocated_memory: 1,
+            allocated_memory: 2048,
             version_id: fabric1214.id,
             enabled: false,
         },

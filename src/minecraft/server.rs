@@ -1,12 +1,14 @@
 use crate::database::objects::World;
 use crate::database::types::Id;
+use crate::minecraft;
 use anyhow::{Result, anyhow};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashMap;
 use std::fmt::Debug;
+use std::result;
 use std::sync::{Arc, LazyLock, Mutex};
 
-type ServerMutex = Arc<Mutex<Box<dyn MinecraftServer>>>;
+pub type ServerMutex = Arc<Mutex<Box<dyn MinecraftServer>>>;
 static SERVERS: LazyLock<Mutex<HashMap<Id, ServerMutex>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
@@ -22,6 +24,7 @@ pub enum MinecraftServerStatus {
     Exited(u32),
 }
 
+/*
 pub mod config {
     use serde::{Deserialize, Serialize};
 
@@ -101,11 +104,28 @@ pub mod config {
         white_list: bool,
     }
 }
+ */
 
 pub fn get_server(id: Id) -> Option<ServerMutex> {
     match SERVERS.lock() {
         Ok(servers) => servers.get(&id).cloned(),
         Err(_) => None,
+    }
+}
+
+pub fn get_or_create_server(world: &World) -> Result<minecraft::server::ServerMutex> {
+    let mut server = get_server(world.id);
+    match server {
+        Some(server) => Ok(server),
+        None => {
+            add_server(Box::new(internal::InternalServer::new(world).map_err(
+                |err| crate::database::DatabaseError::InternalServerError(err.to_string()),
+            )?))
+            .map_err(|err| crate::database::DatabaseError::InternalServerError(err.to_string()))?;
+            server = get_server(world.id);
+            assert!(server.is_some());
+            Ok(server.unwrap())
+        }
     }
 }
 
@@ -287,7 +307,7 @@ pub mod internal {
                 "%max_mem%",
                 &format!("-Xmx{}m", self.world.allocated_memory),
             );
-            println!("{command}");
+            //println!("{command}");
             let command = Exec::shell(command)
                 .cwd(self.directory.clone())
                 .stdin(subprocess::Redirection::Pipe)
@@ -654,5 +674,47 @@ pub mod util {
         for (_id, server) in SERVERS.lock().expect("couldn't get servers").iter_mut() {
             server.lock().expect("failed to lock server").refresh();
         }
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum ServerConfigLimit {
+    MoreThan(i64),
+    LessThan(i64),
+    Whitelist(Vec<String>),
+}
+
+impl Serialize for ServerConfigLimit {
+    fn serialize<S>(&self, serializer: S) -> result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            ServerConfigLimit::MoreThan(val) => serializer.serialize_str(&format!(">{val}")),
+            ServerConfigLimit::LessThan(val) => serializer.serialize_str(&format!("<{val}")),
+            ServerConfigLimit::Whitelist(vals) => serializer.serialize_str(&vals.join("|")),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for ServerConfigLimit {
+    fn deserialize<D>(deserializer: D) -> result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+
+        if let Some(val) = s.strip_prefix(">") {
+            if let Ok(val) = val.parse() {
+                return Ok(ServerConfigLimit::MoreThan(val));
+            };
+        } else if let Some(val) = s.strip_prefix("<") {
+            if let Ok(val) = val.parse() {
+                return Ok(ServerConfigLimit::LessThan(val));
+            };
+        };
+        Ok(ServerConfigLimit::Whitelist(
+            s.split('|').map(String::from).collect(),
+        ))
     }
 }

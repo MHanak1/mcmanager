@@ -4,13 +4,12 @@ use crate::api::util::rejections;
 use crate::database::objects::{DbObject, FromJson, UpdateJson, User};
 use crate::database::types::{Access, Column, Id, Type};
 use crate::database::{Database, DatabaseError};
-use crate::minecraft;
 use crate::minecraft::server;
-use crate::minecraft::server::MinecraftServerStatus;
-use crate::minecraft::server::internal::InternalServer;
+use crate::minecraft::server::{MinecraftServerStatus, ServerConfigLimit};
 use rusqlite::types::ToSqlOutput;
 use rusqlite::{Row, ToSql};
 use serde::{Deserialize, Deserializer, Serialize};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use warp::http::StatusCode;
 use warp::{Filter, Rejection, Reply, reject};
@@ -119,26 +118,6 @@ impl DbObject for World {
         ]
     }
 }
-/*
-impl World {
-    pub fn status(&self) -> MinecraftServerStatus {
-        match minecraft::server::SERVERS
-            .lock()
-            .expect("couldn't get servers")
-            .iter()
-            .find_map(|server| {
-                if server.id() == self.id {
-                    Some(server)
-                } else {
-                    None
-                }
-            }) {
-            Some(server) => *server.status(),
-            None => MinecraftServerStatus::Exited(0),
-        }
-    }
-}
-*/
 
 #[allow(unused)]
 fn is_valid_hostname(hostname: &str) -> bool {
@@ -239,7 +218,11 @@ impl ApiObject for World {
                 db_mutex.clone(),
                 rate_limit_config.clone(),
             ))
-            .or(Self::config_filter(
+            .or(Self::get_config_filter(
+                db_mutex.clone(),
+                rate_limit_config.clone(),
+            ))
+            .or(Self::set_config_filter(
                 db_mutex.clone(),
                 rate_limit_config.clone(),
             ))
@@ -286,8 +269,7 @@ impl ApiCreate for World {
         _database: &Database,
         _json: &mut Self::JsonFrom,
     ) -> Result<(), DatabaseError> {
-        minecraft::server::internal::InternalServer::new(self)
-            .map_err(|err| DatabaseError::InternalServerError(err.to_string()))?;
+        let _ = server::get_or_create_server(self);
         Ok(())
     }
 }
@@ -323,35 +305,13 @@ impl ApiUpdate for World {
         _database: &Database,
         _json: &mut Self::JsonUpdate,
     ) -> Result<(), DatabaseError> {
-        let mut server = server::get_server(self.id);
-        if server.is_none() {
-            server::add_server(Box::new(
-                InternalServer::new(self)
-                    .map_err(|err| DatabaseError::InternalServerError(err.to_string()))?,
-            ))
+        let server = server::get_or_create_server(self)
             .map_err(|err| DatabaseError::InternalServerError(err.to_string()))?;
-            server = server::get_server(self.id);
-            assert!(server.is_some());
-        }
-        let server = server.unwrap();
         let mut server = server.lock().expect("failed to lock server");
 
         server
             .update_world(self.clone())
             .map_err(|err| DatabaseError::InternalServerError(err.to_string()))
-        /*
-        if self.enabled {
-            server
-                .start()
-                .map_err(|err| DatabaseError::InternalServerError(err.to_string()))?;
-            Ok(())
-        } else {
-            server
-                .stop()
-                .map_err(|err| DatabaseError::InternalServerError(err.to_string()))?;
-            Ok(())
-        }
-         */
     }
 }
 impl ApiRemove for World {}
@@ -365,13 +325,15 @@ impl World {
         user: User,
     ) -> Result<impl warp::Reply, warp::Rejection> {
         let id = Id::from_string(&id).map_err(|_| reject::custom(rejections::NotFound))?;
-        let database = db_mutex.lock().map_err(|err| {
-            reject::custom(rejections::InternalServerError::from(err.to_string()))
-        })?;
+        {
+            let database = db_mutex.lock().map_err(|err| {
+                reject::custom(rejections::InternalServerError::from(err.to_string()))
+            })?;
 
-        database
-            .get_one::<Self>(id, Some(&user))
-            .map_err(crate::api::handlers::handle_database_error)?;
+            database
+                .get_one::<Self>(id, Some(&user))
+                .map_err(crate::api::handlers::handle_database_error)?;
+        }
 
         let server = server::get_server(id);
         let status = match server {
@@ -425,34 +387,43 @@ impl World {
     fn get_server_config(
         _rate_limit_info: RateLimitInfo,
         id: String,
-        _db_mutex: Arc<Mutex<Database>>,
-        _user: User,
+        db_mutex: Arc<Mutex<Database>>,
+        user: User,
     ) -> Result<impl warp::Reply, warp::Rejection> {
         let id = Id::from_string(&id).map_err(|_| reject::custom(rejections::NotFound))?;
-        //TODO: check if the player can actually access this
-        /*
-        let database = db_mutex.lock().map_err(|err| {
-            reject::custom(rejections::InternalServerError::from(err.to_string()))
-        })?;
-        let world = database
-            .get_one::<Self>(id, Some(&user))
-            .map_err(crate::api::handlers::handle_database_error)?;
 
-         */
-
-        let server = match server::get_server(id) {
-            Some(server) => server,
-            //TODO: if the server is not running, then it should be created, and then its config read.
-            None => return Err(warp::reject::custom(rejections::NotFound)),
+        let world = {
+            let database = db_mutex.lock().map_err(|err| {
+                reject::custom(rejections::InternalServerError::from(err.to_string()))
+            })?;
+            database
+                .get_one::<Self>(id, Some(&user))
+                .map_err(crate::api::handlers::handle_database_error)?
         };
+
+        let server = server::get_or_create_server(&world)
+            .map_err(|err| warp::reject::custom(rejections::InternalServerError::from(err)))?;
 
         let server = server
             .lock()
             .map_err(|err| warp::reject::custom(rejections::InternalServerError::from(err)))?;
 
-        let config = server
+        let mut config = server
             .config()
             .map_err(|err| warp::reject::custom(rejections::InternalServerError::from(err)))?;
+        if user.config_whitelist.is_empty() {
+            for key in user.config_blacklist {
+                config.remove(&key);
+            }
+        } else {
+            let mut new_config = HashMap::new();
+            for key in user.config_whitelist {
+                if let Some(value) = config.get(&key) {
+                    new_config.insert(key, value.clone());
+                }
+            }
+            config = new_config
+        }
 
         Ok(warp::reply::with_status(
             warp::reply::json(&config),
@@ -460,7 +431,7 @@ impl World {
         ))
     }
 
-    pub fn config_filter(
+    pub fn get_config_filter(
         db_mutex: Arc<Mutex<Database>>,
         rate_limit_config: RateLimitConfig,
     ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
@@ -475,6 +446,117 @@ impl World {
             .and(filters::with_auth(db_mutex))
             .and_then(|rate_limit_info, id, db_mutex, user| async move {
                 Self::get_server_config(rate_limit_info, id, db_mutex, user)
+            })
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    fn set_server_config(
+        _rate_limit_info: RateLimitInfo,
+        id: String,
+        db_mutex: Arc<Mutex<Database>>,
+        user: User,
+        new_config: HashMap<String, String>,
+    ) -> Result<impl warp::Reply, warp::Rejection> {
+        let id = Id::from_string(&id).map_err(|_| reject::custom(rejections::NotFound))?;
+
+        let world = {
+            let database = db_mutex.lock().map_err(|err| {
+                reject::custom(rejections::InternalServerError::from(err.to_string()))
+            })?;
+            database
+                .get_one::<Self>(id, Some(&user))
+                .map_err(crate::api::handlers::handle_database_error)?
+        };
+
+        let server = server::get_or_create_server(&world)
+            .map_err(|err| warp::reject::custom(rejections::InternalServerError::from(err)))?;
+
+        let mut server = server
+            .lock()
+            .map_err(|err| warp::reject::custom(rejections::InternalServerError::from(err)))?;
+
+        let mut config = server
+            .config()
+            .map_err(|err| warp::reject::custom(rejections::InternalServerError::from(err)))?;
+        if user.config_whitelist.is_empty() {
+            for key in &user.config_blacklist {
+                config.remove(key.as_str());
+            }
+        } else {
+            let mut new_config = HashMap::new();
+            for key in &user.config_whitelist {
+                if let Some(value) = config.get(key.as_str()) {
+                    new_config.insert(key.clone(), value.clone());
+                }
+            }
+            config = new_config
+        }
+
+        for (key, value) in new_config {
+            let mut editable = true;
+            if user.config_whitelist.is_empty() {
+                if user.config_blacklist.contains(&key) {
+                    editable = false;
+                }
+            } else if !user.config_whitelist.contains(&key) {
+                editable = false;
+            }
+
+            if editable {
+                if let Some(config_limit) = user.config_limits.get(&key) {
+                    match config_limit {
+                        ServerConfigLimit::MoreThan(limit) | ServerConfigLimit::LessThan(limit) => {
+                            if let Ok(value) = value.parse::<i64>() {
+                                let over_limit = match config_limit {
+                                    ServerConfigLimit::MoreThan(limit) => value < *limit,
+                                    ServerConfigLimit::LessThan(limit) => value > *limit,
+                                    _ => true, //huh
+                                };
+                                if over_limit {
+                                    config.insert(key, limit.to_string());
+                                } else {
+                                    config.insert(key, value.to_string());
+                                }
+                            }
+                            //if the value is invalid don't set it
+                        }
+                        ServerConfigLimit::Whitelist(whitelist) => {
+                            if whitelist.contains(&value) {
+                                config.insert(key, value);
+                            }
+                        }
+                    }
+                } else {
+                    config.insert(key, value);
+                }
+            }
+        }
+
+        server
+            .set_config(config.clone())
+            .map_err(|err| warp::reject::custom(rejections::InternalServerError::from(err)))?;
+
+        Ok(warp::reply::with_status(
+            warp::reply::json(&config),
+            StatusCode::OK,
+        ))
+    }
+    pub fn set_config_filter(
+        db_mutex: Arc<Mutex<Database>>,
+        rate_limit_config: RateLimitConfig,
+    ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
+        warp::path("api")
+            .and(warp_rate_limit::with_rate_limit(rate_limit_config))
+            .and(warp::path(Self::table_name()))
+            .and(warp::path::param::<String>())
+            .and(warp::path("config"))
+            .and(warp::path::end())
+            .and(warp::post())
+            .and(filters::with_db(db_mutex.clone()))
+            .and(filters::with_auth(db_mutex))
+            .and(warp::filters::body::json())
+            .and_then(|rate_limit_info, id, db_mutex, user, config| async move {
+                Self::set_server_config(rate_limit_info, id, db_mutex, user, config)
             })
     }
 }

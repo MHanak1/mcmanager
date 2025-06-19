@@ -4,10 +4,12 @@ use crate::config::CONFIG;
 use crate::database::objects::{DbObject, FromJson, UpdateJson};
 use crate::database::types::{Access, Column, Id, Type};
 use crate::database::{Database, DatabaseError};
+use crate::minecraft::server::ServerConfigLimit;
 use log::warn;
 use rusqlite::types::ToSqlOutput;
 use rusqlite::{Row, ToSql};
 use serde::{Deserialize, Deserializer, Serialize};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use warp::{Filter, Rejection, Reply};
 use warp_rate_limit::RateLimitConfig;
@@ -28,6 +30,12 @@ pub struct User {
     pub active_world_limit: Option<u32>,
     /// how much storage is available to a user in MiB. [`None`] means no limit
     pub storage_limit: Option<u32>,
+    /// server.properties config limitation. for more info look at the description in the config file
+    pub config_blacklist: Vec<String>,
+    /// server.properties config limitation. for more info look at the description in the config file
+    pub config_whitelist: Vec<String>,
+    /// server.properties config limitation. for more info look at the description in the config file
+    pub config_limits: HashMap<String, ServerConfigLimit>,
     /// whether a user has administrative privileges, this means they can manage other users and create new accounts
     pub is_privileged: bool,
     /// whether the user can access the API
@@ -51,7 +59,7 @@ impl DbObject for User {
     /*
     fn before_delete(&self, database: &Database) {
         for mcmod in database.list_filtered()
-        //delete all things that the user
+        //TODO: delete all things that the user
     }
      */
 
@@ -68,6 +76,9 @@ impl DbObject for User {
             Column::new("world_limit", Type::Integer(false)),
             Column::new("active_world_limit", Type::Integer(false)),
             Column::new("storage_limit", Type::Integer(false)),
+            Column::new("config_blacklist", Type::Text),
+            Column::new("config_whitelist", Type::Text),
+            Column::new("config_limits", Type::Text),
             Column::new("is_privileged", Type::Boolean)
                 .not_null()
                 .default("false"),
@@ -88,8 +99,15 @@ impl DbObject for User {
             world_limit: row.get(4)?,
             active_world_limit: row.get(5)?,
             storage_limit: row.get(6)?,
-            is_privileged: row.get(7)?,
-            enabled: row.get(8)?,
+            // yes. I am storing JSON in a database. no. you cannot stop me.
+            config_blacklist: serde_json::from_str(&row.get::<usize, String>(7)?)
+                .map_err(|_| rusqlite::Error::UnwindingPanic)?,
+            config_whitelist: serde_json::from_str(&row.get::<usize, String>(8)?)
+                .map_err(|_| rusqlite::Error::UnwindingPanic)?,
+            config_limits: serde_json::from_str(&row.get::<usize, String>(9)?)
+                .map_err(|_| rusqlite::Error::UnwindingPanic)?,
+            is_privileged: row.get(10)?,
+            enabled: row.get(11)?,
         })
     }
 
@@ -98,6 +116,12 @@ impl DbObject for User {
     }
 
     fn params(&self) -> Vec<ToSqlOutput> {
+        let config_blacklist =
+            serde_json::to_string(&self.config_blacklist).expect("serialization failed");
+        let config_whitelist =
+            serde_json::to_string(&self.config_whitelist).expect("serialization failed");
+        let config_limits =
+            serde_json::to_string(&self.config_limits).expect("serialization failed");
         vec![
             self.id
                 .to_sql()
@@ -120,6 +144,9 @@ impl DbObject for User {
             self.storage_limit
                 .to_sql()
                 .expect("failed to convert the value to sql"),
+            ToSqlOutput::from(config_blacklist),
+            ToSqlOutput::from(config_whitelist),
+            ToSqlOutput::from(config_limits),
             self.is_privileged
                 .to_sql()
                 .expect("failed to convert the value to sql"),
@@ -140,6 +167,9 @@ impl Default for User {
             world_limit: Some(CONFIG.user_defaults.world_limit),
             active_world_limit: Some(CONFIG.user_defaults.active_world_limit),
             storage_limit: Some(CONFIG.user_defaults.storage_limit),
+            config_blacklist: CONFIG.user_defaults.config_blacklist.clone(),
+            config_whitelist: CONFIG.user_defaults.config_whitelist.clone(),
+            config_limits: CONFIG.user_defaults.config_limits.clone(),
             is_privileged: false,
             enabled: true,
         }
@@ -169,6 +199,9 @@ pub struct JsonFrom {
     pub active_world_limit: Option<Option<u32>>,
     #[serde(default, deserialize_with = "deserialize_some")]
     pub storage_limit: Option<Option<u32>>,
+    pub config_blacklist: Option<Vec<String>>,
+    pub config_whitelist: Option<Vec<String>>,
+    pub config_limits: Option<HashMap<String, ServerConfigLimit>>,
     pub is_privileged: Option<bool>,
     pub enabled: Option<bool>,
 }
@@ -192,6 +225,18 @@ impl FromJson for User {
             storage_limit: data
                 .storage_limit
                 .unwrap_or(Some(CONFIG.user_defaults.storage_limit)),
+            config_blacklist: data
+                .config_blacklist
+                .clone()
+                .unwrap_or(CONFIG.user_defaults.config_blacklist.clone()),
+            config_whitelist: data
+                .config_whitelist
+                .clone()
+                .unwrap_or(CONFIG.user_defaults.config_whitelist.clone()),
+            config_limits: data
+                .config_limits
+                .clone()
+                .unwrap_or(CONFIG.user_defaults.config_limits.clone()),
             is_privileged: data.is_privileged.unwrap_or(false),
             enabled: data.enabled.unwrap_or(true),
         }
@@ -215,6 +260,12 @@ pub struct JsonUpdate {
     #[serde(default, deserialize_with = "deserialize_some")]
     pub storage_limit: Option<Option<u32>>,
     #[serde(default, deserialize_with = "deserialize_some")]
+    pub config_blacklist: Option<Vec<String>>,
+    #[serde(default, deserialize_with = "deserialize_some")]
+    pub config_whitelist: Option<Vec<String>>,
+    #[serde(default, deserialize_with = "deserialize_some")]
+    pub config_limits: Option<HashMap<String, ServerConfigLimit>>,
+    #[serde(default, deserialize_with = "deserialize_some")]
     pub is_privileged: Option<bool>,
     #[serde(default, deserialize_with = "deserialize_some")]
     pub enabled: Option<bool>,
@@ -229,6 +280,15 @@ impl UpdateJson for User {
         new.world_limit = data.world_limit.unwrap_or(new.world_limit);
         new.active_world_limit = data.active_world_limit.unwrap_or(new.active_world_limit);
         new.storage_limit = data.storage_limit.unwrap_or(new.storage_limit);
+        new.config_blacklist = data
+            .config_blacklist
+            .clone()
+            .unwrap_or(new.config_blacklist);
+        new.config_whitelist = data
+            .config_whitelist
+            .clone()
+            .unwrap_or(new.config_whitelist);
+        new.config_limits = data.config_limits.clone().unwrap_or(new.config_limits);
         new.is_privileged = data.is_privileged.unwrap_or(new.is_privileged);
         new.enabled = data.enabled.unwrap_or(new.enabled);
         new
