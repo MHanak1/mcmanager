@@ -214,10 +214,7 @@ impl Database {
                 _ => Err(DatabaseError::SqliteError(err)),
             },
             Ok(rows) => Ok(rows
-                .filter_map(|row| match row {
-                    Ok(row) => Some(row),
-                    Err(_) => None,
-                })
+                .filter_map(|row| row.ok())
                 .collect::<Vec<T>>()),
         }
     }

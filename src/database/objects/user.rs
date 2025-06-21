@@ -1,16 +1,18 @@
 pub use self::{password::Password, session::Session};
-use crate::api::handlers::{ApiCreate, ApiGet, ApiList, ApiObject, ApiRemove, ApiUpdate};
+use crate::api::handlers::{ApiCreate, ApiGet, ApiList, ApiObject, ApiRemove, ApiUpdate, DbMutex};
 use crate::config::CONFIG;
 use crate::database::objects::{DbObject, FromJson, UpdateJson};
 use crate::database::types::{Access, Column, Id, Type};
 use crate::database::{Database, DatabaseError};
 use crate::minecraft::server::ServerConfigLimit;
+use async_trait::async_trait;
 use log::warn;
 use rusqlite::types::ToSqlOutput;
 use rusqlite::{Row, ToSql};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 use warp::{Filter, Rejection, Reply};
 use warp_rate_limit::RateLimitConfig;
 
@@ -322,30 +324,36 @@ impl ApiObject for User {
 
 impl ApiList for User {}
 impl ApiGet for User {}
+#[async_trait]
 impl ApiCreate for User {
-    fn after_api_create(
+    async fn after_api_create(
         &self,
-        database: &Database,
+        database: DbMutex,
         json: &mut Self::JsonFrom,
     ) -> Result<(), DatabaseError> {
         println!("{}, {}", json.username, json.password);
         database
+            .lock()
+            .await
             .insert(&Password::new(self.id, &json.password), None)
             .expect("failed to create the password for the user.");
         Ok(())
     }
 }
+#[async_trait]
 impl ApiUpdate for User {
-    fn after_api_update(
+    async fn after_api_update(
         &self,
-        database: &Database,
+        database: DbMutex,
         json: &mut Self::JsonUpdate,
     ) -> Result<(), DatabaseError> {
         //the the password is first created then recreated so it can handle a missing password entry for the user
         if let Some(password) = json.password.clone() {
-            match database.get_one::<Password>(self.id, None) {
+            match database.lock().await.get_one::<Password>(self.id, None) {
                 Ok(password) => {
                     database
+                        .lock()
+                        .await
                         .remove(&password, None)
                         .expect("failed to remove the password for the user");
                 }
@@ -355,6 +363,8 @@ impl ApiUpdate for User {
             }
 
             database
+                .lock()
+                .await
                 .insert(&Password::new(self.id, &password), None)
                 .expect("update the password for the user");
         }
@@ -473,7 +483,8 @@ pub mod session {
     use rusqlite::types::ToSqlOutput;
     use rusqlite::{Row, ToSql};
     use serde::{Deserialize, Serialize, Serializer};
-    use std::sync::{Arc, Mutex};
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
     use warp::{Filter, Rejection, Reply};
     use warp_rate_limit::RateLimitConfig;
 

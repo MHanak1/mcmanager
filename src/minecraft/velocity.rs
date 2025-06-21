@@ -4,7 +4,7 @@ use crate::minecraft::server::MinecraftServerStatus;
 use crate::util;
 use crate::util::dirs;
 use anyhow::{Context, bail};
-use log::{error, warn};
+use log::{error, info, warn};
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::PathBuf;
@@ -12,13 +12,13 @@ use std::time::Duration;
 use subprocess::{Exec, ExitStatus, Popen};
 
 pub trait VelocityServer {
-    fn start(&mut self) -> anyhow::Result<()>;
-    fn stop(&mut self) -> anyhow::Result<ExitStatus>;
-    fn status(&self) -> MinecraftServerStatus;
-    fn update_server_list(hosts: &[(String, String)]) -> anyhow::Result<()>;
-    fn update(&mut self) -> anyhow::Result<()>;
+    async fn start(&mut self) -> anyhow::Result<()>;
+    async fn stop(&mut self) -> anyhow::Result<ExitStatus>;
+    async fn status(&self) -> MinecraftServerStatus;
+    async fn update_server_list(hosts: &[(String, String)]) -> anyhow::Result<()>;
+    async fn update(&mut self) -> anyhow::Result<()>;
     //fn update_if_needed(&mut self) -> anyhow::Result<()>;
-    fn make_should_update(&mut self);
+    async fn make_should_update(&mut self);
 }
 
 pub struct InternalVelocityServer {
@@ -41,7 +41,7 @@ impl InternalVelocityServer {
 }
 
 impl VelocityServer for InternalVelocityServer {
-    fn start(&mut self) -> anyhow::Result<()> {
+    async fn start(&mut self) -> anyhow::Result<()> {
         let jar_path = self.path.join(CONFIG.velocity.executable_name.clone());
         if !jar_path.exists() {
             bail!("{} doesn't exist", jar_path.display());
@@ -76,7 +76,7 @@ impl VelocityServer for InternalVelocityServer {
         Ok(())
     }
 
-    fn stop(&mut self) -> anyhow::Result<ExitStatus> {
+    async fn stop(&mut self) -> anyhow::Result<ExitStatus> {
         if let Some(mut process) = self.process.take() {
             //try to kill velocity, if it fails, terminate it.
             #[allow(clippy::collapsible_if)]
@@ -118,11 +118,13 @@ impl VelocityServer for InternalVelocityServer {
         }
     }
 
-    fn status(&self) -> MinecraftServerStatus {
+    async fn status(&self) -> MinecraftServerStatus {
         self.status
     }
 
-    fn update_server_list(hosts: &[(String, String)]) -> anyhow::Result<()> {
+    async fn update_server_list(hosts: &[(String, String)]) -> anyhow::Result<()> {
+        info!("Updating the velocity config");
+
         let mut config = String::new();
         let mut file = File::open(dirs::base_dir().join("velocity_config.toml"))?;
         file.read_to_string(&mut config)?;
@@ -144,31 +146,25 @@ impl VelocityServer for InternalVelocityServer {
 
         Ok(())
     }
-    fn update(&mut self) -> anyhow::Result<()> {
+    async fn update(&mut self) -> anyhow::Result<()> {
         let mut hosts = vec![];
-        for server in server::get_all_servers() {
-            match server.lock() {
-                Ok(server) => {
-                    //println!("{:?}", server.world());
-                    if let Some(port) = server.port() {
-                        if let Some(hostname) = server.hostname() {
-                            //this pings every server every time the hostname is updated. a better solution should be found for this
-                            if let Ok(MinecraftServerStatus::Running) = server.status() {
-                                hosts.push((format!("{}:{}", server.host(), port), hostname));
-                            }
-                        }
-                        //else { println!("{}", "hostname is none"); }
-                    }
-                    //else { println!("port is none") }
+        for server in server::get_all_servers().await {
+            let server = server.lock().await;
+            //println!("{:?}", server.world());
+            if let Some(port) = server.port().await {
+                if let Some(hostname) = server.hostname().await {
+                    //this pings every server every time the hostname is updated. a better solution should be found for this
+                    //if let Ok(MinecraftServerStatus::Running) = server.status().await {
+                    hosts.push((format!("{}:{}", server.host().await, port), hostname));
+                    //}
                 }
-                Err(err) => {
-                    error!("{err}");
-                }
+                //else { println!("{}", "hostname is none"); }
             }
+            //else { println!("port is none") }
         }
         if !hosts.eq(&self.old_hosts) {
             self.old_hosts = hosts;
-            Self::update_server_list(&self.old_hosts)?;
+            Self::update_server_list(&self.old_hosts).await?;
 
             //self.process.unwrap().communicate(Some("velocity reload\n"))?;
             let mut process = self.process.take().context("Failed to get process")?;
@@ -193,7 +189,7 @@ impl VelocityServer for InternalVelocityServer {
     }
      */
 
-    fn make_should_update(&mut self) {
+    async fn make_should_update(&mut self) {
         self.should_update = true;
     }
 }

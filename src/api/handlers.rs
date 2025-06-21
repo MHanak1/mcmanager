@@ -3,37 +3,40 @@ use crate::api::{auth, filters};
 use crate::database::objects::{DbObject, FromJson, UpdateJson, User};
 use crate::database::types::Id;
 use crate::database::{Database, DatabaseError};
+use async_trait::async_trait;
 use log::error;
 use rusqlite::{Error, ErrorCode};
 use serde::{Deserialize, Serialize};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 use warp::http::StatusCode;
 use warp::{Filter, Rejection, Reply, reject};
 use warp_rate_limit::{RateLimitConfig, RateLimitInfo};
 
+pub type DbMutex = Arc<Mutex<Database>>;
+
 pub trait ApiObject: DbObject {
     fn filters(
-        db_mutex: Arc<Mutex<Database>>,
+        db_mutex: DbMutex,
         rate_limit_config: RateLimitConfig,
     ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone;
 }
 
+#[async_trait]
 pub trait ApiList: ApiObject
 where
-    Self: Sized,
+    Self: Sized + 'static,
     Self: Serialize,
 {
     //in theory the user filter should be done within the sql query, but for the sake of simplicity we do that when collecting the results
-    fn api_list(
+    async fn api_list(
         _rate_limit_info: RateLimitInfo,
-        db_mutex: Arc<Mutex<Database>>,
+        db_mutex: DbMutex,
         user: User,
         filters: Vec<(String, String)>,
-    ) -> Result<impl Reply, warp::Rejection> {
+    ) -> Result<impl warp::Reply, warp::Rejection> {
         let objects = {
-            let database = db_mutex.lock().map_err(|err| {
-                reject::custom(rejections::InternalServerError::from(err.to_string()))
-            })?;
+            let database = db_mutex.lock().await;
             database
                 .list_filtered::<Self>(filters, Some(&user))
                 .map_err(handle_database_error)?
@@ -45,7 +48,7 @@ where
     }
 
     fn list_filter(
-        db_mutex: Arc<Mutex<Database>>,
+        db_mutex: DbMutex,
         rate_limit_config: RateLimitConfig,
     ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone + Send + Sync
     {
@@ -57,27 +60,24 @@ where
             .and(filters::with_db(db_mutex.clone()))
             .and(filters::with_auth(db_mutex))
             .and(warp::query::<Vec<(String, String)>>())
-            .and_then(|rate_limit_info, db_mutex, user, filters| async move {
-                Self::api_list(rate_limit_info, db_mutex, user, filters)
-            })
+            .and_then(Self::api_list)
     }
 }
+#[async_trait]
 pub trait ApiGet: ApiObject
 where
-    Self: Sized,
+    Self: Sized + 'static,
     Self: Serialize,
 {
-    fn api_get(
+    async fn api_get(
         _rate_limit_info: RateLimitInfo,
         id: String,
-        db_mutex: Arc<Mutex<Database>>,
+        db_mutex: DbMutex,
         user: User,
     ) -> Result<impl warp::Reply, warp::Rejection> {
         let id = Id::from_string(&id).map_err(|_| reject::custom(rejections::NotFound))?;
         let object = {
-            let database = db_mutex.lock().map_err(|err| {
-                reject::custom(rejections::InternalServerError::from(err.to_string()))
-            })?;
+            let database = db_mutex.lock().await;
 
             database
                 .get_one::<Self>(id, Some(&user))
@@ -91,7 +91,7 @@ where
     }
 
     fn get_filter(
-        db_mutex: Arc<Mutex<Database>>,
+        db_mutex: DbMutex,
         rate_limit_config: RateLimitConfig,
     ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone + Send + Sync
     {
@@ -103,23 +103,22 @@ where
             .and(warp::get())
             .and(filters::with_db(db_mutex.clone()))
             .and(filters::with_auth(db_mutex))
-            .and_then(|rate_limit_info, id, db_mutex, user| async move {
-                Self::api_get(rate_limit_info, id, db_mutex, user)
-            })
+            .and_then(Self::api_get)
     }
 }
 
+#[async_trait]
 pub trait ApiCreate: ApiObject + FromJson
 where
-    Self: Sized,
+    Self: Sized + 'static,
     Self: Serialize,
 {
-    fn api_create(
+    async fn api_create(
         _rate_limit_info: RateLimitInfo,
-        db_mutex: Arc<Mutex<Database>>,
+        db_mutex: DbMutex,
         user: User,
         data: Self::JsonFrom,
-    ) -> Result<impl Reply, warp::Rejection> {
+    ) -> Result<impl warp::Reply, warp::Rejection> {
         let mut data = data;
         //in theory this is redundant, as database::insert checks it as well, but better safe than sorry
         if !Self::can_create(&user) {
@@ -127,18 +126,19 @@ where
         }
 
         let object = {
-            let database = db_mutex.lock().map_err(|err| {
-                reject::custom(rejections::InternalServerError::from(err.to_string()))
-            })?;
-
-            Self::before_api_create(&database, &mut data).map_err(handle_database_error)?;
+            Self::before_api_create(db_mutex.clone(), &mut data)
+                .await
+                .map_err(handle_database_error)?;
             let object = Self::from_json(&data, &user);
-            let _ = database
+            let _ = db_mutex
+                .lock()
+                .await
                 .insert(&object, Some(&user))
                 .map_err(handle_database_error)?;
 
             object
-                .after_api_create(&database, &mut data)
+                .after_api_create(db_mutex, &mut data)
+                .await
                 .map_err(handle_database_error)?;
             object
         };
@@ -155,8 +155,8 @@ where
 
     #[allow(unused)]
     /// runs before the database entry creation
-    fn before_api_create(
-        database: &Database,
+    async fn before_api_create(
+        database: DbMutex,
         json: &mut Self::JsonFrom,
     ) -> Result<(), DatabaseError> {
         Ok(())
@@ -165,16 +165,16 @@ where
     /// runs after the database entry creation
     ///
     /// this returns a [`Result`], but there is no mechanism to undo the entry creation. if this fails it should probably cause the program to panic
-    fn after_api_create(
+    async fn after_api_create(
         &self,
-        database: &Database,
+        database: DbMutex,
         json: &mut Self::JsonFrom,
     ) -> Result<(), DatabaseError> {
         Ok(())
     }
 
     fn create_filter(
-        db_mutex: Arc<Mutex<Database>>,
+        db_mutex: DbMutex,
         rate_limit_config: RateLimitConfig,
     ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone + Send + Sync
     {
@@ -187,49 +187,50 @@ where
             .and(filters::with_db(db_mutex.clone()))
             .and(filters::with_auth(db_mutex))
             .and(warp::body::json())
-            .and_then(|rate_limit_info, db_mutex, user, data| async move {
-                Self::api_create(rate_limit_info, db_mutex, user, data)
-            })
+            .and_then(Self::api_create)
     }
 }
 
+#[async_trait]
 pub trait ApiUpdate: ApiObject + UpdateJson
 where
-    Self: Sized,
+    Self: Sized + 'static,
     Self: serde::Serialize,
 {
-    fn api_update(
+    async fn api_update(
         _rate_limit_info: RateLimitInfo,
-        db_mutex: Arc<Mutex<Database>>,
         id: String,
+        db_mutex: DbMutex,
         user: User,
         data: Self::JsonUpdate,
-    ) -> Result<impl Reply, warp::Rejection> {
+    ) -> Result<impl warp::Reply, warp::Rejection> {
         let mut data = data;
         let object = {
-            let database = db_mutex.lock().map_err(|err| {
-                reject::custom(rejections::InternalServerError::from(err.to_string()))
-            })?;
-
             let id =
                 Id::from_string(&id).map_err(|_| warp::reject::custom(rejections::NotFound))?;
 
-            let object = database
+            let object = db_mutex
+                .lock()
+                .await
                 .get_one::<Self>(id, Some(&user))
                 .map_err(handle_database_error)?;
 
             object
-                .before_api_update(&database, &mut data)
+                .before_api_update(db_mutex.clone(), &mut data)
+                .await
                 .map_err(handle_database_error)?;
 
             let object = object.update_with_json(&data);
 
-            let _ = database
+            let _ = db_mutex
+                .lock()
+                .await
                 .update(&object, Some(&user))
                 .map_err(handle_database_error)?;
 
             object
-                .after_api_update(&database, &mut data)
+                .after_api_update(db_mutex, &mut data)
+                .await
                 .map_err(handle_database_error)?;
             object
         };
@@ -241,9 +242,9 @@ where
     }
     #[allow(unused)]
     /// runs before the database entry update
-    fn before_api_update(
+    async fn before_api_update(
         &self,
-        database: &Database,
+        database: DbMutex,
         json: &mut Self::JsonUpdate,
     ) -> Result<(), DatabaseError> {
         Ok(())
@@ -252,16 +253,16 @@ where
     /// runs after the database entry update
     ///
     /// this returns a [`Result`], but there is no mechanism to undo the entry update. if this fails it should probably cause the program to panic
-    fn after_api_update(
+    async fn after_api_update(
         &self,
-        database: &Database,
+        database: DbMutex,
         json: &mut Self::JsonUpdate,
     ) -> Result<(), DatabaseError> {
         Ok(())
     }
 
     fn update_filter(
-        db_mutex: Arc<Mutex<Database>>,
+        db_mutex: DbMutex,
         rate_limit_config: RateLimitConfig,
     ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone + Send + Sync
     {
@@ -275,29 +276,26 @@ where
             .and(filters::with_db(db_mutex.clone()))
             .and(filters::with_auth(db_mutex))
             .and(warp::body::json())
-            .and_then(|rate_limit_info, id, db_mutex, user, data| async move {
-                Self::api_update(rate_limit_info, db_mutex, id, user, data)
-            })
+            .and_then(Self::api_update)
     }
 }
 
+#[async_trait]
 pub trait ApiRemove: ApiObject
 where
-    Self: Sized,
+    Self: Sized + 'static,
     Self: serde::Serialize,
 {
-    fn api_remove(
+    async fn api_remove(
         _rate_limit_info: RateLimitInfo,
         id: String,
-        db_mutex: Arc<Mutex<Database>>,
+        db_mutex: DbMutex,
         user: User,
-    ) -> Result<impl Reply, warp::Rejection> {
+    ) -> Result<impl warp::Reply, warp::Rejection> {
         let id = Id::from_string(&id).map_err(|_| reject::custom(rejections::NotFound))?;
 
         {
-            let database = db_mutex.lock().map_err(|err| {
-                reject::custom(rejections::InternalServerError::from(err.to_string()))
-            })?;
+            let database = db_mutex.lock().await;
 
             let object = database
                 .get_one::<Self>(id, Some(&user))
@@ -305,6 +303,7 @@ where
 
             object
                 .before_api_delete(&database)
+                .await
                 .map_err(handle_database_error)?;
 
             let _ = database
@@ -313,6 +312,7 @@ where
 
             object
                 .after_api_delete(&database)
+                .await
                 .map_err(handle_database_error)?;
         };
 
@@ -324,19 +324,19 @@ where
 
     #[allow(unused)]
     /// runs before the database entry deletion
-    fn before_api_delete(&self, database: &Database) -> Result<(), DatabaseError> {
+    async fn before_api_delete(&self, database: &Database) -> Result<(), DatabaseError> {
         Ok(())
     }
     #[allow(unused)]
     /// runs after the database entry deletion
     ///
     /// this returns a [`Result`], but there is no mechanism to undo the entry deletion. if this fails it should probably cause the program to panic
-    fn after_api_delete(&self, database: &Database) -> Result<(), DatabaseError> {
+    async fn after_api_delete(&self, database: &Database) -> Result<(), DatabaseError> {
         Ok(())
     }
 
     fn remove_filter(
-        db_mutex: Arc<Mutex<Database>>,
+        db_mutex: DbMutex,
         rate_limit_config: RateLimitConfig,
     ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone + Send + Sync
     {
@@ -348,9 +348,7 @@ where
             .and(warp::delete())
             .and(filters::with_db(db_mutex.clone()))
             .and(filters::with_auth(db_mutex))
-            .and_then(|rate_limit_info, id, db_mutex, user| async move {
-                Self::api_remove(rate_limit_info, id, db_mutex, user)
-            })
+            .and_then(Self::api_remove)
     }
 }
 
@@ -388,13 +386,11 @@ pub struct Login {
 #[allow(clippy::unused_async)]
 pub async fn user_auth(
     _rate_limit_info: RateLimitInfo,
-    db_mutex: Arc<Mutex<Database>>,
+    db_mutex: DbMutex,
     credentials: Login,
 ) -> Result<impl warp::Reply, warp::Rejection> {
     let session = {
-        let database = db_mutex.lock().map_err(|err| {
-            reject::custom(rejections::InternalServerError::from(err.to_string()))
-        })?;
+        let database = db_mutex.lock().await;
 
         auth::try_user_auth(&credentials.username, &credentials.password, &database)
             .map_err(handle_database_error)?

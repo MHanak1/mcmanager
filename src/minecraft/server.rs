@@ -1,12 +1,16 @@
 use crate::database::objects::World;
 use crate::database::types::Id;
 use crate::minecraft;
-use anyhow::{Result, anyhow};
+use anyhow::Result;
+use async_trait::async_trait;
+use rusqlite::fallible_iterator::FallibleIterator;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::result;
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{Arc, LazyLock};
+use tokio::sync::Mutex;
+use warp::hyper::body::HttpBody;
 
 pub type ServerMutex = Arc<Mutex<Box<dyn MinecraftServer>>>;
 static SERVERS: LazyLock<Mutex<HashMap<Id, ServerMutex>>> =
@@ -106,60 +110,78 @@ pub mod config {
 }
  */
 
-pub fn get_server(id: Id) -> Option<ServerMutex> {
-    match SERVERS.lock() {
-        Ok(servers) => servers.get(&id).cloned(),
-        Err(_) => None,
-    }
+pub async fn get_server(id: Id) -> Option<ServerMutex> {
+    SERVERS.lock().await.get(&id).cloned()
 }
 
-pub fn get_or_create_server(world: &World) -> Result<minecraft::server::ServerMutex> {
-    let mut server = get_server(world.id);
+pub async fn get_or_create_server(world: &World) -> Result<minecraft::server::ServerMutex> {
+    let mut server = get_server(world.id).await;
     match server {
         Some(server) => Ok(server),
         None => {
-            add_server(Box::new(internal::InternalServer::new(world).map_err(
-                |err| crate::database::DatabaseError::InternalServerError(err.to_string()),
-            )?))
-            .map_err(|err| crate::database::DatabaseError::InternalServerError(err.to_string()))?;
-            server = get_server(world.id);
+            add_server(match crate::config::CONFIG.minecraft_server_type.as_str() {
+                "internal" => Box::new(
+                    internal::InternalServer::new(world.clone())
+                        .await
+                        .map_err(|err| {
+                            crate::database::DatabaseError::InternalServerError(err.to_string())
+                        })?,
+                ),
+                "remote" => Box::new(external::MinimanagerServer::new(
+                    crate::config::CONFIG.remote.host.clone(),
+                    crate::config::CONFIG.remote.port,
+                    world.clone(),
+                )),
+                _ => {
+                    panic!(
+                        "Unknown minecraft server type: {}",
+                        crate::config::CONFIG.minecraft_server_type
+                    );
+                }
+            })
+            .await;
+            server = get_server(world.id).await;
             assert!(server.is_some());
             Ok(server.unwrap())
         }
     }
 }
 
-pub fn add_server(server: Box<dyn MinecraftServer>) -> anyhow::Result<()> {
-    match SERVERS.lock() {
-        Ok(mut servers) => {
-            servers.insert(server.id(), Arc::new(Mutex::new(server)));
-            Ok(())
-        }
-        Err(err) => Err(anyhow!("failed to lock servers: {}", err)),
-    }
-}
-
-pub fn remove_server(id: &Id) -> anyhow::Result<()> {
-    match SERVERS.lock() {
-        Ok(mut servers) => {
-            servers.remove(id);
-            Ok(())
-        }
-        Err(err) => Err(anyhow!("failed to lock servers: {}", err)),
-    }
-}
-
-pub fn get_all_servers() -> Vec<ServerMutex> {
-    SERVERS.lock().unwrap().values().cloned().collect()
-}
-
-pub fn get_all_worlds() -> Vec<World> {
+pub async fn add_server(server: Box<dyn MinecraftServer>) {
     SERVERS
         .lock()
-        .unwrap()
+        .await
+        .insert(server.id().await, Arc::new(Mutex::new(server)));
+}
+
+pub async fn remove_server(id: &Id) {
+    SERVERS.lock().await.remove(id);
+}
+
+pub async fn get_all_servers() -> Vec<ServerMutex> {
+    SERVERS.lock().await.values().cloned().collect()
+}
+
+pub async fn get_all_worlds() -> Vec<World> {
+    futures::future::join_all(
+        SERVERS
+            .lock()
+            .await
+            .values()
+            .map(|server: &ServerMutex| async { server.lock().await.world().await }),
+    )
+    .await
+    .iter()
+    .filter_map(|world: &Result<World, anyhow::Error>| world.as_ref().ok().cloned())
+    .collect()
+    /*
+    SERVERS
+        .lock()
+        .await
         .values()
-        .filter_map(|server| server.lock().expect("failed to lock server").world().ok())
+        .filter_map(async |server: &ServerMutex| server.lock().await.world().await.ok())
         .collect()
+     */
 }
 
 /*
@@ -182,21 +204,22 @@ pub trait MinecraftServer: Send {
 }
  */
 
+#[async_trait]
 pub trait MinecraftServer: Send {
-    fn world(&self) -> Result<World>;
-    fn update_world(&mut self, world: World) -> Result<()>;
-    fn config(&self) -> Result<HashMap<String, String>>;
-    fn set_config(&mut self, config: HashMap<String, String>) -> Result<()>;
-    fn id(&self) -> Id;
-    fn status(&self) -> Result<MinecraftServerStatus>;
+    async fn world(&self) -> Result<World>;
+    async fn update_world(&mut self, world: World) -> Result<()>;
+    async fn config(&self) -> Result<HashMap<String, String>>;
+    async fn set_config(&mut self, config: HashMap<String, String>) -> Result<()>;
+    async fn id(&self) -> Id;
+    async fn status(&self) -> Result<MinecraftServerStatus>;
     /// to which port is the server bound to
-    fn port(&self) -> Option<u16>;
+    async fn port(&self) -> Option<u16>;
     /// under what subdomain is the server avaliable)
-    fn host(&self) -> String;
+    async fn host(&self) -> String;
     /// Where the minecraft server resides
-    fn hostname(&self) -> Option<String>;
+    async fn hostname(&self) -> Option<String>;
     /// updates the status of the server. this should return false if the server is updated through somewhere else
-    fn refresh(&mut self) -> bool;
+    async fn refresh(&mut self) -> bool;
 }
 
 pub mod internal {
@@ -207,6 +230,7 @@ pub mod internal {
     use crate::util;
     use anyhow::Result;
     use anyhow::{Context, bail};
+    use async_trait::async_trait;
     use log::{debug, info, warn};
     use std::collections::{HashMap, HashSet};
     use std::fs::File;
@@ -237,25 +261,27 @@ pub mod internal {
         process: Option<Popen>,
     }
     impl InternalServer {
-        pub fn new(world: &World) -> Result<Self> {
+        pub async fn new(world: World) -> Result<Self> {
+            let enabled = world.enabled;
             let mut new = Self {
                 status: MinecraftServerStatus::Exited(0),
-                world: world.clone(),
+                hostname: world.hostname.clone(),
                 directory: util::dirs::worlds_dir()
                     .join(format!("{}/{}", world.owner_id, world.id)),
                 port: None,
-                hostname: world.hostname.clone(),
                 process: None,
+                world,
             };
-            if world.enabled {
-                new.start()?;
+            if enabled {
+                new.start().await?;
             }
             Ok(new)
         }
 
-        fn initialise_files(&self) -> Result<()> {
+        async fn initialise_files(&self) -> Result<()> {
             let port = self
                 .port()
+                .await
                 .context("Port not set, cannot initialise files")?;
 
             let properties = self
@@ -275,7 +301,7 @@ pub mod internal {
     }
 
     impl InternalServer {
-        fn start(&mut self) -> Result<()> {
+        async fn start(&mut self) -> Result<()> {
             let jar_path =
                 util::dirs::versions_dir().join(format!("{}.jar", self.world.version_id));
             if !jar_path.exists() {
@@ -299,8 +325,8 @@ pub mod internal {
                 .expect("failed to lock local ports")
                 .insert(port);
 
-            self.initialise_files()?;
-            debug!("starting server {}", self.id());
+            self.initialise_files().await?;
+            debug!("starting server {}", self.id().await);
             let command = CONFIG.world.java_launch_command.clone();
             let command = command.replace("%jar%", jar_path.display().to_string().as_str());
             let command = command.replace(
@@ -326,7 +352,7 @@ pub mod internal {
             Ok(())
         }
 
-        fn stop(&mut self) -> Result<()> {
+        async fn stop(&mut self) -> Result<()> {
             let stop_result = self.write_console(b"stop\n");
             if let Some(mut process) = self.process.take() {
                 if stop_result.is_err() {
@@ -344,7 +370,11 @@ pub mod internal {
 
                 match result {
                     Some(status) => {
-                        info!("stopped server {} with status {:?}", self.id(), status);
+                        info!(
+                            "stopped server {} with status {:?}",
+                            self.id().await,
+                            status
+                        );
                         if let ExitStatus::Exited(code) = status {
                             self.status = MinecraftServerStatus::Exited(code);
                         } else {
@@ -354,7 +384,10 @@ pub mod internal {
                     }
                     None => {
                         process.terminate()?;
-                        warn!("stopped server {} after timeout period elapsed", self.id());
+                        warn!(
+                            "stopped server {} after timeout period elapsed",
+                            self.id().await
+                        );
                         self.status = MinecraftServerStatus::Exited(1);
                         Ok(())
                     }
@@ -436,12 +469,17 @@ pub mod internal {
          */
     }
 
+    #[async_trait]
     impl MinecraftServer for InternalServer {
-        fn update_world(&mut self, world: World) -> Result<()> {
-            let old = self.world()?;
+        async fn world(&self) -> Result<World, anyhow::Error> {
+            Ok(self.world.clone())
+        }
+
+        async fn update_world(&mut self, world: World) -> Result<()> {
+            let old = self.world().await?;
             if old.allocated_memory != world.allocated_memory || old.version_id != world.version_id
             {
-                self.stop()?;
+                self.stop().await?;
             }
 
             let enabled = world.enabled;
@@ -450,38 +488,49 @@ pub mod internal {
             self.world = world;
 
             if enabled {
-                self.start()?;
+                self.start().await?;
             } else {
-                self.stop()?;
+                self.stop().await?;
             }
             Ok(())
         }
 
-        fn id(&self) -> Id {
+        async fn config(&self) -> Result<HashMap<String, String>> {
+            let properties = self
+                .read_file("server.properties")
+                .unwrap_or(include_str!("../resources/server.properties").to_string());
+            Ok(crate::minecraft::util::parse_minecraft_properties(
+                &properties,
+            ))
+        }
+
+        async fn set_config(&mut self, config: HashMap<String, String>) -> Result<()> {
+            let properties = crate::minecraft::util::create_minecraft_properties(config);
+            self.write_file("server.properties", &properties)?;
+            Ok(())
+        }
+
+        async fn id(&self) -> Id {
             self.world.id
         }
 
-        fn world(&self) -> Result<World, anyhow::Error> {
-            Ok(self.world.clone())
-        }
-
-        fn status(&self) -> Result<MinecraftServerStatus, anyhow::Error> {
+        async fn status(&self) -> Result<MinecraftServerStatus, anyhow::Error> {
             Ok(self.status)
         }
 
-        fn port(&self) -> Option<u16> {
+        async fn port(&self) -> Option<u16> {
             self.port
         }
 
-        fn host(&self) -> String {
-            "localhost".to_string()
+        async fn host(&self) -> String {
+            CONFIG.listen_address.clone()
         }
 
-        fn hostname(&self) -> Option<String> {
+        async fn hostname(&self) -> Option<String> {
             Some(self.hostname.clone())
         }
 
-        fn refresh(&mut self) -> bool {
+        async fn refresh(&mut self) -> bool {
             if let Some(process) = self.process.as_mut() {
                 if let Some(exit_status) = process.poll() {
                     self.process = None;
@@ -532,21 +581,6 @@ pub mod internal {
 
             true
         }
-
-        fn config(&self) -> Result<HashMap<String, String>> {
-            let properties = self
-                .read_file("server.properties")
-                .unwrap_or(include_str!("../resources/server.properties").to_string());
-            Ok(crate::minecraft::util::parse_minecraft_properties(
-                &properties,
-            ))
-        }
-
-        fn set_config(&mut self, config: HashMap<String, String>) -> Result<()> {
-            let properties = crate::minecraft::util::create_minecraft_properties(config);
-            self.write_file("server.properties", &properties)?;
-            Ok(())
-        }
     }
 
     impl Drop for InternalServer {
@@ -559,11 +593,12 @@ pub mod internal {
 }
 
 pub mod external {
+    use crate::config::CONFIG;
     use crate::database::objects::World;
     use crate::database::types::Id;
     use crate::minecraft::server::{MinecraftServer, MinecraftServerStatus, Server};
     use anyhow::Result;
-    use log::error;
+    use async_trait::async_trait;
     use std::collections::HashMap;
 
     pub struct MinimanagerServer {
@@ -576,31 +611,24 @@ pub mod external {
     impl MinimanagerServer {
         pub fn new(host: String, port: u16, world: World) -> Self {
             Self {
+                hostname: world.hostname.clone(),
                 host,
                 port,
-                hostname: world.hostname.clone(),
                 world,
             }
         }
-
-        fn world_and_status(&self) -> Result<Server> {
-            let client = reqwest::blocking::Client::new();
-            let response: Server = serde_json::from_str(
-                &client
-                    .get(format!("{}:{}/{}", self.host, self.port, self.id()))
-                    .body("{\"enabled\": true}")
-                    .send()?
-                    .text()?,
-            )?;
-            Ok(response)
-        }
     }
 
+    #[async_trait]
     impl MinecraftServer for MinimanagerServer {
-        fn update_world(&mut self, world: World) -> Result<()> {
+        async fn world(&self) -> Result<World, anyhow::Error> {
+            Ok(self.world.clone())
+        }
+
+        async fn update_world(&mut self, world: World) -> Result<()> {
             self.hostname = world.hostname.clone();
             self.world = world;
-            let client = reqwest::blocking::Client::new();
+            let client = reqwest::Client::new();
             /*let response: Server = serde_json::from_str(
                 &client
                     .get(format!("{}:{}/{}", self.host, self.port, self.id()))
@@ -610,59 +638,68 @@ pub mod external {
             )?;
              */
             let _ = &client
-                .get(format!("{}:{}/{}", self.host, self.port, self.id()))
+                .post(format!("{}:{}/api/worlds", self.host, CONFIG.remote.port,))
+                .header(
+                    "Authorization",
+                    format!("Bearer {}", crate::config::secrets::SECRETS.api_secret),
+                )
                 .body(serde_json::to_string(&self.world).unwrap())
-                .send()?;
+                .send()
+                .await?
+                .text()
+                .await?;
 
             Ok(())
         }
 
-        fn id(&self) -> Id {
+        async fn config(&self) -> Result<HashMap<String, String>> {
+            todo!()
+        }
+
+        async fn set_config(&mut self, _config: HashMap<String, String>) -> Result<()> {
+            todo!()
+        }
+
+        async fn id(&self) -> Id {
             self.world.id
         }
 
-        fn world(&self) -> Result<World, anyhow::Error> {
-            match self.world_and_status() {
-                Ok(server) => Ok(server.world),
-                Err(err) => {
-                    error!("failed to get server status: {err}");
-                    Ok(self.world.clone())
-                }
-            }
+        async fn status(&self) -> Result<MinecraftServerStatus, anyhow::Error> {
+            let client = reqwest::Client::new();
+            let world: MinecraftServerStatus = serde_json::from_str(
+                &client
+                    .get(format!(
+                        "{}:{}/api/worlds/status",
+                        self.host, CONFIG.remote.port,
+                    ))
+                    .header(
+                        "Authorization",
+                        format!("Bearer {}", crate::config::secrets::SECRETS.api_secret),
+                    )
+                    .body(serde_json::to_string(&self.world).unwrap())
+                    .send()
+                    .await?
+                    .text()
+                    .await?
+                    .to_string(),
+            )?;
+            Ok(world)
         }
 
-        fn status(&self) -> Result<MinecraftServerStatus, anyhow::Error> {
-            match self.world_and_status() {
-                Ok(server) => Ok(server.status),
-                Err(err) => {
-                    error!("failed to get server status: {err}");
-                    Ok(MinecraftServerStatus::Exited(1))
-                }
-            }
-        }
-
-        fn port(&self) -> Option<u16> {
+        async fn port(&self) -> Option<u16> {
             Some(self.port)
         }
 
-        fn host(&self) -> String {
+        async fn host(&self) -> String {
             self.host.clone()
         }
 
-        fn hostname(&self) -> Option<String> {
+        async fn hostname(&self) -> Option<String> {
             Some(self.hostname.clone())
         }
 
-        fn refresh(&mut self) -> bool {
+        async fn refresh(&mut self) -> bool {
             false
-        }
-
-        fn config(&self) -> Result<HashMap<String, String>> {
-            todo!()
-        }
-
-        fn set_config(&mut self, _config: HashMap<String, String>) -> Result<()> {
-            todo!()
         }
     }
 }
@@ -670,9 +707,9 @@ pub mod external {
 pub mod util {
     use crate::minecraft::server::SERVERS;
 
-    pub fn refresh_servers() {
-        for (_id, server) in SERVERS.lock().expect("couldn't get servers").iter_mut() {
-            server.lock().expect("failed to lock server").refresh();
+    pub async fn refresh_servers() {
+        for (_id, server) in SERVERS.lock().await.iter_mut() {
+            server.lock().await.refresh().await;
         }
     }
 }

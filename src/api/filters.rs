@@ -3,7 +3,8 @@ use crate::database::objects::{Session, User};
 use crate::database::{Database, DatabaseError};
 use log::error;
 use std::convert::Infallible;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 use warp::{Filter, Rejection};
 
 pub fn with_db(
@@ -30,11 +31,7 @@ pub fn with_auth(
         .and_then(move |token: String| {
             let database = database.clone();
             async move {
-                let database = database.lock().map_err(
-                    |err| {
-                        warp::reject::custom(rejections::InternalServerError::from(err.to_string()))
-                    }
-                )?;
+                let database = database.lock().await;
 
                 let session = database.list_filtered::<Session>(vec![("token".to_string(), token)], None)
                     .map_err(

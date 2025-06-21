@@ -5,7 +5,8 @@ use crate::database::types::{Access, Column, Id, Type};
 use rusqlite::types::ToSqlOutput;
 use rusqlite::{Row, ToSql};
 use serde::{Deserialize, Serialize};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 use warp::{Filter, Rejection, Reply};
 use warp_rate_limit::RateLimitConfig;
 

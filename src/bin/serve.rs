@@ -11,32 +11,38 @@ use std::io::Write;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::Path;
 use std::str::FromStr;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::thread;
+use std::time::Duration;
 use test_log::test;
+use tokio::sync::Mutex;
 use warp::Filter;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    thread::spawn(|| {
+    tokio::task::spawn(async {
+        let mut interval = tokio::time::interval(Duration::from_millis(1000));
         loop {
-            mcmanager::minecraft::server::util::refresh_servers();
-            thread::sleep(std::time::Duration::from_millis(1000));
+            interval.tick().await;
+            mcmanager::minecraft::server::util::refresh_servers().await;
         }
     });
 
-    thread::spawn(|| {
+    tokio::task::spawn(async {
         info!("starting velocity at {}", CONFIG.velocity.port);
         let mut velocity_server =
             InternalVelocityServer::new().expect("failed to create a velocity server");
         velocity_server
             .start()
+            .await
             .expect("failed to start a velocity server");
+
+        let mut interval = tokio::time::interval(Duration::from_millis(1000));
         loop {
-            if let Err(err) = velocity_server.update() {
+            interval.tick().await;
+            if let Err(err) = velocity_server.update().await {
                 error!("failed to update velocity server: {err}");
             }
-            thread::sleep(std::time::Duration::from_millis(1000));
         }
     });
 

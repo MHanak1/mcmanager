@@ -1,16 +1,18 @@
 use crate::api::filters;
-use crate::api::handlers::{ApiCreate, ApiGet, ApiList, ApiObject, ApiRemove, ApiUpdate};
+use crate::api::handlers::{ApiCreate, ApiGet, ApiList, ApiObject, ApiRemove, ApiUpdate, DbMutex};
 use crate::api::util::rejections;
 use crate::database::objects::{DbObject, FromJson, UpdateJson, User};
 use crate::database::types::{Access, Column, Id, Type};
 use crate::database::{Database, DatabaseError};
 use crate::minecraft::server;
 use crate::minecraft::server::{MinecraftServerStatus, ServerConfigLimit};
+use async_trait::async_trait;
 use rusqlite::types::ToSqlOutput;
 use rusqlite::{Row, ToSql};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 use warp::http::StatusCode;
 use warp::{Filter, Rejection, Reply, reject};
 use warp_rate_limit::{RateLimitConfig, RateLimitInfo};
@@ -247,13 +249,16 @@ impl ApiObject for World {
 
 impl ApiList for World {}
 impl ApiGet for World {}
+#[async_trait]
 impl ApiCreate for World {
-    fn before_api_create(
-        database: &Database,
+    async fn before_api_create(
+        database: DbMutex,
         json: &mut Self::JsonFrom,
     ) -> Result<(), DatabaseError> {
         json.hostname = into_valid_hostname(&json.hostname);
         if !database
+            .lock()
+            .await
             .list_filtered::<World>(
                 vec![(String::from("hostname"), json.hostname.clone())],
                 None,
@@ -264,19 +269,20 @@ impl ApiCreate for World {
         }
         Ok(())
     }
-    fn after_api_create(
+    async fn after_api_create(
         &self,
-        _database: &Database,
+        _database: DbMutex,
         _json: &mut Self::JsonFrom,
     ) -> Result<(), DatabaseError> {
-        let _ = server::get_or_create_server(self);
+        let _ = server::get_or_create_server(self).await;
         Ok(())
     }
 }
+#[async_trait]
 impl ApiUpdate for World {
-    fn before_api_update(
+    async fn before_api_update(
         &self,
-        database: &Database,
+        database: DbMutex,
         json: &mut Self::JsonUpdate,
     ) -> Result<(), DatabaseError> {
         if let Some(hostname) = &json.hostname {
@@ -284,6 +290,8 @@ impl ApiUpdate for World {
         }
         if let Some(hostname) = &json.hostname {
             if database
+                .lock()
+                .await
                 .list_filtered::<World>(
                     vec![
                         (String::from("hostname"), hostname.clone()),
@@ -300,17 +308,19 @@ impl ApiUpdate for World {
         }
         Ok(())
     }
-    fn after_api_update(
+    async fn after_api_update(
         &self,
-        _database: &Database,
+        _database: DbMutex,
         _json: &mut Self::JsonUpdate,
     ) -> Result<(), DatabaseError> {
         let server = server::get_or_create_server(self)
+            .await
             .map_err(|err| DatabaseError::InternalServerError(err.to_string()))?;
-        let mut server = server.lock().expect("failed to lock server");
+        let mut server = server.lock().await;
 
         server
             .update_world(self.clone())
+            .await
             .map_err(|err| DatabaseError::InternalServerError(err.to_string()))
     }
 }
@@ -318,7 +328,7 @@ impl ApiRemove for World {}
 
 impl World {
     #[allow(clippy::needless_pass_by_value)]
-    fn world_get_status(
+    async fn world_get_status(
         _rate_limit_info: RateLimitInfo,
         id: String,
         db_mutex: Arc<Mutex<Database>>,
@@ -326,9 +336,7 @@ impl World {
     ) -> Result<impl warp::Reply, warp::Rejection> {
         let id = Id::from_string(&id).map_err(|_| reject::custom(rejections::NotFound))?;
         {
-            let database = db_mutex.lock().map_err(|err| {
-                reject::custom(rejections::InternalServerError::from(err.to_string()))
-            })?;
+            let database = db_mutex.lock().await;
 
             database
                 .get_one::<Self>(id, Some(&user))
@@ -336,8 +344,8 @@ impl World {
         }
 
         let server = server::get_server(id);
-        let status = match server {
-            Some(server) => server.lock().expect("failed to get server").status(),
+        let status = match server.await {
+            Some(server) => server.lock().await.status().await,
             None => Ok(MinecraftServerStatus::Exited(0)),
         }
         .map_err(|err| warp::reject::custom(rejections::InternalServerError::from(err)))?;
@@ -378,13 +386,11 @@ impl World {
             .and(warp::get())
             .and(filters::with_db(db_mutex.clone()))
             .and(filters::with_auth(db_mutex))
-            .and_then(|rate_limit_info, id, db_mutex, user| async move {
-                Self::world_get_status(rate_limit_info, id, db_mutex, user)
-            })
+            .and_then(Self::world_get_status)
     }
 
     #[allow(clippy::needless_pass_by_value)]
-    fn get_server_config(
+    async fn get_server_config(
         _rate_limit_info: RateLimitInfo,
         id: String,
         db_mutex: Arc<Mutex<Database>>,
@@ -393,23 +399,21 @@ impl World {
         let id = Id::from_string(&id).map_err(|_| reject::custom(rejections::NotFound))?;
 
         let world = {
-            let database = db_mutex.lock().map_err(|err| {
-                reject::custom(rejections::InternalServerError::from(err.to_string()))
-            })?;
+            let database = db_mutex.lock().await;
             database
                 .get_one::<Self>(id, Some(&user))
                 .map_err(crate::api::handlers::handle_database_error)?
         };
 
         let server = server::get_or_create_server(&world)
+            .await
             .map_err(|err| warp::reject::custom(rejections::InternalServerError::from(err)))?;
 
-        let server = server
-            .lock()
-            .map_err(|err| warp::reject::custom(rejections::InternalServerError::from(err)))?;
+        let server = server.lock().await;
 
         let mut config = server
             .config()
+            .await
             .map_err(|err| warp::reject::custom(rejections::InternalServerError::from(err)))?;
         if user.config_whitelist.is_empty() {
             for key in user.config_blacklist {
@@ -444,13 +448,11 @@ impl World {
             .and(warp::get())
             .and(filters::with_db(db_mutex.clone()))
             .and(filters::with_auth(db_mutex))
-            .and_then(|rate_limit_info, id, db_mutex, user| async move {
-                Self::get_server_config(rate_limit_info, id, db_mutex, user)
-            })
+            .and_then(Self::get_server_config)
     }
 
     #[allow(clippy::needless_pass_by_value)]
-    fn set_server_config(
+    async fn set_server_config(
         _rate_limit_info: RateLimitInfo,
         id: String,
         db_mutex: Arc<Mutex<Database>>,
@@ -460,23 +462,21 @@ impl World {
         let id = Id::from_string(&id).map_err(|_| reject::custom(rejections::NotFound))?;
 
         let world = {
-            let database = db_mutex.lock().map_err(|err| {
-                reject::custom(rejections::InternalServerError::from(err.to_string()))
-            })?;
+            let database = db_mutex.lock().await;
             database
                 .get_one::<Self>(id, Some(&user))
                 .map_err(crate::api::handlers::handle_database_error)?
         };
 
         let server = server::get_or_create_server(&world)
+            .await
             .map_err(|err| warp::reject::custom(rejections::InternalServerError::from(err)))?;
 
-        let mut server = server
-            .lock()
-            .map_err(|err| warp::reject::custom(rejections::InternalServerError::from(err)))?;
+        let mut server = server.lock().await;
 
         let mut config = server
             .config()
+            .await
             .map_err(|err| warp::reject::custom(rejections::InternalServerError::from(err)))?;
         if user.config_whitelist.is_empty() {
             for key in &user.config_blacklist {
@@ -534,6 +534,7 @@ impl World {
 
         server
             .set_config(config.clone())
+            .await
             .map_err(|err| warp::reject::custom(rejections::InternalServerError::from(err)))?;
 
         Ok(warp::reply::with_status(
@@ -551,12 +552,10 @@ impl World {
             .and(warp::path::param::<String>())
             .and(warp::path("config"))
             .and(warp::path::end())
-            .and(warp::post())
+            .and(warp::put())
             .and(filters::with_db(db_mutex.clone()))
             .and(filters::with_auth(db_mutex))
             .and(warp::filters::body::json())
-            .and_then(|rate_limit_info, id, db_mutex, user, config| async move {
-                Self::set_server_config(rate_limit_info, id, db_mutex, user, config)
-            })
+            .and_then(Self::set_server_config)
     }
 }

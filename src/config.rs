@@ -1,6 +1,6 @@
 use crate::util;
 use once_cell::sync::Lazy;
-use serde::{Deserialize};
+use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
@@ -28,7 +28,8 @@ pub struct InternalConfig {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct RemoteConfig {
-    pub address: String,
+    pub host: String,
+    pub port: u16,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -95,3 +96,40 @@ pub static CONFIG: Lazy<Config> = Lazy::new(|| {
         .try_deserialize::<Config>()
         .expect("failed to parse config")
 });
+
+pub mod secrets {
+    use crate::database::types::Token;
+    use crate::util;
+    use config::Config;
+    use once_cell::sync::Lazy;
+
+    pub struct Secrets {
+        pub api_secret: Token,
+    }
+
+    impl TryFrom<Config> for Secrets {
+        type Error = anyhow::Error;
+
+        fn try_from(config: Config) -> Result<Self, Self::Error> {
+            Ok(Self {
+                api_secret: config.get("api_secret")?,
+            })
+        }
+    }
+
+    pub static SECRETS: Lazy<Secrets> = Lazy::new(|| {
+        Secrets::try_from(
+            Config::builder()
+                .add_source(config::File::with_name(
+                    util::dirs::base_dir()
+                        .join("secrets.toml")
+                        .display()
+                        .to_string()
+                        .as_str(),
+                ))
+                .build()
+                .expect("failed to parse secrets"),
+        )
+        .expect("failed to parse secrets")
+    });
+}

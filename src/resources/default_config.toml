@@ -9,19 +9,19 @@ public_routes_rate_limit = [3, 10]
 # default: 25 requests per 5 seconds
 private_routes_rate_limit = [25, 5]
 
-# how to launch and manage minecraft servers. avaliable: internal, remote, kubernetes
-minecraft_server_type = "internal"
+# how to launch and manage minecraft servers. avaliable: internal, remote, kubernetes. this should always be "internal" for minimanager
+minecraft_server_type = "remote"
 
 [internal] # run the servers as subprocesses of the API server
 # what to launch java with
 #   %command% is substituted for world:java_launch_command
-#   
-# if users are allowed to load their own mods using something like firejail should be very much considered.
-#launch_command = "%command%"
-launch_command = "firejail --caps.drop=all %command%"
+# if users are allowed to load their own mods using something like firejail should be very much considered. (not implemented)
+launch_command = "%command%"
+#launch_command = "firejail --caps.drop=all %command%"
 
 [remote] # run the servers on a separate system using minimanager
-address = "localhost:3031"
+host = "http://localhost"
+port = "3031"
 
 [velocity]
 # on which port the velocity proxy should run. it should usually be the default minecraft port so 25565

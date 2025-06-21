@@ -19,7 +19,7 @@ pub use self::{
 /// An object that is meant to be stored in a database
 /// the object must have a unique Id, by default in the first column
 #[allow(dead_code)]
-pub trait DbObject {
+pub trait DbObject: Send + Sync {
     /// [`Access`] level dictating which users can create the object using th api.
     fn view_access() -> Access;
     /// [`Access`] level for updating and removing of the object.
