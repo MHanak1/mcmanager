@@ -251,10 +251,26 @@ impl ApiList for World {}
 impl ApiGet for World {}
 #[async_trait]
 impl ApiCreate for World {
+    //TODO: this needs a rewrite, too much repeated code
     async fn before_api_create(
         database: DbMutex,
         json: &mut Self::JsonFrom,
+        user: &User,
     ) -> Result<(), DatabaseError> {
+        let user_worlds: Vec<World> = database.lock().await.list_filtered(
+            vec![("owner_id".to_string(), user.id.as_i64().to_string())],
+            Some(&user),
+        )?;
+
+        println!("world limit enforcing");
+        //enforce the world limit
+        if let Some(world_limit) = user.world_limit {
+            println!("limit is: {world_limit}");
+            if user_worlds.iter().count() >= world_limit as usize {
+                return Err(DatabaseError::Unauthorized);
+            }
+        }
+
         json.hostname = into_valid_hostname(&json.hostname);
         if !database
             .lock()
@@ -267,12 +283,41 @@ impl ApiCreate for World {
         {
             json.hostname += &rand::random_range(0..100000).to_string();
         }
+
+        println!("enforcing memory limit");
+        //enforce memory limit
+        if let Some(memory_limit) = user.memory_limit {
+            println!("limit is: {memory_limit}");
+            if let Some(allocated_memory) = json.allocated_memory {
+                println!("allocated memory: {allocated_memory}");
+                let user_worlds: Vec<World> = database.lock().await.list_filtered(
+                    vec![("owner_id".to_string(), user.id.as_i64().to_string())],
+                    Some(&user),
+                )?;
+
+                let mut total_memory = 0;
+
+                for world in &user_worlds {
+                    total_memory += world.allocated_memory;
+                }
+                let remaining_memory = memory_limit as i32 - total_memory as i32;
+                if remaining_memory < 0 {
+                    return Err(DatabaseError::Unauthorized);
+                }
+
+                if (allocated_memory as i32) > remaining_memory {
+                    json.allocated_memory = Some(remaining_memory as u32);
+                }
+            }
+        }
+
         Ok(())
     }
     async fn after_api_create(
         &self,
         _database: DbMutex,
         _json: &mut Self::JsonFrom,
+        _user: &User,
     ) -> Result<(), DatabaseError> {
         let _ = server::get_or_create_server(self).await;
         Ok(())
@@ -280,11 +325,35 @@ impl ApiCreate for World {
 }
 #[async_trait]
 impl ApiUpdate for World {
+    //TODO: this needs a rewrite, too much repeated code
     async fn before_api_update(
         &self,
         database: DbMutex,
         json: &mut Self::JsonUpdate,
+        user: &User,
     ) -> Result<(), DatabaseError> {
+        println!("active world limit enforcing");
+        let user_worlds: Vec<World> = database.lock().await.list_filtered(
+            vec![("owner_id".to_string(), user.id.as_i64().to_string())],
+            Some(&user),
+        )?;
+
+        //enforce the active world limit
+        if let Some(active_world_limit) = user.active_world_limit {
+            println!("limit is: {active_world_limit}");
+            let mut active_worlds = 0;
+            for world in &user_worlds {
+                if world.enabled {
+                    active_worlds += 1;
+                }
+            }
+            println!("active worlds: {active_worlds}");
+            if active_worlds >= active_world_limit {
+                json.enabled = Some(false);
+            }
+        }
+
+        //adjust hostname, so it's a valid, unique subdomain
         if let Some(hostname) = &json.hostname {
             json.hostname = Some(into_valid_hostname(hostname))
         }
@@ -306,12 +375,42 @@ impl ApiUpdate for World {
                 json.hostname = Some(hostname.clone() + &rand::random_range(0..100000).to_string());
             }
         }
+
+        println!("enforcing memory limit");
+        //enforce memory limit
+        if let Some(memory_limit) = user.memory_limit {
+            println!("limit is: {memory_limit}");
+            if let Some(allocated_memory) = json.allocated_memory {
+                println!("allocated memory: {allocated_memory}");
+                if allocated_memory != self.allocated_memory {
+                    let mut total_memory = 0;
+
+                    for world in &user_worlds {
+                        if world.id != self.id {
+                            total_memory += world.allocated_memory;
+                        }
+                    }
+                    println!("total memory: {total_memory}");
+                    let remaining_memory = memory_limit as i32 - total_memory as i32;
+                    println!("remaining memory: {remaining_memory}");
+                    if remaining_memory < 0 {
+                        return Err(DatabaseError::Unauthorized);
+                    }
+
+                    if (allocated_memory as i32) > remaining_memory {
+                        json.allocated_memory = Some(remaining_memory as u32);
+                    }
+                }
+            }
+        }
+
         Ok(())
     }
     async fn after_api_update(
         &self,
         _database: DbMutex,
         _json: &mut Self::JsonUpdate,
+        _user: &User,
     ) -> Result<(), DatabaseError> {
         let server = server::get_or_create_server(self)
             .await

@@ -330,6 +330,7 @@ impl ApiCreate for User {
         &self,
         database: DbMutex,
         json: &mut Self::JsonFrom,
+        _user: &User,
     ) -> Result<(), DatabaseError> {
         println!("{}, {}", json.username, json.password);
         database
@@ -346,6 +347,7 @@ impl ApiUpdate for User {
         &self,
         database: DbMutex,
         json: &mut Self::JsonUpdate,
+        _user: &User,
     ) -> Result<(), DatabaseError> {
         //the the password is first created then recreated so it can handle a missing password entry for the user
         if let Some(password) = json.password.clone() {

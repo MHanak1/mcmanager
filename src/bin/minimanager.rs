@@ -2,13 +2,12 @@ use anyhow::Result;
 use log::info;
 use mcmanager::api::filters::with_bearer_token;
 use mcmanager::api::util::rejections;
-use mcmanager::config::ServerType;
 use mcmanager::config::secrets::SECRETS;
 use mcmanager::database::objects::World;
 use mcmanager::database::types::Id;
 use mcmanager::minecraft::server;
+use mcmanager::minecraft::server::MinecraftServerStatus;
 use mcmanager::minecraft::server::internal::InternalServer;
-use mcmanager::minecraft::server::{MinecraftServerStatus, Server};
 use mcmanager::{api, config::Config, util::dirs};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::str::FromStr;
@@ -46,17 +45,31 @@ async fn main() -> Result<()> {
 async fn run(config: Config) -> Result<()> {
     info!("Starting minimanager...");
 
-    //in theory this would never be used in production, it's here for debugging's sake
     let list_worlds = warp::path!("api" / "worlds")
         .and(warp::get())
         .and(with_bearer_token())
         .and_then(|token: String| async move {
             if SECRETS.api_secret.to_string() == token {
-                Ok(warp::reply::json(&server::get_all_worlds().await))
+                world_list().await
             } else {
                 Err(reject::custom(rejections::Unauthorized))
             }
         });
+
+    /*
+    let get_world = warp::path!("api" / "worlds")
+        .and(warp::get())
+        .and(with_bearer_token())
+        .and(warp::body::json())
+        .and_then(|id: String, token: String, world: World| async move {
+            println!("hii");
+            if SECRETS.api_secret.to_string() == token {
+                warp:: server::get_or_create_server(&world)
+            } else {
+                Err(reject::custom(rejections::Unauthorized))
+            }
+        });
+     */
 
     let create_world = warp::path!("api" / "worlds")
         .and(warp::post().or(warp::put()).unify())
@@ -70,35 +83,31 @@ async fn run(config: Config) -> Result<()> {
             }
         });
 
-    let remove_world = warp::path!("api" / "worlds" / Id / "remove")
+    let remove_world = warp::path!("api" / "worlds" / "remove")
         .and(warp::post())
         .and(with_bearer_token())
-        .and_then(|id: Id, token: String| async move {
+        .and(warp::body::json())
+        .and_then(|token: String, world: World| async move {
             if token == SECRETS.api_secret.to_string() {
-                world_remove(id).await
+                world_remove(world.id).await
             } else {
                 Err(reject::custom(rejections::Unauthorized))
             }
         });
 
-    let get_server = warp::path!("api" / "worlds" / Id)
+    let world_status = warp::path!("api" / "worlds" / "status")
         .and(warp::get())
         .and(with_bearer_token())
-        .and_then(|id: Id, token: String| async move {
+        .and(warp::body::json())
+        .and_then(|token: String, world: World| async move {
             if SECRETS.api_secret.to_string() == token {
-                match server::get_server(id).await {
-                    Some(server) => {
-                        let server = server.lock().await;
-                        Ok(warp::reply::json(&Server {
-                            world: server.world(),
-                            status: server
-                                .status()
-                                .await
-                                .unwrap_or(MinecraftServerStatus::Exited(0)),
-                            port: server.port(),
-                        }))
-                    }
-                    None => Ok(warp::reply::json(&MinecraftServerStatus::Exited(0))),
+                match server::get_or_create_server(&world).await {
+                    Ok(server) => Ok(warp::reply::json(
+                        &server.lock().await.status().await.map_err(|err| {
+                            warp::reject::custom(rejections::InternalServerError::from(err))
+                        })?,
+                    )),
+                    Err(err) => Err(reject::custom(rejections::InternalServerError::from(err))),
                 }
             } else {
                 Err(reject::custom(rejections::Unauthorized))
@@ -110,7 +119,7 @@ async fn run(config: Config) -> Result<()> {
     warp::serve(
         create_world
             .or(remove_world)
-            .or(get_server)
+            .or(world_status)
             .or(list_worlds)
             .recover(api::handlers::handle_rejection)
             .with(log),
@@ -123,6 +132,10 @@ async fn run(config: Config) -> Result<()> {
     .await;
 
     Ok(())
+}
+
+async fn world_list() -> std::result::Result<impl Reply, warp::Rejection> {
+    Ok(warp::reply::json(&server::get_all_worlds().await))
 }
 
 /*
@@ -177,16 +190,50 @@ async fn create_or_update_server(world: World) -> std::result::Result<impl Reply
         .update_world(world.clone())
         .await
         .map_err(|err| warp::reject::custom(rejections::InternalServerError::from(err)))?;
-    let server = server.lock().await;
     Ok(warp::reply::with_status(
-        warp::reply::json(&Server {
-            world,
-            status: server
-                .status()
-                .await
-                .unwrap_or(MinecraftServerStatus::Exited(0)),
-            port: server.port(),
-        }),
+        warp::reply::json(&world),
         StatusCode::OK,
     ))
 }
+/*
+
+fn create_or_update_server(world: World) -> std::result::Result<impl Reply, warp::Rejection> {
+    let server = match server::get_server(world.id) {
+        Some(server) => match server
+            .lock()
+            .expect("failed to lock server")
+            .update_world(world)
+        {
+            Ok(_) => server.clone(),
+            Err(err) => {
+                return Err(reject::custom(rejections::InternalServerError::from(
+                    err.to_string(),
+                )));
+            }
+        },
+        None => {
+            let server = Box::new(InternalServer::new(world.clone()).map_err(|err| {
+                reject::custom(rejections::InternalServerError::from(err.to_string()))
+            })?);
+
+            server::add_server(server).map_err(|err| {
+                warp::reject::custom(rejections::InternalServerError::from(err.to_string()))
+            })?;
+
+            match server::get_server(world.id) {
+                Some(server) => server,
+                None => Err(warp::reject::custom(rejections::InternalServerError::from(
+                    String::from("can't find the created server"),
+                )))?,
+            }
+        }
+    };
+
+    let server = server.lock().expect("failed to lock server");
+
+    println!("Created server {:?}", server.world());
+    Ok(warp::reply::json(&server.world().map_err(|err| {
+        warp::reject::custom(rejections::InternalServerError::from(err))
+    })?))
+}
+ */

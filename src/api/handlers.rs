@@ -126,7 +126,7 @@ where
         }
 
         let object = {
-            Self::before_api_create(db_mutex.clone(), &mut data)
+            Self::before_api_create(db_mutex.clone(), &mut data, &user)
                 .await
                 .map_err(handle_database_error)?;
             let object = Self::from_json(&data, &user);
@@ -137,7 +137,7 @@ where
                 .map_err(handle_database_error)?;
 
             object
-                .after_api_create(db_mutex, &mut data)
+                .after_api_create(db_mutex, &mut data, &user)
                 .await
                 .map_err(handle_database_error)?;
             object
@@ -158,6 +158,7 @@ where
     async fn before_api_create(
         database: DbMutex,
         json: &mut Self::JsonFrom,
+        user: &User,
     ) -> Result<(), DatabaseError> {
         Ok(())
     }
@@ -169,6 +170,7 @@ where
         &self,
         database: DbMutex,
         json: &mut Self::JsonFrom,
+        user: &User,
     ) -> Result<(), DatabaseError> {
         Ok(())
     }
@@ -216,7 +218,7 @@ where
                 .map_err(handle_database_error)?;
 
             object
-                .before_api_update(db_mutex.clone(), &mut data)
+                .before_api_update(db_mutex.clone(), &mut data, &user)
                 .await
                 .map_err(handle_database_error)?;
 
@@ -229,7 +231,7 @@ where
                 .map_err(handle_database_error)?;
 
             object
-                .after_api_update(db_mutex, &mut data)
+                .after_api_update(db_mutex, &mut data, &user)
                 .await
                 .map_err(handle_database_error)?;
             object
@@ -246,6 +248,7 @@ where
         &self,
         database: DbMutex,
         json: &mut Self::JsonUpdate,
+        user: &User,
     ) -> Result<(), DatabaseError> {
         Ok(())
     }
@@ -257,6 +260,7 @@ where
         &self,
         database: DbMutex,
         json: &mut Self::JsonUpdate,
+        user: &User,
     ) -> Result<(), DatabaseError> {
         Ok(())
     }
@@ -302,7 +306,7 @@ where
                 .map_err(handle_database_error)?;
 
             object
-                .before_api_delete(&database)
+                .before_api_delete(&database, &user)
                 .await
                 .map_err(handle_database_error)?;
 
@@ -311,7 +315,7 @@ where
                 .map_err(handle_database_error)?;
 
             object
-                .after_api_delete(&database)
+                .after_api_delete(&database, &user)
                 .await
                 .map_err(handle_database_error)?;
         };
@@ -324,14 +328,22 @@ where
 
     #[allow(unused)]
     /// runs before the database entry deletion
-    async fn before_api_delete(&self, database: &Database) -> Result<(), DatabaseError> {
+    async fn before_api_delete(
+        &self,
+        database: &Database,
+        user: &User,
+    ) -> Result<(), DatabaseError> {
         Ok(())
     }
     #[allow(unused)]
     /// runs after the database entry deletion
     ///
     /// this returns a [`Result`], but there is no mechanism to undo the entry deletion. if this fails it should probably cause the program to panic
-    async fn after_api_delete(&self, database: &Database) -> Result<(), DatabaseError> {
+    async fn after_api_delete(
+        &self,
+        database: &Database,
+        user: &User,
+    ) -> Result<(), DatabaseError> {
         Ok(())
     }
 

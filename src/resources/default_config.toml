@@ -10,7 +10,7 @@ public_routes_rate_limit = [3, 10]
 private_routes_rate_limit = [25, 5]
 
 # how to launch and manage minecraft servers. avaliable: internal, remote, kubernetes. this should always be "internal" for minimanager
-minecraft_server_type = "remote"
+minecraft_server_type = "internal"
 
 [internal] # run the servers as subprocesses of the API server
 # what to launch java with
