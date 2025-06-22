@@ -213,9 +213,7 @@ impl Database {
                 rusqlite::Error::QueryReturnedNoRows => Ok(vec![]),
                 _ => Err(DatabaseError::SqliteError(err)),
             },
-            Ok(rows) => Ok(rows
-                .filter_map(|row| row.ok())
-                .collect::<Vec<T>>()),
+            Ok(rows) => Ok(rows.filter_map(|row| row.ok()).collect::<Vec<T>>()),
         }
     }
 

@@ -302,6 +302,13 @@ impl ToSql for Id {
     }
 }
 
+impl FromStr for Id {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self> {
+        Self::from_string(s)
+    }
+}
 impl Serialize for Id {
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
     where

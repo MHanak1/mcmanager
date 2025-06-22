@@ -134,7 +134,10 @@ impl VelocityServer for InternalVelocityServer {
         for (ip, host) in hosts {
             //println!("{}: {}", ip, host);
             servers_string.push_str(format!("{host} = \"{ip}\"\n").as_str());
-            hosts_string.push_str(&format!("\"{host}.localhost\" = [\n    \"{host}\"\n]\n"));
+            hosts_string.push_str(&format!(
+                "\"{host}.{}\" = [\n    \"{host}\"\n]\n",
+                CONFIG.velocity.hostname.split(":").last().unwrap()
+            ));
         }
         let binding = config.replace("{SERVERS}", servers_string.as_str());
         let config = &binding;
@@ -151,11 +154,11 @@ impl VelocityServer for InternalVelocityServer {
         for server in server::get_all_servers().await {
             let server = server.lock().await;
             //println!("{:?}", server.world());
-            if let Some(port) = server.port().await {
-                if let Some(hostname) = server.hostname().await {
+            if let Some(port) = server.port() {
+                if let Some(hostname) = server.hostname() {
                     //this pings every server every time the hostname is updated. a better solution should be found for this
                     //if let Ok(MinecraftServerStatus::Running) = server.status().await {
-                    hosts.push((format!("{}:{}", server.host().await, port), hostname));
+                    hosts.push((format!("{}:{}", server.host(), port), hostname));
                     //}
                 }
                 //else { println!("{}", "hostname is none"); }

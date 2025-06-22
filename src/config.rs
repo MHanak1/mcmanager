@@ -1,4 +1,5 @@
 use crate::util;
+use log::debug;
 use once_cell::sync::Lazy;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -12,13 +13,20 @@ pub struct Config {
     pub listen_port: u32,
     pub public_routes_rate_limit: (u32, u64),
     pub private_routes_rate_limit: (u32, u64),
-    pub minecraft_server_type: String,
+    pub minecraft_server_type: ServerType,
     pub internal: InternalConfig,
     pub remote: RemoteConfig,
     pub world: WorldConfig,
     pub user_defaults: UserDefaults,
     pub world_defaults: WorldDefaults,
     pub velocity: VelocityConfig,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ServerType {
+    Internal,
+    Remote,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -28,8 +36,7 @@ pub struct InternalConfig {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct RemoteConfig {
-    pub host: String,
-    pub port: u16,
+    pub host: url::Url,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -65,6 +72,7 @@ pub struct WorldDefaults {
 pub struct VelocityConfig {
     pub port: u16,
     pub executable_name: String,
+    pub hostname: String,
 }
 
 pub static CONFIG: Lazy<Config> = Lazy::new(|| {
@@ -77,11 +85,12 @@ pub static CONFIG: Lazy<Config> = Lazy::new(|| {
             .expect("failed to write default config file");
     }
 
+    debug!(
+        "loading config: {}",
+        util::dirs::base_dir().join("config.toml").display()
+    );
+
     let config = config::Config::builder()
-        .add_source(config::File::from_str(
-            include_str!("resources/default_config.toml"),
-            config::FileFormat::Toml,
-        ))
         .add_source(config::File::with_name(
             util::dirs::base_dir()
                 .join("config.toml")

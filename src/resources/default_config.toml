@@ -20,8 +20,7 @@ launch_command = "%command%"
 #launch_command = "firejail --caps.drop=all %command%"
 
 [remote] # run the servers on a separate system using minimanager
-host = "http://localhost"
-port = "3031"
+host = "http://localhost:3031"
 
 [velocity]
 # on which port the velocity proxy should run. it should usually be the default minecraft port so 25565
