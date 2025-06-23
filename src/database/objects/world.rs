@@ -342,14 +342,12 @@ impl ApiUpdate for World {
 
         //enforce the active world limit
         if let Some(active_world_limit) = group.active_world_limit {
-            println!("limit is: {active_world_limit}");
             let mut active_worlds = 0;
             for world in &user_worlds {
                 if world.enabled {
                     active_worlds += 1;
                 }
             }
-            println!("active worlds: {active_worlds}");
             if active_worlds >= active_world_limit {
                 json.enabled = Some(false);
             }

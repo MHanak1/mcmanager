@@ -1,14 +1,14 @@
 use anyhow::Result;
 use log::info;
-use mcmanager::api::filters::with_bearer_token;
-use mcmanager::api::util::rejections;
-use mcmanager::config::secrets::SECRETS;
-use mcmanager::database::objects::World;
-use mcmanager::database::types::Id;
-use mcmanager::minecraft::server;
-use mcmanager::minecraft::server::MinecraftServerStatus;
-use mcmanager::minecraft::server::internal::InternalServer;
-use mcmanager::{api, config::Config, util::dirs};
+use crate::api::filters::with_bearer_token;
+use crate::api::util::rejections;
+use crate::config::secrets::SECRETS;
+use crate::database::objects::World;
+use crate::database::types::Id;
+use crate::minecraft::server;
+use crate::minecraft::server::MinecraftServerStatus;
+use crate::minecraft::server::internal::InternalServer;
+use crate::{api, config::Config, util::dirs};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::str::FromStr;
 use std::{io::Write, thread};
@@ -34,12 +34,12 @@ async fn main() -> Result<()> {
 
     thread::spawn(|| {
         loop {
-            mcmanager::minecraft::server::util::refresh_servers();
+            crate::minecraft::server::util::refresh_servers();
             thread::sleep(std::time::Duration::from_millis(1000));
         }
     });
 
-    run(mcmanager::config::CONFIG.clone()).await
+    run(crate::config::CONFIG.clone()).await
 }
 
 async fn run(config: Config) -> Result<()> {
@@ -124,10 +124,9 @@ async fn run(config: Config) -> Result<()> {
             .recover(api::handlers::handle_rejection)
             .with(log),
     )
-    //TODO: change this back
     .run(SocketAddr::new(
         IpAddr::V4(Ipv4Addr::from_str(&config.listen_address).expect("invalid listen_address")),
-        config.remote.port,
+        config.listen_port,
     ))
     .await;
 

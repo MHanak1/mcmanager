@@ -79,7 +79,7 @@ enable-player-address-logging = true
 # represents the IP address of the server to connect to.
 #lobby = "127.0.0.1:30066"
 
-{SERVERS}
+$servers #this gets replaced with MCManager's server list
 
 # In what order we should try servers when a player logs in or is kicked from a server.
 try = [
@@ -91,7 +91,9 @@ try = [
 #"lobby.example.com" = [
 #    "lobby"
 #]
-{HOSTS}
+
+$hosts #this gets replaced with MCManager's host list
+
 
 [advanced]
 # How large a Minecraft packet has to be before we compress it. Setting this to zero will

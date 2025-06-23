@@ -210,7 +210,6 @@ impl ApiCreate for User {
         json: &mut Self::JsonFrom,
         _user: &User,
     ) -> Result<(), DatabaseError> {
-        println!("{}, {}", json.username, json.password);
         database
             .lock()
             .await

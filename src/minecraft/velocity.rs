@@ -139,9 +139,9 @@ impl VelocityServer for InternalVelocityServer {
                 CONFIG.velocity.hostname.split(":").last().unwrap()
             ));
         }
-        let binding = config.replace("{SERVERS}", servers_string.as_str());
+        let binding = config.replace("$servers", servers_string.as_str());
         let config = &binding;
-        let binding = config.replace("{HOSTS}", hosts_string.as_str());
+        let binding = config.replace("$hosts", hosts_string.as_str());
         let config = &binding;
 
         let mut file = File::create(util::dirs::velocity_dir().join("velocity.toml"))?;

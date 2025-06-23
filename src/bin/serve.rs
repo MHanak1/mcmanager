@@ -1,12 +1,12 @@
 use log::{error, info};
-use mcmanager::api::filters;
-use mcmanager::api::handlers::ApiObject;
-use mcmanager::config;
-use mcmanager::config::CONFIG;
-use mcmanager::database::Database;
-use mcmanager::database::objects::{InviteLink, Mod, ModLoader, Session, User, Version, World};
-use mcmanager::minecraft::velocity::{InternalVelocityServer, VelocityServer};
-use mcmanager::{api, util};
+use crate::api::filters;
+use crate::api::handlers::ApiObject;
+use crate::config;
+use crate::config::CONFIG;
+use crate::database::Database;
+use crate::database::objects::{Group, InviteLink, Mod, ModLoader, Session, User, Version, World};
+use crate::minecraft::velocity::{InternalVelocityServer, VelocityServer};
+use crate::{api, util};
 use std::io::Write;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::Path;
@@ -19,12 +19,12 @@ use tokio::sync::Mutex;
 use warp::Filter;
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+pub async fn main() -> anyhow::Result<()> {
     tokio::task::spawn(async {
         let mut interval = tokio::time::interval(Duration::from_millis(1000));
         loop {
             interval.tick().await;
-            mcmanager::minecraft::server::util::refresh_servers().await;
+            crate::minecraft::server::util::refresh_servers().await;
         }
     });
 
@@ -90,123 +90,6 @@ pub async fn run(database: Database, config: config::Config) {
         .and(filters::with_auth(db_mutex.clone()))
         .and_then(api::handlers::user_info);
 
-    /*
-    let mods = Mod::list_filter(db_mutex.clone(), private_routes_rate_limit.clone())
-        .or(Mod::create_filter(
-            db_mutex.clone(),
-            private_routes_rate_limit.clone(),
-        ))
-        .or(Mod::update_filter(
-            db_mutex.clone(),
-            private_routes_rate_limit.clone(),
-        ))
-        .or(Mod::get_filter(
-            db_mutex.clone(),
-            private_routes_rate_limit.clone(),
-        ))
-        .or(Mod::remove_filter(
-            db_mutex.clone(),
-            private_routes_rate_limit.clone(),
-        ));
-    let versions = Version::list_filter(db_mutex.clone(), private_routes_rate_limit.clone())
-        .or(Version::create_filter(
-            db_mutex.clone(),
-            private_routes_rate_limit.clone(),
-        ))
-        .or(Version::update_filter(
-            db_mutex.clone(),
-            private_routes_rate_limit.clone(),
-        ))
-        .or(Version::get_filter(
-            db_mutex.clone(),
-            private_routes_rate_limit.clone(),
-        ))
-        .or(Version::remove_filter(
-            db_mutex.clone(),
-            private_routes_rate_limit.clone(),
-        ));
-    let mod_loaders = ModLoader::list_filter(db_mutex.clone(), private_routes_rate_limit.clone())
-        .or(ModLoader::create_filter(
-            db_mutex.clone(),
-            private_routes_rate_limit.clone(),
-        ))
-        .or(ModLoader::update_filter(
-            db_mutex.clone(),
-            private_routes_rate_limit.clone(),
-        ))
-        .or(ModLoader::get_filter(
-            db_mutex.clone(),
-            private_routes_rate_limit.clone(),
-        ))
-        .or(ModLoader::remove_filter(
-            db_mutex.clone(),
-            private_routes_rate_limit.clone(),
-        ));
-    let worlds = World::list_filter(db_mutex.clone(), private_routes_rate_limit.clone())
-        .or(World::status_filter (
-            db_mutex.clone(),
-            private_routes_rate_limit.clone(),
-        ))
-        .or(World::create_filter(
-            db_mutex.clone(),
-            private_routes_rate_limit.clone(),
-        ))
-        .or(World::update_filter(
-            db_mutex.clone(),
-            private_routes_rate_limit.clone(),
-        ))
-        .or(World::get_filter(
-            db_mutex.clone(),
-            private_routes_rate_limit.clone(),
-        ))
-        .or(World::remove_filter(
-            db_mutex.clone(),
-            private_routes_rate_limit.clone(),
-        ));
-    let users = User::list_filter(db_mutex.clone(), private_routes_rate_limit.clone())
-        .or(User::create_filter(
-            db_mutex.clone(),
-            private_routes_rate_limit.clone(),
-        ))
-        .or(User::update_filter(
-            db_mutex.clone(),
-            private_routes_rate_limit.clone(),
-        ))
-        .or(User::get_filter(
-            db_mutex.clone(),
-            private_routes_rate_limit.clone(),
-        ))
-        .or(User::remove_filter(
-            db_mutex.clone(),
-            private_routes_rate_limit.clone(),
-        ));
-    let sessions = Session::list_filter(db_mutex.clone(), private_routes_rate_limit.clone())
-        .or(Session::create_filter(
-            db_mutex.clone(),
-            private_routes_rate_limit.clone(),
-        ))
-        .or(Session::get_filter(
-            db_mutex.clone(),
-            private_routes_rate_limit.clone(),
-        ))
-        .or(Session::remove_filter(
-            db_mutex.clone(),
-            private_routes_rate_limit.clone(),
-        ));
-    let invite_links = InviteLink::list_filter(db_mutex.clone(), private_routes_rate_limit.clone())
-        .or(InviteLink::create_filter(
-            db_mutex.clone(),
-            private_routes_rate_limit.clone(),
-        ))
-        .or(InviteLink::get_filter(
-            db_mutex.clone(),
-            private_routes_rate_limit.clone(),
-        ))
-        .or(InviteLink::remove_filter(
-            db_mutex.clone(),
-            private_routes_rate_limit.clone(),
-        ));
-     */
 
     let log = warp::log("info");
 
@@ -226,6 +109,10 @@ pub async fn run(database: Database, config: config::Config) {
                 private_routes_rate_limit.clone(),
             ))
             .or(World::filters(
+                db_mutex.clone(),
+                private_routes_rate_limit.clone(),
+            ))
+            .or(Group::filters(
                 db_mutex.clone(),
                 private_routes_rate_limit.clone(),
             ))
@@ -257,9 +144,9 @@ fn user_creation_and_removal() -> anyhow::Result<()> {
     const TEST_PORT: u32 = 3031;
 
     use log::info;
-    use mcmanager::config;
-    use mcmanager::config::CONFIG;
-    use mcmanager::database::types::Id;
+    use crate::config;
+    use crate::config::CONFIG;
+    use crate::database::types::Id;
     use pretty_assertions::assert_eq;
     use reqwest::header;
     use serde::Deserialize;
@@ -546,8 +433,8 @@ fn user_creation_and_removal() -> anyhow::Result<()> {
 fn permissions() -> anyhow::Result<()> {
     const TEST_PORT: u32 = 3032;
 
-    use mcmanager::config;
-    use mcmanager::config::CONFIG;
+    use crate::config;
+    use crate::config::CONFIG;
     use pretty_assertions::assert_eq;
     use reqwest::header;
     use serde::Deserialize;

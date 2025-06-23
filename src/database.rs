@@ -161,7 +161,9 @@ impl Database {
         debug!("querying database: {query}");
         match self
             .conn
-            .query_row(query, params![id], |row| T::from_row(row))
+            .query_row(query, params![id], |row| {
+                Ok(T::from_row(row).unwrap())
+            })
         {
             Ok(result) => Ok(result),
             Err(err) => Err(DatabaseError::SqliteError(err)),

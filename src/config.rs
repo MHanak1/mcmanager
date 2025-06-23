@@ -11,7 +11,7 @@ use crate::database::types::Id;
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     pub listen_address: String,
-    pub listen_port: u32,
+    pub listen_port: u16,
     pub public_routes_rate_limit: (u32, u64),
     pub private_routes_rate_limit: (u32, u64),
     pub minecraft_server_type: ServerType,
@@ -66,13 +66,19 @@ pub struct VelocityConfig {
 }
 
 pub static CONFIG: Lazy<Config> = Lazy::new(|| {
+    let mut config_builder = config::Config::builder()
+        .add_source(config::File::from_str(&include_str!("resources/default_config.toml").replace("$default_group_id", "AAAAAAAA"), config::FileFormat::Toml));
+
     let config_path = util::dirs::base_dir().join("config.toml");
 
-    if !config_path.exists() {
-        let mut config_file = File::create(&config_path).expect("failed to create config file");
-        config_file
-            .write_all(include_bytes!("resources/default_config.toml"))
-            .expect("failed to write default config file");
+    if config_path.exists() {
+        config_builder = config_builder.add_source(config::File::with_name(
+            util::dirs::base_dir()
+                .join("config.toml")
+                .display()
+                .to_string()
+                .as_str(),
+        ));
     }
 
     debug!(
@@ -80,18 +86,9 @@ pub static CONFIG: Lazy<Config> = Lazy::new(|| {
         util::dirs::base_dir().join("config.toml").display()
     );
 
-    let config = config::Config::builder()
-        .add_source(config::File::with_name(
-            util::dirs::base_dir()
-                .join("config.toml")
-                .display()
-                .to_string()
-                .as_str(),
-        ))
+    config_builder
         .build()
-        .expect("failed to parse config");
-
-    config
+        .expect("failed to parse config")
         .try_deserialize::<Config>()
         .expect("failed to parse config")
 });

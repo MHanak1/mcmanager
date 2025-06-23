@@ -5,3 +5,4 @@ pub mod config;
 pub mod database;
 pub mod minecraft;
 pub mod util;
+pub mod bin;

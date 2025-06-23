@@ -41,7 +41,7 @@ java_launch_command = "java -jar -Xms512m %max_mem% %jar% -nogui"
 
 [user_defaults]
 #default user group
-group_id = "$default_group_id$"
+group_id = "$default_group_id" # this gets replaced with the actual id during the first setup
 
 [world_defaults]
 # Default amount of memory allocated to a server (in MiB)
