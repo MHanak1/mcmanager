@@ -15,6 +15,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use warp::{Filter, Rejection, Reply};
 use warp_rate_limit::RateLimitConfig;
+use crate::database::objects::group::Group;
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub struct User {
@@ -24,22 +25,8 @@ pub struct User {
     pub username: String,
     /// [`Id`] of the avatar stored in the filesystem (data/avatars)
     pub avatar_id: Option<Id>,
-    /// limit of user's total allocatable memory in MiB. [`None`] means no limit
-    pub memory_limit: Option<u32>,
-    /// how many worlds can a user create. [`None`] means no limit
-    pub world_limit: Option<u32>,
-    /// how many worlds can be enabled at a time. [`None`] means no limit
-    pub active_world_limit: Option<u32>,
-    /// how much storage is available to a user in MiB. [`None`] means no limit
-    pub storage_limit: Option<u32>,
-    /// server.properties config limitation. for more info look at the description in the config file
-    pub config_blacklist: Vec<String>,
-    /// server.properties config limitation. for more info look at the description in the config file
-    pub config_whitelist: Vec<String>,
-    /// server.properties config limitation. for more info look at the description in the config file
-    pub config_limits: HashMap<String, ServerConfigLimit>,
-    /// whether a user has administrative privileges, this means they can manage other users and create new accounts
-    pub is_privileged: bool,
+    /// which permission [`Group`] does the user belong to
+    pub group_id: Id,
     /// whether the user can access the API
     pub enabled: bool,
 }
@@ -74,16 +61,7 @@ impl DbObject for User {
             Column::new("id", Type::Id).primary_key(),
             Column::new("username", Type::Text).not_null().unique(),
             Column::new("avatar_id", Type::Id),
-            Column::new("memory_limit", Type::Integer(false)),
-            Column::new("world_limit", Type::Integer(false)),
-            Column::new("active_world_limit", Type::Integer(false)),
-            Column::new("storage_limit", Type::Integer(false)),
-            Column::new("config_blacklist", Type::Text),
-            Column::new("config_whitelist", Type::Text),
-            Column::new("config_limits", Type::Text),
-            Column::new("is_privileged", Type::Boolean)
-                .not_null()
-                .default("false"),
+            Column::new("group_id", Type::Id).not_null().references("groups(id)"),
             Column::new("enabled", Type::Boolean)
                 .not_null()
                 .default("true"),
@@ -97,19 +75,8 @@ impl DbObject for User {
             id: row.get(0)?,
             username: row.get(1)?,
             avatar_id: row.get(2)?,
-            memory_limit: row.get(3)?,
-            world_limit: row.get(4)?,
-            active_world_limit: row.get(5)?,
-            storage_limit: row.get(6)?,
-            // yes. I am storing JSON in a database. no. you cannot stop me.
-            config_blacklist: serde_json::from_str(&row.get::<usize, String>(7)?)
-                .map_err(|_| rusqlite::Error::UnwindingPanic)?,
-            config_whitelist: serde_json::from_str(&row.get::<usize, String>(8)?)
-                .map_err(|_| rusqlite::Error::UnwindingPanic)?,
-            config_limits: serde_json::from_str(&row.get::<usize, String>(9)?)
-                .map_err(|_| rusqlite::Error::UnwindingPanic)?,
-            is_privileged: row.get(10)?,
-            enabled: row.get(11)?,
+            group_id: row.get(3)?,
+            enabled: row.get(4)?,
         })
     }
 
@@ -118,12 +85,6 @@ impl DbObject for User {
     }
 
     fn params(&self) -> Vec<ToSqlOutput> {
-        let config_blacklist =
-            serde_json::to_string(&self.config_blacklist).expect("serialization failed");
-        let config_whitelist =
-            serde_json::to_string(&self.config_whitelist).expect("serialization failed");
-        let config_limits =
-            serde_json::to_string(&self.config_limits).expect("serialization failed");
         vec![
             self.id
                 .to_sql()
@@ -134,22 +95,7 @@ impl DbObject for User {
             self.avatar_id
                 .to_sql()
                 .expect("failed to convert the value to sql"),
-            self.memory_limit
-                .to_sql()
-                .expect("failed to convert the value to sql"),
-            self.world_limit
-                .to_sql()
-                .expect("failed to convert the value to sql"),
-            self.active_world_limit
-                .to_sql()
-                .expect("failed to convert the value to sql"),
-            self.storage_limit
-                .to_sql()
-                .expect("failed to convert the value to sql"),
-            ToSqlOutput::from(config_blacklist),
-            ToSqlOutput::from(config_whitelist),
-            ToSqlOutput::from(config_limits),
-            self.is_privileged
+            self.group_id
                 .to_sql()
                 .expect("failed to convert the value to sql"),
             self.enabled
@@ -165,14 +111,7 @@ impl Default for User {
             id: Id::default(),
             username: String::new(),
             avatar_id: None,
-            memory_limit: Some(CONFIG.user_defaults.memory_limit),
-            world_limit: Some(CONFIG.user_defaults.world_limit),
-            active_world_limit: Some(CONFIG.user_defaults.active_world_limit),
-            storage_limit: Some(CONFIG.user_defaults.storage_limit),
-            config_blacklist: CONFIG.user_defaults.config_blacklist.clone(),
-            config_whitelist: CONFIG.user_defaults.config_whitelist.clone(),
-            config_limits: CONFIG.user_defaults.config_limits.clone(),
-            is_privileged: false,
+            group_id: CONFIG.user_defaults.group_id,
             enabled: true,
         }
     }
@@ -193,18 +132,7 @@ pub struct JsonFrom {
     pub password: String,
     #[serde(default, deserialize_with = "deserialize_some")]
     pub avatar_id: Option<Option<Id>>,
-    #[serde(default, deserialize_with = "deserialize_some")]
-    pub memory_limit: Option<Option<u32>>,
-    #[serde(default, deserialize_with = "deserialize_some")]
-    pub world_limit: Option<Option<u32>>,
-    #[serde(default, deserialize_with = "deserialize_some")]
-    pub active_world_limit: Option<Option<u32>>,
-    #[serde(default, deserialize_with = "deserialize_some")]
-    pub storage_limit: Option<Option<u32>>,
-    pub config_blacklist: Option<Vec<String>>,
-    pub config_whitelist: Option<Vec<String>>,
-    pub config_limits: Option<HashMap<String, ServerConfigLimit>>,
-    pub is_privileged: Option<bool>,
+    pub group_id: Option<Id>,
     pub enabled: Option<bool>,
 }
 
@@ -215,31 +143,7 @@ impl FromJson for User {
             id: Id::default(),
             username: data.username.clone(),
             avatar_id: data.avatar_id.unwrap_or(None),
-            memory_limit: data
-                .memory_limit
-                .unwrap_or(Some(CONFIG.user_defaults.memory_limit)),
-            world_limit: data
-                .world_limit
-                .unwrap_or(Some(CONFIG.user_defaults.world_limit)),
-            active_world_limit: data
-                .active_world_limit
-                .unwrap_or(Some(CONFIG.user_defaults.active_world_limit)),
-            storage_limit: data
-                .storage_limit
-                .unwrap_or(Some(CONFIG.user_defaults.storage_limit)),
-            config_blacklist: data
-                .config_blacklist
-                .clone()
-                .unwrap_or(CONFIG.user_defaults.config_blacklist.clone()),
-            config_whitelist: data
-                .config_whitelist
-                .clone()
-                .unwrap_or(CONFIG.user_defaults.config_whitelist.clone()),
-            config_limits: data
-                .config_limits
-                .clone()
-                .unwrap_or(CONFIG.user_defaults.config_limits.clone()),
-            is_privileged: data.is_privileged.unwrap_or(false),
+            group_id: data.group_id.unwrap_or(CONFIG.user_defaults.group_id),
             enabled: data.enabled.unwrap_or(true),
         }
     }
@@ -254,21 +158,7 @@ pub struct JsonUpdate {
     #[serde(default, deserialize_with = "deserialize_some")]
     pub avatar_id: Option<Option<Id>>,
     #[serde(default, deserialize_with = "deserialize_some")]
-    pub memory_limit: Option<Option<u32>>,
-    #[serde(default, deserialize_with = "deserialize_some")]
-    pub world_limit: Option<Option<u32>>,
-    #[serde(default, deserialize_with = "deserialize_some")]
-    pub active_world_limit: Option<Option<u32>>,
-    #[serde(default, deserialize_with = "deserialize_some")]
-    pub storage_limit: Option<Option<u32>>,
-    #[serde(default, deserialize_with = "deserialize_some")]
-    pub config_blacklist: Option<Vec<String>>,
-    #[serde(default, deserialize_with = "deserialize_some")]
-    pub config_whitelist: Option<Vec<String>>,
-    #[serde(default, deserialize_with = "deserialize_some")]
-    pub config_limits: Option<HashMap<String, ServerConfigLimit>>,
-    #[serde(default, deserialize_with = "deserialize_some")]
-    pub is_privileged: Option<bool>,
+    pub group_id: Option<Id>,
     #[serde(default, deserialize_with = "deserialize_some")]
     pub enabled: Option<bool>,
 }
@@ -276,22 +166,10 @@ impl UpdateJson for User {
     type JsonUpdate = JsonUpdate;
     fn update_with_json(&self, data: &Self::JsonUpdate) -> Self {
         let mut new = self.clone();
+        // TODO: password change
         new.username = data.username.clone().unwrap_or(new.username);
         new.avatar_id = data.avatar_id.unwrap_or(new.avatar_id);
-        new.memory_limit = data.memory_limit.unwrap_or(new.memory_limit);
-        new.world_limit = data.world_limit.unwrap_or(new.world_limit);
-        new.active_world_limit = data.active_world_limit.unwrap_or(new.active_world_limit);
-        new.storage_limit = data.storage_limit.unwrap_or(new.storage_limit);
-        new.config_blacklist = data
-            .config_blacklist
-            .clone()
-            .unwrap_or(new.config_blacklist);
-        new.config_whitelist = data
-            .config_whitelist
-            .clone()
-            .unwrap_or(new.config_whitelist);
-        new.config_limits = data.config_limits.clone().unwrap_or(new.config_limits);
-        new.is_privileged = data.is_privileged.unwrap_or(new.is_privileged);
+        new.group_id = data.group_id.unwrap_or(new.group_id);
         new.enabled = data.enabled.unwrap_or(new.enabled);
         new
     }
@@ -374,6 +252,12 @@ impl ApiUpdate for User {
     }
 }
 impl ApiRemove for User {}
+
+impl User {
+    pub async fn group(&self, db_mutex: DbMutex, user: Option<(&User, &Group)>) -> Group {
+        db_mutex.lock().await.get_one(self.group_id, user).expect(&format!("couldn't find group with id {}", self.group_id))
+    }
+}
 
 pub mod password {
     use crate::database::objects::DbObject;

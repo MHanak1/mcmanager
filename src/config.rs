@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
 use std::ops::Range;
+use crate::database::types::Id;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
@@ -48,18 +49,7 @@ pub struct WorldConfig {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct UserDefaults {
-    /// total RAM limit ( in MiB)
-    pub memory_limit: u32,
-    /// total wolds the user can have enabled
-    pub world_limit: u32,
-    /// amount of worlds that user can have enabled at a time
-    pub active_world_limit: u32,
-    /// total amount of storage available to the user ( in MiB)
-    pub storage_limit: u32,
-
-    pub config_blacklist: Vec<String>,
-    pub config_whitelist: Vec<String>,
-    pub config_limits: HashMap<String, crate::minecraft::server::ServerConfigLimit>,
+    pub group_id: Id,
 }
 
 #[derive(Debug, Clone, Deserialize)]

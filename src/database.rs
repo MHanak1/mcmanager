@@ -1,4 +1,4 @@
-use crate::database::objects::DbObject;
+use crate::database::objects::{DbObject, Group};
 use crate::database::objects::{
     InviteLink, Mod, ModLoader, Password, Session, User, Version, World,
 };
@@ -37,10 +37,10 @@ impl Database {
     pub fn insert<T: DbObject>(
         &self,
         value: &T,
-        user: Option<&User>,
+        user: Option<(&User, &Group)>,
     ) -> Result<usize, DatabaseError> {
-        if let Some(user) = user {
-            if !T::can_create(user) {
+        if let Some((user, group)) = user {
+            if !T::can_create(user, group) {
                 return Err(DatabaseError::Unauthorized);
             }
         }
@@ -74,10 +74,10 @@ impl Database {
     pub fn update<T: DbObject>(
         &self,
         value: &T,
-        user: Option<&User>,
+        user: Option<(&User, &Group)>,
     ) -> Result<usize, DatabaseError> {
-        if let Some(user) = user {
-            if !value.can_update(user) {
+        if let Some((user, group)) = user {
+            if !value.can_update(user, group) {
                 return Err(DatabaseError::Unauthorized);
             }
         }
@@ -95,8 +95,8 @@ impl Database {
             T::columns()[T::id_column_index()].name,
             value.get_id().as_i64(),
             match user {
-                Some(user) => {
-                    format!(" AND {}", T::update_access().access_filter::<T>(user))
+                Some((user, group)) => {
+                    format!(" AND {}", T::update_access().access_filter::<T>(user, group))
                 }
                 None => String::new(),
             }
@@ -114,10 +114,10 @@ impl Database {
     pub fn remove<T: DbObject>(
         &self,
         value: &T,
-        user: Option<&User>,
+        user: Option<(&User, &Group)>,
     ) -> Result<usize, DatabaseError> {
-        if let Some(user) = user {
-            if !value.can_update(user) {
+        if let Some((user, group)) = user {
+            if !value.can_update(user, group) {
                 return Err(DatabaseError::Unauthorized);
             }
         }
@@ -128,8 +128,8 @@ impl Database {
             T::table_name(),
             T::columns()[T::id_column_index()].name,
             match user {
-                Some(user) => {
-                    format!(" AND {}", T::update_access().access_filter::<T>(user))
+                Some((user, group)) => {
+                    format!(" AND {}", T::update_access().access_filter::<T>(user, group))
                 }
                 None => String::new(),
             },
@@ -144,14 +144,14 @@ impl Database {
         }
     }
 
-    pub fn get_one<T: DbObject>(&self, id: Id, user: Option<&User>) -> Result<T, DatabaseError> {
+    pub fn get_one<T: DbObject>(&self, id: Id, user: Option<(&User, &Group)>) -> Result<T, DatabaseError> {
         let query = &format!(
             "SELECT * FROM {} WHERE {} = ?1{}",
             T::table_name(),
             T::columns()[T::id_column_index()].name,
             match user {
-                Some(user) => {
-                    format!(" AND {}", T::view_access().access_filter::<T>(user))
+                Some((user, group)) => {
+                    format!(" AND {}", T::view_access().access_filter::<T>(user, group))
                 }
                 None => String::new(),
             }
@@ -167,7 +167,7 @@ impl Database {
         }
     }
 
-    pub fn list_all<T: DbObject>(&self, user: Option<&User>) -> Result<Vec<T>, DatabaseError> {
+    pub fn list_all<T: DbObject>(&self, user: Option<(&User, &Group)>) -> Result<Vec<T>, DatabaseError> {
         self.list_filtered::<T>(vec![], user)
     }
 
@@ -176,7 +176,7 @@ impl Database {
     pub fn list_filtered<T: DbObject>(
         &self,
         filters: Vec<(String, String)>,
-        user: Option<&User>,
+        user: Option<(&User, &Group)>,
     ) -> Result<Vec<T>, DatabaseError> {
         let mut query = format!("SELECT * FROM {}", T::table_name());
 
@@ -186,10 +186,10 @@ impl Database {
             Self::construct_filters::<T>(&filters)
         };
 
-        if let Some(user) = user {
+        if let Some((user, group)) = user {
             fields.push(
                 T::view_access()
-                    .access_filter::<T>(user)
+                    .access_filter::<T>(user, group)
                     .as_str()
                     .to_string(),
             );
@@ -340,11 +340,6 @@ pub fn manipulate_data() -> anyhow::Result<()> {
         id: Id::default(),
         username: String::new(),
         avatar_id: None,
-        memory_limit: None,
-        world_limit: None,
-        active_world_limit: None,
-        storage_limit: None,
-        is_privileged: false,
         enabled: false,
     };
 
@@ -352,11 +347,6 @@ pub fn manipulate_data() -> anyhow::Result<()> {
         id: Id::default(),
         username: "Username".to_string(),
         avatar_id: Some(Id::default()),
-        memory_limit: Some(1024),
-        world_limit: Some(10),
-        active_world_limit: Some(3),
-        storage_limit: Some(10240),
-        is_privileged: true,
         enabled: true,
     };
 

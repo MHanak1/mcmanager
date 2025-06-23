@@ -40,27 +40,8 @@ port_range = [24000, 25000]
 java_launch_command = "java -jar -Xms512m %max_mem% %jar% -nogui"
 
 [user_defaults]
-# total allocable memory by user (in MiB) (not implemented)
-memory_limit = 4096
-# Per-world player limit (not implemented)
-world_limit = 10
-# amount of worlds that user can have enabled at a time (not implemented)
-active_world_limit = 3
-# total amount of storage avaliable to the user (in MiB) (not implemented)
-storage_limit = 10240
-# here you can set limits, or lock, different values in the server.properties files for players.
-# adding a field to the blacklist will hide the values from the user, and make them non-editable.
-# adding anything to the whitelist will make only these values editable
-# to limit values, you can prepend them with < or >, which will set the maximum or the minimum (inclusively).
-# you can limit non-numeric values by separating allowed values with | (for example gamemode = "survival|spectrator|adventure".
-# this will only allow those three values, and will revert to the default if a different value was present
-
-#you will probably want to create your own whitelist, as the default blacklist only covers things needed for proper functioning of the server
-config_blacklist = ["enable-rcon", "online-mode", "query.port"]
-config_whitelist = []
-
-config_limits = {view-distance = "<12", simulation-distance = "<12", max-players = "<20"}
-
+#default user group
+group_id = "$default_group_id$"
 
 [world_defaults]
 # Default amount of memory allocated to a server (in MiB)

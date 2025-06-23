@@ -8,6 +8,7 @@ use log::error;
 use rusqlite::{Error, ErrorCode};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use rusqlite::fallible_iterator::FallibleIterator;
 use tokio::sync::Mutex;
 use warp::http::StatusCode;
 use warp::{Filter, Rejection, Reply, reject};
@@ -35,10 +36,11 @@ where
         user: User,
         filters: Vec<(String, String)>,
     ) -> Result<impl warp::Reply, warp::Rejection> {
+        let group = user.group(db_mutex.clone(), None).await;
         let objects = {
             let database = db_mutex.lock().await;
             database
-                .list_filtered::<Self>(filters, Some(&user))
+                .list_filtered::<Self>(filters, Some((&user, &group)))
                 .map_err(handle_database_error)?
         };
         Ok(warp::reply::with_status(
@@ -76,11 +78,12 @@ where
         user: User,
     ) -> Result<impl warp::Reply, warp::Rejection> {
         let id = Id::from_string(&id).map_err(|_| reject::custom(rejections::NotFound))?;
+        let group = user.group(db_mutex.clone(), None).await;
         let object = {
             let database = db_mutex.lock().await;
 
             database
-                .get_one::<Self>(id, Some(&user))
+                .get_one::<Self>(id, Some((&user, &group)))
                 .map_err(handle_database_error)?
         };
 
@@ -120,8 +123,9 @@ where
         data: Self::JsonFrom,
     ) -> Result<impl warp::Reply, warp::Rejection> {
         let mut data = data;
+        let group = user.group(db_mutex.clone(), None).await;
         //in theory this is redundant, as database::insert checks it as well, but better safe than sorry
-        if !Self::can_create(&user) {
+        if !Self::can_create(&user, &group) {
             return Err(reject::custom(rejections::Unauthorized));
         }
 
@@ -133,7 +137,7 @@ where
             let _ = db_mutex
                 .lock()
                 .await
-                .insert(&object, Some(&user))
+                .insert(&object, Some((&user, &group)))
                 .map_err(handle_database_error)?;
 
             object
@@ -210,11 +214,12 @@ where
         let object = {
             let id =
                 Id::from_string(&id).map_err(|_| warp::reject::custom(rejections::NotFound))?;
+            let group = user.group(db_mutex.clone(), None).await;
 
             let object = db_mutex
                 .lock()
                 .await
-                .get_one::<Self>(id, Some(&user))
+                .get_one::<Self>(id, Some((&user, &group)))
                 .map_err(handle_database_error)?;
 
             object
@@ -227,7 +232,7 @@ where
             let _ = db_mutex
                 .lock()
                 .await
-                .update(&object, Some(&user))
+                .update(&object, Some((&user, &group)))
                 .map_err(handle_database_error)?;
 
             object
@@ -297,12 +302,13 @@ where
         user: User,
     ) -> Result<impl warp::Reply, warp::Rejection> {
         let id = Id::from_string(&id).map_err(|_| reject::custom(rejections::NotFound))?;
+        let group = user.group(db_mutex.clone(), None).await;
 
         {
             let database = db_mutex.lock().await;
 
             let object = database
-                .get_one::<Self>(id, Some(&user))
+                .get_one::<Self>(id, Some((&user, &group)))
                 .map_err(handle_database_error)?;
 
             object
@@ -311,7 +317,7 @@ where
                 .map_err(handle_database_error)?;
 
             let _ = database
-                .remove(&object, Some(&user))
+                .remove(&object, Some((&user, &group)))
                 .map_err(handle_database_error)?;
 
             object
