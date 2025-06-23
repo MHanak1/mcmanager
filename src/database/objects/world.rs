@@ -1,7 +1,7 @@
 use crate::api::filters;
 use crate::api::handlers::{ApiCreate, ApiGet, ApiList, ApiObject, ApiRemove, ApiUpdate, DbMutex};
 use crate::api::util::rejections;
-use crate::database::objects::{DbObject, FromJson, UpdateJson, User};
+use crate::database::objects::{DbObject, FromJson, UpdateJson, User, Version};
 use crate::database::types::{Access, Column, Id, Type};
 use crate::database::{Database, DatabaseError};
 use crate::minecraft::server;
@@ -12,10 +12,13 @@ use rusqlite::{Row, ToSql};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
+use log::debug;
 use tokio::sync::Mutex;
+use tokio::task::id;
 use warp::http::StatusCode;
 use warp::{Filter, Rejection, Reply, reject};
 use warp_rate_limit::{RateLimitConfig, RateLimitInfo};
+use crate::database::objects::group::Group;
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub struct World {
@@ -257,15 +260,15 @@ impl ApiCreate for World {
         json: &mut Self::JsonFrom,
         user: &User,
     ) -> Result<(), DatabaseError> {
+        let group = user.group(database.clone(), None).await;
         let user_worlds: Vec<World> = database.lock().await.list_filtered(
             vec![("owner_id".to_string(), user.id.as_i64().to_string())],
-            Some(&user),
+            Some((&user, &group)),
         )?;
+        let group = user.group(database.clone(), None).await;
 
-        println!("world limit enforcing");
         //enforce the world limit
-        if let Some(world_limit) = user.world_limit {
-            println!("limit is: {world_limit}");
+        if let Some(world_limit) = group.world_limit {
             if user_worlds.iter().count() >= world_limit as usize {
                 return Err(DatabaseError::Unauthorized);
             }
@@ -281,18 +284,16 @@ impl ApiCreate for World {
             )?
             .is_empty()
         {
+            debug!("hostname already used. adding a random value to it");
             json.hostname += &rand::random_range(0..100000).to_string();
         }
 
-        println!("enforcing memory limit");
         //enforce memory limit
-        if let Some(memory_limit) = user.memory_limit {
-            println!("limit is: {memory_limit}");
+        if let Some(memory_limit) = group.total_memory_limit {
             if let Some(allocated_memory) = json.allocated_memory {
-                println!("allocated memory: {allocated_memory}");
                 let user_worlds: Vec<World> = database.lock().await.list_filtered(
                     vec![("owner_id".to_string(), user.id.as_i64().to_string())],
-                    Some(&user),
+                    Some((&user, &group)),
                 )?;
 
                 let mut total_memory = 0;
@@ -306,6 +307,7 @@ impl ApiCreate for World {
                 }
 
                 if (allocated_memory as i32) > remaining_memory {
+                    debug!("changing memory amount for server created by {}. requested is {}, max available is {}", user.id, memory_limit, remaining_memory);
                     json.allocated_memory = Some(remaining_memory as u32);
                 }
             }
@@ -332,14 +334,14 @@ impl ApiUpdate for World {
         json: &mut Self::JsonUpdate,
         user: &User,
     ) -> Result<(), DatabaseError> {
-        println!("active world limit enforcing");
+        let group = user.group(database.clone(), None).await;
         let user_worlds: Vec<World> = database.lock().await.list_filtered(
             vec![("owner_id".to_string(), user.id.as_i64().to_string())],
-            Some(&user),
+            Some((&user, &group)),
         )?;
 
         //enforce the active world limit
-        if let Some(active_world_limit) = user.active_world_limit {
+        if let Some(active_world_limit) = group.active_world_limit {
             println!("limit is: {active_world_limit}");
             let mut active_worlds = 0;
             for world in &user_worlds {
@@ -358,7 +360,7 @@ impl ApiUpdate for World {
             json.hostname = Some(into_valid_hostname(hostname))
         }
         if let Some(hostname) = &json.hostname {
-            if database
+            if !database
                 .lock()
                 .await
                 .list_filtered::<World>(
@@ -370,18 +372,14 @@ impl ApiUpdate for World {
                 )?
                 .is_empty()
             {
-                json.hostname = Some(hostname.clone());
-            } else {
+                debug!("hostname already used. adding a random value to it");
                 json.hostname = Some(hostname.clone() + &rand::random_range(0..100000).to_string());
             }
         }
 
-        println!("enforcing memory limit");
         //enforce memory limit
-        if let Some(memory_limit) = user.memory_limit {
-            println!("limit is: {memory_limit}");
+        if let Some(memory_limit) = group.total_memory_limit {
             if let Some(allocated_memory) = json.allocated_memory {
-                println!("allocated memory: {allocated_memory}");
                 if allocated_memory != self.allocated_memory {
                     let mut total_memory = 0;
 
@@ -390,14 +388,13 @@ impl ApiUpdate for World {
                             total_memory += world.allocated_memory;
                         }
                     }
-                    println!("total memory: {total_memory}");
                     let remaining_memory = memory_limit as i32 - total_memory as i32;
-                    println!("remaining memory: {remaining_memory}");
                     if remaining_memory < 0 {
                         return Err(DatabaseError::Unauthorized);
                     }
 
                     if (allocated_memory as i32) > remaining_memory {
+                        debug!("changing memory amount for server {} created by {}. requested is {}, max available is {}", self.id, user.id, memory_limit, remaining_memory);
                         json.allocated_memory = Some(remaining_memory as u32);
                     }
                 }
@@ -426,6 +423,12 @@ impl ApiUpdate for World {
 impl ApiRemove for World {}
 
 impl World {
+    pub async fn version(&self, db_mutex: DbMutex, user: Option<(&User, &Group)>) -> Version {
+        db_mutex.lock().await.get_one(self.version_id, user).expect(&format!("couldn't find version with id {}", self.version_id))
+    }
+    pub async fn owner(&self, db_mutex: DbMutex, user: Option<(&User, &Group)>) -> User {
+        db_mutex.lock().await.get_one(self.owner_id, user).expect(&format!("couldn't find user with id {}", self.owner_id))
+    }
     #[allow(clippy::needless_pass_by_value)]
     async fn world_get_status(
         _rate_limit_info: RateLimitInfo,
@@ -435,10 +438,9 @@ impl World {
     ) -> Result<impl warp::Reply, warp::Rejection> {
         let id = Id::from_string(&id).map_err(|_| reject::custom(rejections::NotFound))?;
         {
-            let database = db_mutex.lock().await;
-
-            database
-                .get_one::<Self>(id, Some(&user))
+            let group = user.group(db_mutex.clone(), None).await;
+            db_mutex.lock().await
+                .get_one::<Self>(id, Some((&user, &group)))
                 .map_err(crate::api::handlers::handle_database_error)?;
         }
 
@@ -496,11 +498,12 @@ impl World {
         user: User,
     ) -> Result<impl warp::Reply, warp::Rejection> {
         let id = Id::from_string(&id).map_err(|_| reject::custom(rejections::NotFound))?;
+        let group = user.group(db_mutex.clone(), None).await;
 
         let world = {
             let database = db_mutex.lock().await;
             database
-                .get_one::<Self>(id, Some(&user))
+                .get_one::<Self>(id, Some((&user, &group)))
                 .map_err(crate::api::handlers::handle_database_error)?
         };
 
@@ -514,13 +517,13 @@ impl World {
             .config()
             .await
             .map_err(|err| warp::reject::custom(rejections::InternalServerError::from(err)))?;
-        if user.config_whitelist.is_empty() {
-            for key in user.config_blacklist {
+        if group.config_whitelist.is_empty() {
+            for key in group.config_blacklist {
                 config.remove(&key);
             }
         } else {
             let mut new_config = HashMap::new();
-            for key in user.config_whitelist {
+            for key in group.config_whitelist {
                 if let Some(value) = config.get(&key) {
                     new_config.insert(key, value.clone());
                 }
@@ -559,11 +562,12 @@ impl World {
         new_config: HashMap<String, String>,
     ) -> Result<impl warp::Reply, warp::Rejection> {
         let id = Id::from_string(&id).map_err(|_| reject::custom(rejections::NotFound))?;
+        let group = user.group(db_mutex.clone(), None).await;
 
         let world = {
             let database = db_mutex.lock().await;
             database
-                .get_one::<Self>(id, Some(&user))
+                .get_one::<Self>(id, Some((&user, &group)))
                 .map_err(crate::api::handlers::handle_database_error)?
         };
 
@@ -577,13 +581,13 @@ impl World {
             .config()
             .await
             .map_err(|err| warp::reject::custom(rejections::InternalServerError::from(err)))?;
-        if user.config_whitelist.is_empty() {
-            for key in &user.config_blacklist {
+        if group.config_whitelist.is_empty() {
+            for key in &group.config_blacklist {
                 config.remove(key.as_str());
             }
         } else {
             let mut new_config = HashMap::new();
-            for key in &user.config_whitelist {
+            for key in &group.config_whitelist {
                 if let Some(value) = config.get(key.as_str()) {
                     new_config.insert(key.clone(), value.clone());
                 }
@@ -593,16 +597,16 @@ impl World {
 
         for (key, value) in new_config {
             let mut editable = true;
-            if user.config_whitelist.is_empty() {
-                if user.config_blacklist.contains(&key) {
+            if group.config_whitelist.is_empty() {
+                if group.config_blacklist.contains(&key) {
                     editable = false;
                 }
-            } else if !user.config_whitelist.contains(&key) {
+            } else if !group.config_whitelist.contains(&key) {
                 editable = false;
             }
 
             if editable {
-                if let Some(config_limit) = user.config_limits.get(&key) {
+                if let Some(config_limit) = group.config_limits.get(&key) {
                     match config_limit {
                         ServerConfigLimit::MoreThan(limit) | ServerConfigLimit::LessThan(limit) => {
                             if let Ok(value) = value.parse::<i64>() {

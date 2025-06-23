@@ -1,4 +1,4 @@
-use crate::database::objects::{DbObject, User};
+use crate::database::objects::{DbObject, Group, User};
 use crate::util;
 use crate::util::base64::{base64_decode, base64_encode};
 use anyhow::Result;
@@ -155,14 +155,14 @@ impl Access {
     ///
     /// if the access level is [`Access::Owner`], the `object` must me [`Some`].
     #[allow(clippy::expect_fun_call)]
-    pub fn can_access<T: DbObject + ?Sized>(&self, object: Option<&T>, user: &User) -> bool {
+    pub fn can_access<T: DbObject + ?Sized>(&self, object: Option<&T>, user: &User, group: &Group) -> bool {
         match self {
             Access::All => true,
             Access::And(left, right) => {
-                right.can_access(object, user) && left.can_access(object, user)
+                right.can_access(object, user, group) && left.can_access(object, user, group)
             }
             Access::Or(left, right) => {
-                right.can_access(object, user) || left.can_access(object, user)
+                right.can_access(object, user, group) || left.can_access(object, user, group)
             }
             _ => {
                 //all the following restrict the user to be enabled
@@ -184,7 +184,7 @@ impl Access {
                                 .to_sql()
                                 .expect("failed to convert the user's id to an sql value")
                         }
-                        Access::PrivilegedUser => user.is_privileged,
+                        Access::PrivilegedUser => group.is_privileged,
                         Access::None => false,
                         Access::All | Access::And(..) | Access::Or(..) => {
                             unreachable!();
@@ -197,21 +197,21 @@ impl Access {
         }
     }
 
-    pub fn access_filter<T: DbObject + ?Sized>(&self, user: &User) -> String {
+    pub fn access_filter<T: DbObject + ?Sized>(&self, user: &User, group: &Group) -> String {
         match self {
             Access::All => "1".to_string(),
             Access::And(left, right) => {
                 format!(
                     "({} AND {})",
-                    left.access_filter::<T>(user),
-                    right.access_filter::<T>(user)
+                    left.access_filter::<T>(user, group),
+                    right.access_filter::<T>(user, group)
                 )
             }
             Access::Or(left, right) => {
                 format!(
                     "({} OR {})",
-                    left.access_filter::<T>(user),
-                    right.access_filter::<T>(user)
+                    left.access_filter::<T>(user, group),
+                    right.access_filter::<T>(user, group)
                 )
             }
             _ => {
@@ -223,7 +223,7 @@ impl Access {
                             format!("{}={}", owner_column_name, user.id.as_i64())
                         }
                         Access::PrivilegedUser => {
-                            if user.is_privileged { "1" } else { "0" }.to_string()
+                            if group.is_privileged { "1" } else { "0" }.to_string()
                         }
                         Access::None => "0".to_string(),
                         Access::All | Access::And(..) | Access::Or(..) => {

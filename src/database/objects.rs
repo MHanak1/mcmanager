@@ -10,10 +10,11 @@ pub mod modification;
 pub mod user;
 pub mod version;
 pub mod world;
+pub mod group;
 
 pub use self::{
     invite_link::InviteLink, mod_loader::ModLoader, modification::Mod, user::Password,
-    user::Session, user::User, version::Version, world::World,
+    user::Session, user::User, version::Version, world::World, group::Group,
 };
 
 /// An object that is meant to be stored in a database
@@ -31,24 +32,24 @@ pub trait DbObject: Send + Sync {
     /// # Panics
     ///
     /// see [`Access::can_access`]
-    fn can_view(&self, user: &User) -> bool {
-        Self::view_access().can_access::<Self>(Some(self), user)
+    fn can_view(&self, user: &User, group: &Group) -> bool {
+        Self::view_access().can_access::<Self>(Some(self), user, group)
     }
     /// whether a user can update this object using the API
     ///
     /// # Panics
     ///
     /// see [`Access::can_access`]
-    fn can_update(&self, user: &User) -> bool {
-        Self::update_access().can_access::<Self>(Some(self), user)
+    fn can_update(&self, user: &User, group: &Group) -> bool {
+        Self::update_access().can_access::<Self>(Some(self), user, group)
     }
     /// whether a user can create this object using the API
     ///
     /// # Panics
     ///
     /// see [`Access::can_access`]
-    fn can_create(user: &User) -> bool {
-        Self::create_access().can_access::<Self>(None, user)
+    fn can_create(user: &User, group: &Group) -> bool {
+        Self::create_access().can_access::<Self>(None, user, group)
     }
 
     #[allow(unused)]
