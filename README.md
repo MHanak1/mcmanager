@@ -18,17 +18,17 @@ The MCManager uses [Velocity](https://papermc.io/software/velocity) to proxy tra
 ## Roadmap
 
 #### Backend
-[x] Data storage and authentication with an API
-[x] Run servers
-    [x] Locally
-    [x] Remotely
-    [ ] Through Kubernetes
-[x] Proxy traffic through Velocity
-[ ] Handling uploads of mods and versions
-[ ] Automatically download mods and versions from modrinth
+- [x] Data storage and authentication with an API
+- [x] Run servers
+    - [x] Locally
+    - [x] Remotely
+    - [ ] Through Kubernetes
+- [x] Proxy traffic through Velocity
+- [ ] Handling uploads of mods and versions
+- [ ] Automatically download mods and versions from modrinth
 
 #### Frontend
-[ ] Frontend
+- [ ] Frontend
 
 
 \* At this point the project is *not* ready for a large-scale deployment
