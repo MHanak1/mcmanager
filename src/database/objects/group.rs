@@ -108,9 +108,7 @@ impl DbObject for Group {
             self.id
                 .to_sql()
                 .expect("failed to convert the value to sql"),
-            self.name
-                .to_sql()
-                .expect("failed to convert value to sql"),
+            self.name.to_sql().expect("failed to convert value to sql"),
             self.total_memory_limit
                 .to_sql()
                 .expect("failed to convert the value to sql"),
@@ -137,7 +135,10 @@ impl DbObject for Group {
 }
 
 impl ApiObject for Group {
-    fn filters(db_mutex: DbMutex, rate_limit_config: RateLimitConfig) -> impl Filter<Extract=(impl Reply,), Error=Rejection> + Clone {
+    fn filters(
+        db_mutex: DbMutex,
+        rate_limit_config: RateLimitConfig,
+    ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
         Self::list_filter(db_mutex.clone(), rate_limit_config.clone())
             .or(Self::get_filter(
                 db_mutex.clone(),
@@ -178,28 +179,14 @@ impl FromJson for Group {
         Self {
             id: Id::default(),
             name: data.name.clone(),
-            total_memory_limit: data
-                .total_memory_limit,
-            per_world_memory_limit: data
-                .per_world_memory_limit,
-            world_limit: data
-                .world_limit,
-            active_world_limit: data
-                .active_world_limit,
-            storage_limit: data
-                .storage_limit,
-            config_blacklist: data
-                .config_blacklist
-                .clone()
-                .unwrap_or_default(),
-            config_whitelist: data
-                .config_whitelist
-                .clone()
-                .unwrap_or_default(),
-            config_limits: data
-                .config_limits
-                .clone()
-                .unwrap_or_default(),
+            total_memory_limit: data.total_memory_limit,
+            per_world_memory_limit: data.per_world_memory_limit,
+            world_limit: data.world_limit,
+            active_world_limit: data.active_world_limit,
+            storage_limit: data.storage_limit,
+            config_blacklist: data.config_blacklist.clone().unwrap_or_default(),
+            config_whitelist: data.config_whitelist.clone().unwrap_or_default(),
+            config_limits: data.config_limits.clone().unwrap_or_default(),
             is_privileged: data.is_privileged.unwrap_or(false),
         }
     }
@@ -213,7 +200,6 @@ where
 {
     Deserialize::deserialize(deserializer).map(Some)
 }
-
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct JsonUpdate {
@@ -246,7 +232,9 @@ impl UpdateJson for Group {
         let mut new = self.clone();
         new.name = data.name.clone().unwrap_or(new.name);
         new.total_memory_limit = data.total_memory_limit.unwrap_or(new.total_memory_limit);
-        new.per_world_memory_limit = data.per_world_memory_limit.unwrap_or(new.per_world_memory_limit);
+        new.per_world_memory_limit = data
+            .per_world_memory_limit
+            .unwrap_or(new.per_world_memory_limit);
         new.world_limit = data.world_limit.unwrap_or(new.world_limit);
         new.active_world_limit = data.active_world_limit.unwrap_or(new.active_world_limit);
         new.storage_limit = data.storage_limit.unwrap_or(new.storage_limit);

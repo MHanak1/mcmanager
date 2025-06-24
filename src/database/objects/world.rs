@@ -1,24 +1,24 @@
 use crate::api::filters;
 use crate::api::handlers::{ApiCreate, ApiGet, ApiList, ApiObject, ApiRemove, ApiUpdate, DbMutex};
 use crate::api::util::rejections;
+use crate::database::objects::group::Group;
 use crate::database::objects::{DbObject, FromJson, UpdateJson, User, Version};
 use crate::database::types::{Access, Column, Id, Type};
 use crate::database::{Database, DatabaseError};
 use crate::minecraft::server;
 use crate::minecraft::server::{MinecraftServerStatus, ServerConfigLimit};
 use async_trait::async_trait;
+use log::{debug, info};
 use rusqlite::types::ToSqlOutput;
 use rusqlite::{Row, ToSql};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
-use log::debug;
 use tokio::sync::Mutex;
 use tokio::task::id;
 use warp::http::StatusCode;
 use warp::{Filter, Rejection, Reply, reject};
 use warp_rate_limit::{RateLimitConfig, RateLimitInfo};
-use crate::database::objects::group::Group;
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub struct World {
@@ -261,7 +261,7 @@ impl ApiCreate for World {
         user: &User,
     ) -> Result<(), DatabaseError> {
         let group = user.group(database.clone(), None).await;
-        let user_worlds: Vec<World> = database.lock().await.list_filtered(
+        let user_worlds: Vec<World> = database.lock().await.get_filtered(
             vec![("owner_id".to_string(), user.id.as_i64().to_string())],
             Some((&user, &group)),
         )?;
@@ -278,7 +278,7 @@ impl ApiCreate for World {
         if !database
             .lock()
             .await
-            .list_filtered::<World>(
+            .get_filtered::<World>(
                 vec![(String::from("hostname"), json.hostname.clone())],
                 None,
             )?
@@ -291,7 +291,7 @@ impl ApiCreate for World {
         //enforce memory limit
         if let Some(memory_limit) = group.total_memory_limit {
             if let Some(allocated_memory) = json.allocated_memory {
-                let user_worlds: Vec<World> = database.lock().await.list_filtered(
+                let user_worlds: Vec<World> = database.lock().await.get_filtered(
                     vec![("owner_id".to_string(), user.id.as_i64().to_string())],
                     Some((&user, &group)),
                 )?;
@@ -307,7 +307,10 @@ impl ApiCreate for World {
                 }
 
                 if (allocated_memory as i32) > remaining_memory {
-                    debug!("changing memory amount for server created by {}. requested is {}, max available is {}", user.id, memory_limit, remaining_memory);
+                    debug!(
+                        "changing memory amount for server created by {}. requested is {}, max available is {}",
+                        user.id, memory_limit, remaining_memory
+                    );
                     json.allocated_memory = Some(remaining_memory as u32);
                 }
             }
@@ -335,7 +338,7 @@ impl ApiUpdate for World {
         user: &User,
     ) -> Result<(), DatabaseError> {
         let group = user.group(database.clone(), None).await;
-        let user_worlds: Vec<World> = database.lock().await.list_filtered(
+        let user_worlds: Vec<World> = database.lock().await.get_filtered(
             vec![("owner_id".to_string(), user.id.as_i64().to_string())],
             Some((&user, &group)),
         )?;
@@ -361,7 +364,7 @@ impl ApiUpdate for World {
             if !database
                 .lock()
                 .await
-                .list_filtered::<World>(
+                .get_filtered::<World>(
                     vec![
                         (String::from("hostname"), hostname.clone()),
                         (String::from("id"), format!("!{}", self.id.as_i64())),
@@ -392,7 +395,10 @@ impl ApiUpdate for World {
                     }
 
                     if (allocated_memory as i32) > remaining_memory {
-                        debug!("changing memory amount for server {} created by {}. requested is {}, max available is {}", self.id, user.id, memory_limit, remaining_memory);
+                        debug!(
+                            "changing memory amount for server {} created by {}. requested is {}, max available is {}",
+                            self.id, user.id, memory_limit, remaining_memory
+                        );
                         json.allocated_memory = Some(remaining_memory as u32);
                     }
                 }
@@ -418,14 +424,36 @@ impl ApiUpdate for World {
             .map_err(|err| DatabaseError::InternalServerError(err.to_string()))
     }
 }
-impl ApiRemove for World {}
+#[async_trait]
+impl ApiRemove for World {
+    async fn before_api_delete(&self, database: DbMutex, user: &User) -> Result<(), DatabaseError> {
+        info!("removing world {}", self.id);
+        match server::get_or_create_server(self).await {
+            Ok(server) => {
+                server.lock().await.remove().await.map_err(|err| {DatabaseError::InternalServerError(err.to_string())})
+            }
+            Err(err) => Err(DatabaseError::InternalServerError(err.to_string()))
+        }
+    }
+}
 
 impl World {
     pub async fn version(&self, db_mutex: DbMutex, user: Option<(&User, &Group)>) -> Version {
-        db_mutex.lock().await.get_one(self.version_id, user).expect(&format!("couldn't find version with id {}", self.version_id))
+        db_mutex
+            .lock()
+            .await
+            .get_one(self.version_id, user)
+            .expect(&format!(
+                "couldn't find version with id {}",
+                self.version_id
+            ))
     }
     pub async fn owner(&self, db_mutex: DbMutex, user: Option<(&User, &Group)>) -> User {
-        db_mutex.lock().await.get_one(self.owner_id, user).expect(&format!("couldn't find user with id {}", self.owner_id))
+        db_mutex
+            .lock()
+            .await
+            .get_one(self.owner_id, user)
+            .expect(&format!("couldn't find user with id {}", self.owner_id))
     }
     #[allow(clippy::needless_pass_by_value)]
     async fn world_get_status(
@@ -437,7 +465,9 @@ impl World {
         let id = Id::from_string(&id).map_err(|_| reject::custom(rejections::NotFound))?;
         {
             let group = user.group(db_mutex.clone(), None).await;
-            db_mutex.lock().await
+            db_mutex
+                .lock()
+                .await
                 .get_one::<Self>(id, Some((&user, &group)))
                 .map_err(crate::api::handlers::handle_database_error)?;
         }

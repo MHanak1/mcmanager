@@ -215,6 +215,8 @@ pub trait MinecraftServer: Send {
     async fn config(&self) -> Result<HashMap<String, String>>;
     async fn set_config(&mut self, config: HashMap<String, String>) -> Result<()>;
     async fn status(&self) -> Result<MinecraftServerStatus>;
+    /// fully removes the server and its files
+    async fn remove(&mut self) -> Result<()>;
     /// updates the status of the server. this should return false if the server is updated through somewhere else
     async fn refresh(&mut self) -> bool;
 }
@@ -519,6 +521,15 @@ pub mod internal {
             Ok(self.status)
         }
 
+        async fn remove(&mut self) -> Result<()> {
+            self.stop().await?;
+            debug!("removing directory {}", self.directory.display());
+            if self.directory.exists(){
+                std::fs::remove_dir_all(self.directory.clone())?;
+            }
+            Ok(())
+        }
+
         async fn refresh(&mut self) -> bool {
             if let Some(process) = self.process.as_mut() {
                 if let Some(exit_status) = process.poll() {
@@ -654,6 +665,24 @@ pub mod external {
         async fn status(&self) -> Result<MinecraftServerStatus, anyhow::Error> {
             let server = self.server().await?;
             Ok(server.status)
+        }
+
+        async fn remove(&mut self) -> Result<()> {
+            debug!("Requesting minimanager to remvoe server");
+            let client = reqwest::Client::new();
+            Ok(serde_json::from_str(
+                &client
+                    .post(format!("{}api/worlds/remove", CONFIG.remote.host.to_string()))
+                    .header(
+                        "Authorization",
+                        format!("Bearer {}", crate::config::secrets::SECRETS.api_secret),
+                    )
+                    .body(serde_json::to_string(&self.world).unwrap())
+                    .send()
+                    .await?
+                    .text()
+                    .await?,
+            )?)
         }
 
         async fn refresh(&mut self) -> bool {

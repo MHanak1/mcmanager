@@ -97,7 +97,10 @@ impl Database {
             value.get_id().as_i64(),
             match user {
                 Some((user, group)) => {
-                    format!(" AND {}", T::update_access().access_filter::<T>(user, group))
+                    format!(
+                        " AND {}",
+                        T::update_access().access_filter::<T>(user, group)
+                    )
                 }
                 None => String::new(),
             }
@@ -130,7 +133,10 @@ impl Database {
             T::columns()[T::id_column_index()].name,
             match user {
                 Some((user, group)) => {
-                    format!(" AND {}", T::update_access().access_filter::<T>(user, group))
+                    format!(
+                        " AND {}",
+                        T::update_access().access_filter::<T>(user, group)
+                    )
                 }
                 None => String::new(),
             },
@@ -145,9 +151,14 @@ impl Database {
         }
     }
 
-    pub fn get_one<T: DbObject>(&self, id: Id, user: Option<(&User, &Group)>) -> Result<T, DatabaseError> {
+    pub fn get_one<T: DbObject>(
+        &self,
+        id: Id,
+        user: Option<(&User, &Group)>,
+    ) -> Result<T, DatabaseError> {
         let query = &format!(
-            "SELECT * FROM {} WHERE {} = ?1{}",
+            "SELECT {} FROM {} WHERE {} = ?1{}",
+            T::columns().iter().map(|column| column.name.clone()).collect::<Vec<String>>().join(","),
             T::table_name(),
             T::columns()[T::id_column_index()].name,
             match user {
@@ -161,33 +172,30 @@ impl Database {
         debug!("querying database: {query}");
         match self
             .conn
-            .query_row(query, params![id], |row| {
-                Ok(T::from_row(row).unwrap())
-            })
+            .query_row(query, params![id], |row| Ok(T::from_row(row).unwrap()))
         {
             Ok(result) => Ok(result),
             Err(err) => Err(DatabaseError::SqliteError(err)),
         }
     }
 
-    pub fn list_all<T: DbObject>(&self, user: Option<(&User, &Group)>) -> Result<Vec<T>, DatabaseError> {
-        self.list_filtered::<T>(vec![], user)
+    pub fn get_all<T: DbObject>(
+        &self,
+        user: Option<(&User, &Group)>,
+    ) -> Result<Vec<T>, DatabaseError> {
+        self.get_filtered::<T>(vec![], user)
     }
 
     #[allow(clippy::needless_pass_by_value)]
     /// instead of returning [`rusqlite::Error::QueryReturnedNoRows`] it will return an empty vector
-    pub fn list_filtered<T: DbObject>(
+    pub fn get_filtered<T: DbObject>(
         &self,
         filters: Vec<(String, String)>,
         user: Option<(&User, &Group)>,
     ) -> Result<Vec<T>, DatabaseError> {
-        let mut query = format!("SELECT * FROM {}", T::table_name());
+        let mut query = format!("SELECT {} FROM {}",T::columns().iter().map(|column| column.name.clone()).collect::<Vec<String>>().join(","), T::table_name());
 
-        let (mut fields, params) = if filters.is_empty() {
-            (vec![], vec![])
-        } else {
-            Self::construct_filters::<T>(&filters)
-        };
+        let (mut fields, params) = Self::construct_filters::<T>(&filters);
 
         if let Some((user, group)) = user {
             fields.push(

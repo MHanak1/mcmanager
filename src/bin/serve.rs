@@ -75,8 +75,22 @@ pub async fn run(database: Database, config: config::Config) {
     let private_routes_rate_limit =
         warp_rate_limit::RateLimitConfig::max_per_window(limit.0, limit.1);
 
+    let register = warp::post()
+        .and(warp_rate_limit::with_rate_limit(
+            public_routes_rate_limit.clone(),
+        ))
+        .and(warp::path!("api" / "register"))
+        .and(warp::path::end())
+        .and(filters::with_db(db_mutex.clone()))
+        .and(warp::body::content_length_limit(1024 * 16))
+        .and(warp::body::json())
+        .and(warp::query::<Vec<(String, String)>>())
+        .and_then(api::handlers::user_register);
+
     let login = warp::post()
-        .and(warp_rate_limit::with_rate_limit(public_routes_rate_limit))
+        .and(warp_rate_limit::with_rate_limit(
+            public_routes_rate_limit.clone(),
+        ))
         .and(warp::path!("api" / "login"))
         .and(warp::path::end())
         .and(filters::with_db(db_mutex.clone()))
@@ -85,17 +99,31 @@ pub async fn run(database: Database, config: config::Config) {
         .and_then(api::handlers::user_auth);
 
     let user_info = warp::get()
+        .and(warp_rate_limit::with_rate_limit(
+            private_routes_rate_limit.clone(),
+        ))
         .and(warp::path!("api" / "user"))
         .and(warp::path::end())
         .and(filters::with_auth(db_mutex.clone()))
         .and_then(api::handlers::user_info);
 
+    let is_taken = warp::get()
+        .and(warp_rate_limit::with_rate_limit(
+            private_routes_rate_limit.clone(),
+        ))
+        .and(warp::path!("api" / "is_taken" / String / String))
+        .and(warp::path::end())
+        .and(warp::get())
+        .and(filters::with_db(db_mutex.clone()))
+        .and_then(api::handlers::check_free);
 
     let log = warp::log("info");
 
     warp::serve(
-        login
+        register
+            .or(login)
             .or(user_info)
+            .or(is_taken)
             .or(Mod::filters(
                 db_mutex.clone(),
                 private_routes_rate_limit.clone(),
@@ -143,10 +171,10 @@ pub async fn run(database: Database, config: config::Config) {
 fn user_creation_and_removal() -> anyhow::Result<()> {
     const TEST_PORT: u32 = 3031;
 
-    use log::info;
     use crate::config;
     use crate::config::CONFIG;
     use crate::database::types::Id;
+    use log::info;
     use pretty_assertions::assert_eq;
     use reqwest::header;
     use serde::Deserialize;

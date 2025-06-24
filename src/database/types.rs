@@ -155,7 +155,12 @@ impl Access {
     ///
     /// if the access level is [`Access::Owner`], the `object` must me [`Some`].
     #[allow(clippy::expect_fun_call)]
-    pub fn can_access<T: DbObject + ?Sized>(&self, object: Option<&T>, user: &User, group: &Group) -> bool {
+    pub fn can_access<T: DbObject + ?Sized>(
+        &self,
+        object: Option<&T>,
+        user: &User,
+        group: &Group,
+    ) -> bool {
         match self {
             Access::All => true,
             Access::And(left, right) => {

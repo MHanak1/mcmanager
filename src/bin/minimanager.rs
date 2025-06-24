@@ -14,6 +14,7 @@ use std::str::FromStr;
 use std::{io::Write, thread};
 use warp::http::StatusCode;
 use warp::{Filter, Reply, reject};
+use crate::database::DatabaseError;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -89,7 +90,7 @@ async fn run(config: Config) -> Result<()> {
         .and(warp::body::json())
         .and_then(|token: String, world: World| async move {
             if token == SECRETS.api_secret.to_string() {
-                world_remove(world.id).await
+                world_remove(world).await
             } else {
                 Err(reject::custom(rejections::Unauthorized))
             }
@@ -151,32 +152,18 @@ fn world_get(id: Id) -> std::result::Result<impl Reply, warp::Rejection> {
 }
  */
 
-async fn world_remove(id: Id) -> std::result::Result<impl Reply, warp::Rejection> {
-    match server::get_server(id).await {
-        Some(server) => {
-            match server
-                .lock()
-                .await
-                .status()
-                .await
-                .map_err(|err| warp::reject::custom(rejections::InternalServerError::from(err)))?
-            {
-                MinecraftServerStatus::Running => Ok(warp::reply::with_status(
-                    warp::reply::json(&"server still running"),
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                )),
-                MinecraftServerStatus::Exited(_) => {
-                    //TODO: when server is removed it's files should probably be removed as well
-                    server::remove_server(&id).await;
-                    Ok(warp::reply::with_status(
-                        warp::reply::json(&"removed"),
-                        StatusCode::OK,
-                    ))
-                }
-            }
+async fn world_remove(world: World) -> std::result::Result<impl Reply, warp::Rejection> {
+    let response = match server::get_or_create_server(&world).await {
+        Ok(server) => {
+            let mut server = server.lock().await;
+            server.remove().await.map_err(|err| warp::reject::custom(rejections::InternalServerError::from(err)))?;
+            Ok(warp::reply())
         }
-        None => Err(reject::custom(rejections::NotFound)),
-    }
+        Err(err) => Err(warp::reject::custom(rejections::InternalServerError::from(err))),
+    };
+    server::remove_server(&world.id).await;
+
+    response
 }
 
 async fn create_or_update_server(world: World) -> std::result::Result<impl Reply, warp::Rejection> {

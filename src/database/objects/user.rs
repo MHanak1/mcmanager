@@ -1,12 +1,13 @@
 pub use self::{password::Password, session::Session};
 use crate::api::handlers::{ApiCreate, ApiGet, ApiList, ApiObject, ApiRemove, ApiUpdate, DbMutex};
 use crate::config::CONFIG;
-use crate::database::objects::{DbObject, FromJson, UpdateJson};
+use crate::database::objects::{DbObject, FromJson, Group, Mod, UpdateJson, World};
 use crate::database::types::{Access, Column, Id, Type};
 use crate::database::{Database, DatabaseError};
 use crate::minecraft::server::ServerConfigLimit;
 use async_trait::async_trait;
-use log::warn;
+use futures::future;
+use log::{error, info, warn};
 use rusqlite::types::ToSqlOutput;
 use rusqlite::{Row, ToSql};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -15,7 +16,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use warp::{Filter, Rejection, Reply};
 use warp_rate_limit::RateLimitConfig;
-use crate::database::objects::group::Group;
+use crate::database;
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub struct User {
@@ -45,12 +46,25 @@ impl DbObject for User {
         Access::PrivilegedUser
     }
 
-    /*
+    // delete passwords and sessions. worlds and mods are handled asynchronously through `before_api_remove()`
     fn before_delete(&self, database: &Database) {
-        for mcmod in database.list_filtered()
-        //TODO: delete all things that the user
+        if let Ok(passwords) = database.get_filtered::<Password>(vec![(String::from("user_id"), self.id.as_i64().to_string())], None/*in theory here the access restriction should be put but i couldn't be bothered with that*/) {
+            //no idea why i am iterating here but couldn't hurt can it?
+            for password in passwords {
+                if let Err(err) = database.remove(&password, None) {
+                    error!("{}", err);
+                }
+            }
+        }
+
+        if let Ok(sessions) = database.get_filtered::<Session>(vec![(String::from("user_id"), self.id.as_i64().to_string())], None/*in theory here the access restriction should be put but i couldn't be bothered with that*/) {
+            for session in sessions {
+                if let Err(err) = database.remove(&session, None) {
+                    error!("{}", err);
+                }
+            }
+        }
     }
-     */
 
     fn table_name() -> &'static str {
         "users"
@@ -61,7 +75,9 @@ impl DbObject for User {
             Column::new("id", Type::Id).primary_key(),
             Column::new("username", Type::Text).not_null().unique(),
             Column::new("avatar_id", Type::Id),
-            Column::new("group_id", Type::Id).not_null().references("groups(id)"),
+            Column::new("group_id", Type::Id)
+                .not_null()
+                .references("groups(id)"),
             Column::new("enabled", Type::Boolean)
                 .not_null()
                 .default("true"),
@@ -250,11 +266,43 @@ impl ApiUpdate for User {
         Ok(())
     }
 }
-impl ApiRemove for User {}
+#[async_trait]
+impl ApiRemove for User {
+    async fn before_api_delete(&self, database: DbMutex, user: &User) -> Result<(), DatabaseError> {
+        info!("removing user {}", self.id);
+        let worlds = database.lock().await.get_filtered::<World>(vec![(String::from("owner_id"), self.id.as_i64().to_string())], None/*in theory here the access restriction should be put but i couldn't be bothered with that*/)?;
+        let worlds_task = async {
+            let tasks = worlds.iter().map(|world| async {
+                if let Err(err) = world.before_api_delete(database.clone(), user).await { error!{"{err}"}}
+                if let Err(err) = database.lock().await.remove(world, None) { error!{"{err}"}}
+                if let Err(err) = world.after_api_delete(database.clone(), user).await { error!{"{err}"}}
+            });
+            future::join_all(tasks).await
+        };
+
+        let mods = database.lock().await.get_filtered::<Mod>(vec![(String::from("owner_id"), self.id.as_i64().to_string())], None/*in theory here the access restriction should be put but i couldn't be bothered with that*/)?;
+        let mods_task = async {
+            let tasks = mods.iter().map(|mcmod| async {
+                if let Err(err) = mcmod.before_api_delete(database.clone(), user).await { error!{"{err}"}}
+                if let Err(err) = database.lock().await.remove(mcmod, None) { error!{"{err}"}}
+                if let Err(err) = mcmod.after_api_delete(database.clone(), user).await { error!{"{err}"}}
+            });
+            future::join_all(tasks).await
+        };
+
+        /*let (worlds_task, mods_task) = */future::join(worlds_task, mods_task).await;
+
+        Ok(())
+    }
+}
 
 impl User {
     pub async fn group(&self, db_mutex: DbMutex, user: Option<(&User, &Group)>) -> Group {
-        db_mutex.lock().await.get_one(self.group_id, user).expect(&format!("couldn't find group with id {}", self.group_id))
+        db_mutex
+            .lock()
+            .await
+            .get_one(self.group_id, user)
+            .expect(&format!("couldn't find group with id {}", self.group_id))
     }
 }
 

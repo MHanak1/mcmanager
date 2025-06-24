@@ -1,14 +1,16 @@
 use crate::api::util::rejections;
+use crate::api::util::rejections::BadRequest;
 use crate::api::{auth, filters};
-use crate::database::objects::{DbObject, FromJson, UpdateJson, User};
-use crate::database::types::Id;
+use crate::config::CONFIG;
+use crate::database::objects::{DbObject, FromJson, InviteLink, UpdateJson, User, World};
+use crate::database::types::{Id, Token};
 use crate::database::{Database, DatabaseError};
 use async_trait::async_trait;
 use log::error;
+use rusqlite::fallible_iterator::FallibleIterator;
 use rusqlite::{Error, ErrorCode};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use rusqlite::fallible_iterator::FallibleIterator;
 use tokio::sync::Mutex;
 use warp::http::StatusCode;
 use warp::{Filter, Rejection, Reply, reject};
@@ -40,7 +42,7 @@ where
         let objects = {
             let database = db_mutex.lock().await;
             database
-                .list_filtered::<Self>(filters, Some((&user, &group)))
+                .get_filtered::<Self>(filters, Some((&user, &group)))
                 .map_err(handle_database_error)?
         };
         Ok(warp::reply::with_status(
@@ -304,27 +306,23 @@ where
         let id = Id::from_string(&id).map_err(|_| reject::custom(rejections::NotFound))?;
         let group = user.group(db_mutex.clone(), None).await;
 
-        {
-            let database = db_mutex.lock().await;
+        let object = db_mutex.lock().await
+            .get_one::<Self>(id, Some((&user, &group)))
+            .map_err(handle_database_error)?;
 
-            let object = database
-                .get_one::<Self>(id, Some((&user, &group)))
-                .map_err(handle_database_error)?;
+        object
+            .before_api_delete(db_mutex.clone(), &user)
+            .await
+            .map_err(handle_database_error)?;
 
-            object
-                .before_api_delete(&database, &user)
-                .await
-                .map_err(handle_database_error)?;
+        let _ = db_mutex.lock().await
+            .remove(&object, Some((&user, &group)))
+            .map_err(handle_database_error)?;
 
-            let _ = database
-                .remove(&object, Some((&user, &group)))
-                .map_err(handle_database_error)?;
-
-            object
-                .after_api_delete(&database, &user)
-                .await
-                .map_err(handle_database_error)?;
-        };
+        object
+            .after_api_delete(db_mutex.clone(), &user)
+            .await
+            .map_err(handle_database_error)?;
 
         Ok(warp::reply::with_status(
             warp::reply::json(&""),
@@ -334,22 +332,14 @@ where
 
     #[allow(unused)]
     /// runs before the database entry deletion
-    async fn before_api_delete(
-        &self,
-        database: &Database,
-        user: &User,
-    ) -> Result<(), DatabaseError> {
+    async fn before_api_delete(&self, database: DbMutex, user: &User) -> Result<(), DatabaseError> {
         Ok(())
     }
     #[allow(unused)]
     /// runs after the database entry deletion
     ///
     /// this returns a [`Result`], but there is no mechanism to undo the entry deletion. if this fails it should probably cause the program to panic
-    async fn after_api_delete(
-        &self,
-        database: &Database,
-        user: &User,
-    ) -> Result<(), DatabaseError> {
+    async fn after_api_delete(&self, database: DbMutex, user: &User) -> Result<(), DatabaseError> {
         Ok(())
     }
 
@@ -400,6 +390,84 @@ pub struct Login {
     pub password: String,
 }
 
+pub async fn user_register(
+    _rate_limit_info: RateLimitInfo,
+    db_mutex: DbMutex,
+    credentials: Login,
+    query: Vec<(String, String)>,
+) -> Result<impl warp::Reply, warp::Rejection> {
+    //arbitrary values but who cares (foreshadowing)
+    const ALLOWED_USERNAME_CHARS: &str =
+        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ012345789-_";
+    const ALLOWED_PASSWORD_CHARS: &str =
+        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ012345789-._~:/?#[]@!$&'()*+,;%= ";
+    if credentials.username.is_empty()
+        || credentials.password.is_empty()
+        || credentials.username.len() > 32
+        || credentials.password.len() > 256
+    {
+        return Err(warp::reject::custom(rejections::BadRequest));
+    }
+    for char in credentials.username.chars() {
+        if !ALLOWED_USERNAME_CHARS.contains(char) {
+            return Err(warp::reject::custom(rejections::BadRequest));
+        }
+    }
+    for char in credentials.password.chars() {
+        if !ALLOWED_PASSWORD_CHARS.contains(char) {
+            return Err(warp::reject::custom(rejections::BadRequest));
+        }
+    }
+
+    let mut token = None;
+    for (parameter, value) in query {
+        if parameter == "token" {
+            token = Some(value.trim().to_string());
+            break;
+        }
+    }
+    let mut can_continue = false;
+    let invite = if let Some(token) = token {
+        let invites: Vec<InviteLink> = db_mutex
+            .lock()
+            .await
+            .get_filtered(vec![("invite_token".parse()?, String::from(token))], None)?;
+        if let Some(invite) = invites.first().cloned() {
+            can_continue = true;
+            Some(invite)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    if !CONFIG.require_invite_to_register {
+        can_continue = true;
+    }
+
+    if !can_continue {
+        return Err(reject::custom(rejections::Unauthorized));
+    }
+
+    let user = db_mutex
+        .lock()
+        .await
+        .create_user(&credentials.username, &credentials.password)
+        .map_err(|err| warp::reject::custom(rejections::InternalServerError::from(err)))?;
+    if let Some(invite) = invite {
+        db_mutex
+            .lock()
+            .await
+            .remove(&invite, None)
+            .map_err(|err| warp::reject::custom(rejections::InternalServerError::from(err)))?;
+    }
+
+    Ok(warp::reply::with_status(
+        warp::reply::json(&user),
+        StatusCode::CREATED,
+    ))
+}
+
 //this in theory could be transformed into ApiCreate implementation, but it would require a fair amount of changes, and for now it's not causing any problems
 #[allow(clippy::unused_async)]
 pub async fn user_auth(
@@ -430,8 +498,77 @@ pub async fn user_auth(
 }
 
 #[allow(clippy::unused_async)]
-pub async fn user_info(user: User) -> Result<impl warp::Reply, warp::Rejection> {
+pub async fn user_info(
+    _rate_limit_info: RateLimitInfo,
+    user: User,
+) -> Result<impl warp::Reply, warp::Rejection> {
     Ok(warp::reply::json(&user))
+}
+
+pub async fn check_free(
+    _rate_limit_info: RateLimitInfo,
+    field: String,
+    value: String,
+    db_mutex: DbMutex,
+) -> Result<impl warp::Reply, warp::Rejection> {
+    #[derive(Serialize)]
+    struct Used {
+        taken: bool,
+    }
+    match field.trim() {
+        "username" => {
+            match db_mutex
+                .lock()
+                .await
+                .get_filtered::<User>(vec![(String::from("username"), value)], None)
+            {
+                Ok(users) => {
+                    if users.is_empty() {
+                        Ok(warp::reply::with_status(
+                            warp::reply::json(&Used { taken: false }),
+                            StatusCode::OK,
+                        ))
+                    } else {
+                        Ok(warp::reply::with_status(
+                            warp::reply::json(&Used { taken: true }),
+                            StatusCode::OK,
+                        ))
+                    }
+                }
+                Err(err) => Err(warp::reject::custom(rejections::InternalServerError::from(
+                    err,
+                ))),
+            }
+        }
+        "hostname" => {
+            match db_mutex
+                .lock()
+                .await
+                .get_filtered::<World>(vec![(String::from("hostname"), value)], None)
+            {
+                Ok(worlds) => {
+                    if worlds.is_empty() {
+                        Ok(warp::reply::with_status(
+                            warp::reply::json(&Used { taken: false }),
+                            StatusCode::OK,
+                        ))
+                    } else {
+                        Ok(warp::reply::with_status(
+                            warp::reply::json(&Used { taken: true }),
+                            StatusCode::OK,
+                        ))
+                    }
+                }
+                Err(err) => Err(warp::reject::custom(rejections::InternalServerError::from(
+                    err,
+                ))),
+            }
+        }
+        _ => {
+            println!("):");
+            Err(warp::reject::custom(rejections::MethodNotAllowed))
+        }
+    }
 }
 
 #[allow(clippy::unused_async)]

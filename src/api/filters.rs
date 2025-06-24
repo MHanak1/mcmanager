@@ -33,7 +33,7 @@ pub fn with_auth(
             async move {
                 let database = database.lock().await;
 
-                let session = database.list_filtered::<Session>(vec![("token".to_string(), token)], None)
+                let session = database.get_filtered::<Session>(vec![("token".to_string(), token)], None)
                     .map_err(
                         |err|
                         match err {

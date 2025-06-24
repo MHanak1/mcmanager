@@ -1,3 +1,4 @@
+use crate::database::types::Id;
 use crate::util;
 use log::debug;
 use once_cell::sync::Lazy;
@@ -6,7 +7,6 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
 use std::ops::Range;
-use crate::database::types::Id;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
@@ -14,6 +14,7 @@ pub struct Config {
     pub listen_port: u16,
     pub public_routes_rate_limit: (u32, u64),
     pub private_routes_rate_limit: (u32, u64),
+    pub require_invite_to_register: bool,
     pub minecraft_server_type: ServerType,
     pub internal: InternalConfig,
     pub remote: RemoteConfig,
@@ -66,8 +67,10 @@ pub struct VelocityConfig {
 }
 
 pub static CONFIG: Lazy<Config> = Lazy::new(|| {
-    let mut config_builder = config::Config::builder()
-        .add_source(config::File::from_str(&include_str!("resources/default_config.toml").replace("$default_group_id", "AAAAAAAA"), config::FileFormat::Toml));
+    let mut config_builder = config::Config::builder().add_source(config::File::from_str(
+        &include_str!("resources/default_config.toml").replace("$default_group_id", "AAAAAAAA"),
+        config::FileFormat::Toml,
+    ));
 
     let config_path = util::dirs::base_dir().join("config.toml");
 

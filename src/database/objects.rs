@@ -13,8 +13,8 @@ pub mod world;
 pub mod group;
 
 pub use self::{
-    invite_link::InviteLink, mod_loader::ModLoader, modification::Mod, user::Password,
-    user::Session, user::User, version::Version, world::World, group::Group,
+    group::Group, invite_link::InviteLink, mod_loader::ModLoader, modification::Mod,
+    user::Password, user::Session, user::User, version::Version, world::World,
 };
 
 /// An object that is meant to be stored in a database
