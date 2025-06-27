@@ -1,20 +1,22 @@
+use std::sync::Arc;
 use crate::database::objects::{DbObject, Password, Session, User};
-use crate::database::types::Token;
 use crate::database::{Database, DatabaseError};
-use argon2::PasswordHasher;
+use argon2::{PasswordHash, PasswordHasher, PasswordVerifier};
+use argon2::password_hash::{Salt, SaltString};
 use log::debug;
-use rusqlite::params;
+use uuid::Uuid;
 
-pub fn try_user_auth(
+pub async fn try_user_auth(
     username: &str,
     password: &str,
-    database: &Database,
+    database: Arc<Database>,
 ) -> Result<Session, DatabaseError> {
-    let user = database.conn.query_row(
-        &format!("SELECT * FROM {} WHERE username = ?1", User::table_name(),),
-        params![username],
-        User::from_row,
-    );
+    let user: Result<User, _> = database
+        .get_one_filtered(
+            vec![(String::from("username"), String::from(username))],
+            None,
+        )
+        .await;
 
     let argon2 = argon2::Argon2::default();
 
@@ -33,26 +35,24 @@ pub fn try_user_auth(
         return Err(DatabaseError::Unauthorized);
     }
 
-    let user_password = database.get_one::<Password>(user.id, None)?;
+    let user_password = database.get_one::<Password>(user.id, None).await?;
 
-    let password_hash = argon2
-        .hash_password(password.as_bytes(), &user_password.salt)
-        .expect("failed to hash password");
+    let argon2 = argon2::Argon2::default();
 
-    if password_hash.to_string() != user_password.hash {
+   if argon2.verify_password(password.as_ref(), &user_password.hash.password_hash()).is_err() {
         debug!("rejecting auth for user {username}, password is invalid");
         return Err(DatabaseError::Unauthorized);
     }
 
     let new_session = Session {
         user_id: user.id,
-        token: Token::new(4),
+        token: Uuid::new_v4(),
         created: chrono::offset::Utc::now(),
         expires: true,
     };
 
     //bypass perm check, we want all users to be able to log in
-    database.insert(&new_session, None)?;
+    database.insert(&new_session, None).await?;
 
     debug!("accepting auth for user {username}");
 
@@ -64,7 +64,8 @@ fn bollocks_hash() {
     let _ = argon2.hash_password_into(b"RandomPassword", b"RandomSalt", &mut [0u8; 32]);
 }
 
-pub fn get_user(token: &str, database: &Database) -> Result<User, DatabaseError> {
+pub async fn get_user(token: &str, database: Arc<Database>) -> Result<User, DatabaseError> {
+    /*
     let session = database
         .conn
         .query_row(
@@ -72,9 +73,12 @@ pub fn get_user(token: &str, database: &Database) -> Result<User, DatabaseError>
             params![token],
             Session::from_row,
         )
-        .map_err(DatabaseError::SqliteError)?;
+        .map_err(DatabaseError::SqlxError)?;
+     */
 
-    database
-        .get_one::<User>(session.user_id, None)
-        .map_err(|_| DatabaseError::NotFound)
+    let session: Session = database
+        .get_one_filtered(vec![(String::from("token"), String::from(token))], None)
+        .await?;
+
+    Ok(database.get_one::<User>(session.user_id, None).await?)
 }

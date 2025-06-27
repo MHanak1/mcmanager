@@ -1,17 +1,16 @@
 use crate::api::handlers::{ApiCreate, ApiGet, ApiList, ApiObject, ApiRemove, ApiUpdate};
 use crate::database::Database;
 use crate::database::objects::{DbObject, FromJson, UpdateJson, User};
-use crate::database::types::{Access, Column, Id, Type};
-use rusqlite::types::ToSqlOutput;
-use rusqlite::{Row, ToSql};
+use crate::database::types::{Access, Column, Id, ValueType};
 use serde::{Deserialize, Deserializer, Serialize};
+use sqlx::{Arguments, Encode, FromRow, IntoArguments};
 use std::fmt::Debug;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use warp::{Filter, Rejection, Reply};
 use warp_rate_limit::RateLimitConfig;
 
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, FromRow)]
 pub struct Mod {
     /// Mod's unique [`Id`]
     pub id: Id,
@@ -46,60 +45,44 @@ impl DbObject for Mod {
 
     fn columns() -> Vec<Column> {
         vec![
-            Column::new("id", Type::Id).primary_key(),
-            Column::new("owner_id", Type::Id)
+            Column::new("id", ValueType::Id).primary_key(),
+            Column::new("owner_id", ValueType::Id)
                 .not_null()
                 .references("users(id)"),
-            Column::new("version_id", Type::Id)
+            Column::new("version_id", ValueType::Id)
                 .not_null()
                 .references("versions(id)"),
-            Column::new("name", Type::Text).not_null(),
-            Column::new("description", Type::Text).not_null(),
-            Column::new("icon_id", Type::Id),
+            Column::new("name", ValueType::Text).not_null(),
+            Column::new("description", ValueType::Text).not_null(),
+            Column::new("icon_id", ValueType::Id),
         ]
     }
 
-    fn from_row(row: &Row) -> rusqlite::Result<Self>
-    where
-        Self: Sized,
-    {
-        Ok(Self {
-            id: row.get(0)?,
-            owner_id: row.get(1)?,
-            version_id: row.get(2)?,
-            name: row.get(3)?,
-            description: row.get(4)?,
-            icon_id: row.get(5)?,
-        })
-    }
     fn get_id(&self) -> Id {
         self.id
     }
-    fn params(&self) -> Vec<ToSqlOutput> {
-        vec![
-            self.id
-                .to_sql()
-                .expect("failed to convert the value to sql"),
-            self.owner_id
-                .to_sql()
-                .expect("failed to convert the value to sql"),
-            self.version_id
-                .to_sql()
-                .expect("failed to convert the value to sql"),
-            self.name
-                .to_sql()
-                .expect("failed to convert the value to sql"),
-            self.description
-                .to_sql()
-                .expect("failed to convert the value to sql"),
-            self.icon_id
-                .to_sql()
-                .expect("failed to convert the value to sql"),
-        ]
+}
+
+impl<'a> IntoArguments<'a, crate::database::DatabaseType> for Mod {
+    fn into_arguments(self) -> <crate::database::DatabaseType as sqlx::Database>::Arguments<'a> {
+        let mut arguments = <crate::database::DatabaseType as sqlx::Database>::Arguments::default();
+        arguments.add(self.id).expect("Failed to add argument");
+        arguments
+            .add(self.owner_id)
+            .expect("Failed to add argument");
+        arguments
+            .add(self.version_id)
+            .expect("Failed to add argument");
+        arguments.add(self.name).expect("Failed to add argument");
+        arguments
+            .add(self.description)
+            .expect("Failed to add argument");
+        arguments.add(self.icon_id).expect("Failed to add argument");
+        arguments
     }
 }
 
-// Any value that is present is considered Some value, including null.
+// crate::database::DatabaseType value that is present is considered Some value, including null.
 fn deserialize_some<'de, T, D>(deserializer: D) -> Result<Option<T>, D::Error>
 where
     T: Deserialize<'de>,
@@ -154,24 +137,24 @@ impl UpdateJson for Mod {
 
 impl ApiObject for Mod {
     fn filters(
-        db_mutex: Arc<Mutex<Database>>,
+        database: Arc<Database>,
         rate_limit_config: RateLimitConfig,
     ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
-        Self::list_filter(db_mutex.clone(), rate_limit_config.clone())
+        Self::list_filter(database.clone().clone(), rate_limit_config.clone())
             .or(Self::get_filter(
-                db_mutex.clone(),
+                database.clone(),
                 rate_limit_config.clone(),
             ))
             .or(Self::create_filter(
-                db_mutex.clone(),
+                database.clone(),
                 rate_limit_config.clone(),
             ))
             .or(Self::update_filter(
-                db_mutex.clone(),
+                database.clone(),
                 rate_limit_config.clone(),
             ))
             .or(Self::remove_filter(
-                db_mutex.clone(),
+                database,
                 rate_limit_config.clone(),
             ))
     }

@@ -1,20 +1,20 @@
-use anyhow::Result;
-use log::info;
 use crate::api::filters::with_bearer_token;
 use crate::api::util::rejections;
 use crate::config::secrets::SECRETS;
+use crate::database::DatabaseError;
 use crate::database::objects::World;
 use crate::database::types::Id;
 use crate::minecraft::server;
 use crate::minecraft::server::MinecraftServerStatus;
 use crate::minecraft::server::internal::InternalServer;
 use crate::{api, config::Config, util::dirs};
+use anyhow::Result;
+use log::info;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::str::FromStr;
 use std::{io::Write, thread};
 use warp::http::StatusCode;
 use warp::{Filter, Reply, reject};
-use crate::database::DatabaseError;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -156,10 +156,15 @@ async fn world_remove(world: World) -> std::result::Result<impl Reply, warp::Rej
     let response = match server::get_or_create_server(&world).await {
         Ok(server) => {
             let mut server = server.lock().await;
-            server.remove().await.map_err(|err| warp::reject::custom(rejections::InternalServerError::from(err)))?;
+            server
+                .remove()
+                .await
+                .map_err(|err| warp::reject::custom(rejections::InternalServerError::from(err)))?;
             Ok(warp::reply())
         }
-        Err(err) => Err(warp::reject::custom(rejections::InternalServerError::from(err))),
+        Err(err) => Err(warp::reject::custom(rejections::InternalServerError::from(
+            err,
+        ))),
     };
     server::remove_server(&world.id).await;
 

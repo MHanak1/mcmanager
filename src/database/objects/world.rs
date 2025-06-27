@@ -1,17 +1,16 @@
 use crate::api::filters;
-use crate::api::handlers::{ApiCreate, ApiGet, ApiList, ApiObject, ApiRemove, ApiUpdate, DbMutex};
+use crate::api::handlers::{ApiCreate, ApiGet, ApiList, ApiObject, ApiRemove, ApiUpdate};
 use crate::api::util::rejections;
 use crate::database::objects::group::Group;
 use crate::database::objects::{DbObject, FromJson, UpdateJson, User, Version};
-use crate::database::types::{Access, Column, Id, Type};
-use crate::database::{Database, DatabaseError};
+use crate::database::types::{Access, Column, Id, ValueType};
+use crate::database::{Database, DatabaseError, DatabaseType};
 use crate::minecraft::server;
 use crate::minecraft::server::{MinecraftServerStatus, ServerConfigLimit};
 use async_trait::async_trait;
 use log::{debug, info};
-use rusqlite::types::ToSqlOutput;
-use rusqlite::{Row, ToSql};
 use serde::{Deserialize, Deserializer, Serialize};
+use sqlx::{Any, Arguments, Encode, FromRow, IntoArguments};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -20,7 +19,7 @@ use warp::http::StatusCode;
 use warp::{Filter, Rejection, Reply, reject};
 use warp_rate_limit::{RateLimitConfig, RateLimitInfo};
 
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, FromRow)]
 pub struct World {
     /// world's unique [`Id`]
     pub id: Id,
@@ -33,7 +32,7 @@ pub struct World {
     /// id of the icon stored in the filesystem (data/icons)
     pub icon_id: Option<Id>,
     /// amount of memory allocated to the server in MiB
-    pub allocated_memory: u32,
+    pub allocated_memory: i32,
     /// references [`Version`]
     pub version_id: Id,
     /// whether a server hosting this world should be running or not
@@ -59,68 +58,40 @@ impl DbObject for World {
 
     fn columns() -> Vec<Column> {
         vec![
-            Column::new("id", Type::Id).primary_key(),
-            Column::new("owner_id", Type::Id)
+            Column::new("id", ValueType::Id).primary_key(),
+            Column::new("owner_id", ValueType::Id)
                 .not_null()
                 .references("users(id)"),
-            Column::new("name", Type::Text).not_null(),
-            Column::new("hostname", Type::Text).not_null().unique(),
-            Column::new("icon_id", Type::Id),
-            Column::new("allocated_memory", Type::Integer(false)).not_null(),
-            Column::new("version_id", Type::Id)
+            Column::new("name", ValueType::Text).not_null(),
+            Column::new("hostname", ValueType::Text).not_null().unique(),
+            Column::new("icon_id", ValueType::Id),
+            Column::new("allocated_memory", ValueType::Integer(false)).not_null(),
+            Column::new("version_id", ValueType::Id)
                 .not_null()
                 .references("versions(id)"),
-            Column::new("enabled", Type::Boolean)
+            Column::new("enabled", ValueType::Boolean)
                 .not_null()
                 .default("false"),
         ]
     }
 
-    fn from_row(row: &Row) -> rusqlite::Result<Self>
-    where
-        Self: Sized,
-    {
-        Ok(Self {
-            id: row.get(0)?,
-            owner_id: row.get(1)?,
-            name: row.get(2)?,
-            hostname: row.get(3)?,
-            icon_id: row.get(4)?,
-            allocated_memory: row.get(5)?,
-            version_id: row.get(6)?,
-            enabled: row.get(7)?,
-        })
-    }
     fn get_id(&self) -> Id {
         self.id
     }
-    fn params(&self) -> Vec<ToSqlOutput> {
-        vec![
-            self.id
-                .to_sql()
-                .expect("failed to convert the value to sql"),
-            self.owner_id
-                .to_sql()
-                .expect("failed to convert the value to sql"),
-            self.name
-                .to_sql()
-                .expect("failed to convert the value to sql"),
-            self.hostname
-                .to_sql()
-                .expect("failed to convert the value to sql"),
-            self.icon_id
-                .to_sql()
-                .expect("failed to convert the value to sql"),
-            self.allocated_memory
-                .to_sql()
-                .expect("failed to convert the value to sql"),
-            self.version_id
-                .to_sql()
-                .expect("failed to convert the value to sql"),
-            self.enabled
-                .to_sql()
-                .expect("failed to convert the value to sql"),
-        ]
+}
+
+impl<'a> IntoArguments<'a, DatabaseType> for World {
+    fn into_arguments(self) -> <DatabaseType as sqlx::Database>::Arguments<'a> {
+        let mut arguments = <DatabaseType as sqlx::Database>::Arguments::default();
+        arguments.add(self.id).expect("Failed to add argument");
+        arguments.add(self.owner_id).expect("Failed to add argument");
+        arguments.add(self.name).expect("Failed to add argument");
+        arguments.add(self.hostname).expect("Failed to add argument");
+        arguments.add(self.icon_id).expect("Failed to add argument");
+        arguments.add(self.allocated_memory).expect("Failed to add argument");
+        arguments.add(self.version_id).expect("Failed to add argument");
+        arguments.add(self.enabled).expect("Failed to add argument");
+        arguments
     }
 }
 
@@ -182,7 +153,7 @@ impl FromJson for World {
             icon_id: data.icon_id,
             allocated_memory: data
                 .allocated_memory
-                .unwrap_or(crate::config::CONFIG.world_defaults.allocated_memory),
+                .unwrap_or(crate::config::CONFIG.world_defaults.allocated_memory).try_into().unwrap_or(i32::MAX),
             version_id: data.version_id,
             enabled: false,
         }
@@ -206,7 +177,7 @@ impl UpdateJson for World {
         new.name = data.name.clone().unwrap_or(new.name);
         new.hostname = data.hostname.clone().unwrap_or(new.hostname);
         new.icon_id = data.icon_id.unwrap_or(new.icon_id);
-        new.allocated_memory = data.allocated_memory.unwrap_or(new.allocated_memory);
+        new.allocated_memory = data.allocated_memory.map(|val| val.try_into().unwrap_or(i32::MAX)).unwrap_or(new.allocated_memory);
         new.version_id = data.version_id.unwrap_or(new.version_id);
         new.enabled = data.enabled.unwrap_or(new.enabled);
         new
@@ -215,7 +186,7 @@ impl UpdateJson for World {
 
 impl ApiObject for World {
     fn filters(
-        db_mutex: Arc<Mutex<Database>>,
+        db_mutex: Arc<Database>,
         rate_limit_config: RateLimitConfig,
     ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
         Self::list_filter(db_mutex.clone(), rate_limit_config.clone())
@@ -256,15 +227,15 @@ impl ApiGet for World {}
 impl ApiCreate for World {
     //TODO: this needs a rewrite, too much repeated code
     async fn before_api_create(
-        database: DbMutex,
+        database: Arc<Database>,
         json: &mut Self::JsonFrom,
         user: &User,
     ) -> Result<(), DatabaseError> {
         let group = user.group(database.clone(), None).await;
-        let user_worlds: Vec<World> = database.lock().await.get_filtered(
+        let user_worlds: Vec<World> = database.get_all_filtered(
             vec![("owner_id".to_string(), user.id.as_i64().to_string())],
             Some((&user, &group)),
-        )?;
+        ).await?;
         let group = user.group(database.clone(), None).await;
 
         //enforce the world limit
@@ -276,12 +247,10 @@ impl ApiCreate for World {
 
         json.hostname = into_valid_hostname(&json.hostname);
         if !database
-            .lock()
-            .await
-            .get_filtered::<World>(
+            .get_all_filtered::<World>(
                 vec![(String::from("hostname"), json.hostname.clone())],
                 None,
-            )?
+            ).await?
             .is_empty()
         {
             debug!("hostname already used. adding a random value to it");
@@ -291,10 +260,10 @@ impl ApiCreate for World {
         //enforce memory limit
         if let Some(memory_limit) = group.total_memory_limit {
             if let Some(allocated_memory) = json.allocated_memory {
-                let user_worlds: Vec<World> = database.lock().await.get_filtered(
+                let user_worlds: Vec<World> = database.get_all_filtered(
                     vec![("owner_id".to_string(), user.id.as_i64().to_string())],
                     Some((&user, &group)),
-                )?;
+                ).await?;
 
                 let mut total_memory = 0;
 
@@ -311,7 +280,7 @@ impl ApiCreate for World {
                         "changing memory amount for server created by {}. requested is {}, max available is {}",
                         user.id, memory_limit, remaining_memory
                     );
-                    json.allocated_memory = Some(remaining_memory as u32);
+                    json.allocated_memory = Some(remaining_memory.try_into().unwrap_or_default());
                 }
             }
         }
@@ -320,7 +289,7 @@ impl ApiCreate for World {
     }
     async fn after_api_create(
         &self,
-        _database: DbMutex,
+        _database: Arc<Database>,
         _json: &mut Self::JsonFrom,
         _user: &User,
     ) -> Result<(), DatabaseError> {
@@ -333,15 +302,15 @@ impl ApiUpdate for World {
     //TODO: this needs a rewrite, too much repeated code
     async fn before_api_update(
         &self,
-        database: DbMutex,
+        database: Arc<Database>,
         json: &mut Self::JsonUpdate,
         user: &User,
     ) -> Result<(), DatabaseError> {
         let group = user.group(database.clone(), None).await;
-        let user_worlds: Vec<World> = database.lock().await.get_filtered(
+        let user_worlds: Vec<World> = database.get_all_filtered(
             vec![("owner_id".to_string(), user.id.as_i64().to_string())],
             Some((&user, &group)),
-        )?;
+        ).await?;
 
         //enforce the active world limit
         if let Some(active_world_limit) = group.active_world_limit {
@@ -362,15 +331,13 @@ impl ApiUpdate for World {
         }
         if let Some(hostname) = &json.hostname {
             if !database
-                .lock()
-                .await
-                .get_filtered::<World>(
+                .get_all_filtered::<World>(
                     vec![
                         (String::from("hostname"), hostname.clone()),
                         (String::from("id"), format!("!{}", self.id.as_i64())),
                     ],
                     None,
-                )?
+                ).await?
                 .is_empty()
             {
                 debug!("hostname already used. adding a random value to it");
@@ -381,7 +348,7 @@ impl ApiUpdate for World {
         //enforce memory limit
         if let Some(memory_limit) = group.total_memory_limit {
             if let Some(allocated_memory) = json.allocated_memory {
-                if allocated_memory != self.allocated_memory {
+                if allocated_memory != self.allocated_memory as u32 {
                     let mut total_memory = 0;
 
                     for world in &user_worlds {
@@ -399,7 +366,7 @@ impl ApiUpdate for World {
                             "changing memory amount for server {} created by {}. requested is {}, max available is {}",
                             self.id, user.id, memory_limit, remaining_memory
                         );
-                        json.allocated_memory = Some(remaining_memory as u32);
+                        json.allocated_memory = Some(remaining_memory.try_into().unwrap());
                     }
                 }
             }
@@ -409,7 +376,7 @@ impl ApiUpdate for World {
     }
     async fn after_api_update(
         &self,
-        _database: DbMutex,
+        _database: Arc<Database>,
         _json: &mut Self::JsonUpdate,
         _user: &User,
     ) -> Result<(), DatabaseError> {
@@ -426,49 +393,49 @@ impl ApiUpdate for World {
 }
 #[async_trait]
 impl ApiRemove for World {
-    async fn before_api_delete(&self, database: DbMutex, user: &User) -> Result<(), DatabaseError> {
+    async fn before_api_delete(&self, database: Arc<Database>, user: &User) -> Result<(), DatabaseError> {
         info!("removing world {}", self.id);
         match server::get_or_create_server(self).await {
-            Ok(server) => {
-                server.lock().await.remove().await.map_err(|err| {DatabaseError::InternalServerError(err.to_string())})
-            }
-            Err(err) => Err(DatabaseError::InternalServerError(err.to_string()))
+            Ok(server) => server
+                .lock()
+                .await
+                .remove()
+                .await
+                .map_err(|err| DatabaseError::InternalServerError(err.to_string())),
+            Err(err) => Err(DatabaseError::InternalServerError(err.to_string())),
         }
     }
 }
 
 impl World {
-    pub async fn version(&self, db_mutex: DbMutex, user: Option<(&User, &Group)>) -> Version {
-        db_mutex
-            .lock()
-            .await
+    pub async fn version(&self, database: Arc<Database>, user: Option<(&User, &Group)>) -> Version {
+        database
             .get_one(self.version_id, user)
+            .await
             .expect(&format!(
                 "couldn't find version with id {}",
                 self.version_id
             ))
     }
-    pub async fn owner(&self, db_mutex: DbMutex, user: Option<(&User, &Group)>) -> User {
-        db_mutex
-            .lock()
-            .await
+    pub async fn owner(&self, database: Arc<Database>, user: Option<(&User, &Group)>) -> User {
+        database
             .get_one(self.owner_id, user)
+            .await
             .expect(&format!("couldn't find user with id {}", self.owner_id))
     }
     #[allow(clippy::needless_pass_by_value)]
     async fn world_get_status(
         _rate_limit_info: RateLimitInfo,
         id: String,
-        db_mutex: Arc<Mutex<Database>>,
+        db_mutex: Arc<Database>,
         user: User,
     ) -> Result<impl warp::Reply, warp::Rejection> {
         let id = Id::from_string(&id).map_err(|_| reject::custom(rejections::NotFound))?;
         {
             let group = user.group(db_mutex.clone(), None).await;
             db_mutex
-                .lock()
-                .await
                 .get_one::<Self>(id, Some((&user, &group)))
+                .await
                 .map_err(crate::api::handlers::handle_database_error)?;
         }
 
@@ -503,7 +470,7 @@ impl World {
     }
 
     pub fn status_filter(
-        db_mutex: Arc<Mutex<Database>>,
+        db_mutex: Arc<Database>,
         rate_limit_config: RateLimitConfig,
     ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
         warp::path("api")
@@ -522,16 +489,16 @@ impl World {
     async fn get_server_config(
         _rate_limit_info: RateLimitInfo,
         id: String,
-        db_mutex: Arc<Mutex<Database>>,
+        database: Arc<Database>,
         user: User,
     ) -> Result<impl warp::Reply, warp::Rejection> {
         let id = Id::from_string(&id).map_err(|_| reject::custom(rejections::NotFound))?;
-        let group = user.group(db_mutex.clone(), None).await;
+        let group = user.group(database.clone(), None).await;
 
         let world = {
-            let database = db_mutex.lock().await;
             database
                 .get_one::<Self>(id, Some((&user, &group)))
+                .await
                 .map_err(crate::api::handlers::handle_database_error)?
         };
 
@@ -566,7 +533,7 @@ impl World {
     }
 
     pub fn get_config_filter(
-        db_mutex: Arc<Mutex<Database>>,
+        db_mutex: Arc<Database>,
         rate_limit_config: RateLimitConfig,
     ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
         warp::path("api")
@@ -585,17 +552,17 @@ impl World {
     async fn set_server_config(
         _rate_limit_info: RateLimitInfo,
         id: String,
-        db_mutex: Arc<Mutex<Database>>,
+        database: Arc<Database>,
         user: User,
         new_config: HashMap<String, String>,
     ) -> Result<impl warp::Reply, warp::Rejection> {
         let id = Id::from_string(&id).map_err(|_| reject::custom(rejections::NotFound))?;
-        let group = user.group(db_mutex.clone(), None).await;
+        let group = user.group(database.clone(), None).await;
 
         let world = {
-            let database = db_mutex.lock().await;
             database
                 .get_one::<Self>(id, Some((&user, &group)))
+                .await
                 .map_err(crate::api::handlers::handle_database_error)?
         };
 
@@ -674,7 +641,7 @@ impl World {
         ))
     }
     pub fn set_config_filter(
-        db_mutex: Arc<Mutex<Database>>,
+        database: Arc<Database>,
         rate_limit_config: RateLimitConfig,
     ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
         warp::path("api")
@@ -684,8 +651,8 @@ impl World {
             .and(warp::path("config"))
             .and(warp::path::end())
             .and(warp::put())
-            .and(filters::with_db(db_mutex.clone()))
-            .and(filters::with_auth(db_mutex))
+            .and(filters::with_db(database.clone()))
+            .and(filters::with_auth(database))
             .and(warp::filters::body::json())
             .and_then(Self::set_server_config)
     }

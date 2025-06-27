@@ -1,16 +1,18 @@
-use crate::database::Database;
 use crate::database::types::{Access, Column, Id};
-use rusqlite::Row;
-use rusqlite::types::ToSqlOutput;
+use crate::database::{Database, DatabaseError};
 use serde::de::DeserializeOwned;
+use sqlx::any::AnyRow;
+use sqlx::{Any, Encode, FromRow, IntoArguments, Row};
+use std::os::fd::FromRawFd;
+use std::sync::Arc;
 
+pub mod group;
 pub mod invite_link;
 pub mod mod_loader;
 pub mod modification;
 pub mod user;
 pub mod version;
 pub mod world;
-pub mod group;
 
 pub use self::{
     group::Group, invite_link::InviteLink, mod_loader::ModLoader, modification::Mod,
@@ -54,38 +56,47 @@ pub trait DbObject: Send + Sync {
 
     #[allow(unused)]
     /// Called before the object gets inserted into the database
-    fn before_create(&self, database: &Database) {}
+    async fn before_create(&self, database: &Database) -> Result<(), DatabaseError> {
+        Ok(())
+    }
     #[allow(unused)]
     /// Called after the object gets inserted into the database
-    fn before_update(&self, database: &Database) {}
+    async fn before_update(&self, database: &Database) -> Result<(), DatabaseError> {
+        Ok(())
+    }
     #[allow(unused)]
     /// Called before the object gets updated in the database
-    fn before_delete(&self, database: &Database) {}
+    async fn before_delete(&self, database: &Database) -> Result<(), DatabaseError> {
+        Ok(())
+    }
     #[allow(unused)]
     /// Called after the object gets updated the database
-    fn after_create(&self, database: &Database) {}
+    async fn after_create(&self, database: &Database) -> Result<(), DatabaseError> {
+        Ok(())
+    }
     #[allow(unused)]
     /// Called before the object gets removed from the database
-    fn after_update(&self, database: &Database) {}
+    async fn after_update(&self, database: &Database) -> Result<(), DatabaseError> {
+        Ok(())
+    }
     #[allow(unused)]
     /// Called before the object gets removed from the database
-    fn after_delete(&self, database: &Database) {}
+    async fn after_delete(&self, database: &Database) -> Result<(), DatabaseError> {
+        Ok(())
+    }
 
     /// the name of the table SQL table the object will be stored in. used also for api routing
     fn table_name() -> &'static str;
 
     /// a vector of [`Column`]s to be stored in the database
     fn columns() -> Vec<Column>;
-    /// convert the object from [`Row`]
-    fn from_row(row: &Row) -> rusqlite::Result<Self>
-    where
-        Self: Sized;
     /// returns object's [`Id`]
     fn get_id(&self) -> Id;
     /// the index of the column with the [`Id`] of the object. default is 0
     fn id_column_index() -> usize {
         0
     }
+    fn owner_id(&self) -> Option<Id> { None }
     /// returns a [`Column`] at a specified index
     fn get_column(name: &str) -> Option<Column> {
         Self::columns()
@@ -107,9 +118,6 @@ pub trait DbObject: Send + Sync {
             .collect::<Vec<_>>()
             .join(", ")
     }
-
-    /// a vector of [`ToSqlOutput`] from every field of the object
-    fn params(&self) -> Vec<ToSqlOutput>;
 }
 
 pub trait FromJson

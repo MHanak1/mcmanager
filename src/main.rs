@@ -9,6 +9,8 @@ use mcmanager::minecraft::server::ServerConfigLimit;
 use mcmanager::minecraft::velocity::{InternalVelocityServer, VelocityServer};
 use mcmanager::{bin, util};
 use serde::Deserialize;
+use sqlx::any::AnyPoolOptions;
+use sqlx::sqlite::SqlitePoolOptions;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
@@ -19,11 +21,15 @@ use std::time::Duration;
 async fn main() -> Result<()> {
     env_logger::init();
     util::dirs::init_dirs().expect("Failed to initialize the data directory");
-    let conn = rusqlite::Connection::open(Path::new(&util::dirs::data_dir().join("database.db")))?;
-    let database = Database { conn };
-    database.init().expect("Failed to init database");
 
-    let first_launch = database.get_all::<User>(None)?.is_empty();
+    let pool = SqlitePoolOptions::new()
+        .max_connections(5)
+        .connect("sqlite://data/database.db")
+        .await?;
+    let database = Database { pool };
+    database.init().await.expect("Failed to init database");
+
+    let first_launch = database.get_all::<User>(None).await?.is_empty();
 
     if first_launch {
         util::dirs::init_dirs().expect("Failed to initialize the data directory");
@@ -145,10 +151,10 @@ async fn main() -> Result<()> {
 
             database
                 .insert(&default_group, None)
-                .expect("Failed to insert default user group");
+                .await.expect("Failed to insert default user group");
             database
                 .insert(&admin_group, None)
-                .expect("Failed to insert administrator group");
+                .await.expect("Failed to insert administrator group");
 
             database.create_user_from(
                 User {
@@ -159,7 +165,7 @@ async fn main() -> Result<()> {
                     enabled: true,
                 },
                 password.trim(),
-            )?;
+            ).await?;
 
             let mut config_file = File::create(&util::dirs::base_dir().join("config.toml"))
                 .expect("failed to create the config file");

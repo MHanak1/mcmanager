@@ -4,7 +4,6 @@ use crate::database::types::Id;
 use crate::minecraft;
 use anyhow::Result;
 use async_trait::async_trait;
-use rusqlite::fallible_iterator::FallibleIterator;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -524,7 +523,7 @@ pub mod internal {
         async fn remove(&mut self) -> Result<()> {
             self.stop().await?;
             debug!("removing directory {}", self.directory.display());
-            if self.directory.exists(){
+            if self.directory.exists() {
                 std::fs::remove_dir_all(self.directory.clone())?;
             }
             Ok(())
@@ -672,7 +671,10 @@ pub mod external {
             let client = reqwest::Client::new();
             Ok(serde_json::from_str(
                 &client
-                    .post(format!("{}api/worlds/remove", CONFIG.remote.host.to_string()))
+                    .post(format!(
+                        "{}api/worlds/remove",
+                        CONFIG.remote.host.to_string()
+                    ))
                     .header(
                         "Authorization",
                         format!("Bearer {}", crate::config::secrets::SECRETS.api_secret),

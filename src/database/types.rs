@@ -2,14 +2,16 @@ use crate::database::objects::{DbObject, Group, User};
 use crate::util;
 use crate::util::base64::{base64_decode, base64_encode};
 use anyhow::Result;
-use rand::TryRngCore;
-use rusqlite::ToSql;
-use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSqlOutput, ValueRef};
+use rand::{RngCore, TryRngCore};
 use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use sqlx::encode::IsNull;
+use sqlx::error::BoxDynError;
+use sqlx::{Any, Column as SqlxColumn, ColumnIndex, Database, Decode, Encode, Row, Sqlite, Type};
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::str::FromStr;
+use sqlx::sqlite::SqliteTypeInfo;
 use test_log::test;
 
 pub(crate) const ID_MAX_VALUE: i64 = 281_474_976_710_655;
@@ -17,17 +19,21 @@ pub(crate) const ID_MAX_VALUE: i64 = 281_474_976_710_655;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Column {
     pub name: String,
-    pub data_type: Type,
+    pub data_type: ValueType,
     pub modifiers: Vec<Modifier>,
 }
 
 impl Column {
-    pub fn new(name: &str, data_type: Type) -> Self {
+    pub fn new(name: &str, data_type: ValueType) -> Self {
         Self {
             name: name.to_string(),
             data_type,
             modifiers: Vec::new(),
         }
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
     }
 
     pub fn descriptor(&self) -> String {
@@ -65,8 +71,23 @@ impl Column {
     }
 }
 
+impl<T: Row> ColumnIndex<T> for Column {
+    fn index(&self, container: &T) -> std::result::Result<usize, sqlx::Error> {
+        match container.columns().iter().find_map(|column| {
+            if column.name() == self.name {
+                Some(column)
+            } else {
+                None
+            }
+        }) {
+            Some(column) => Ok(column.ordinal()),
+            None => Err(sqlx::Error::ColumnNotFound(self.name.clone())),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Type {
+pub enum ValueType {
     Integer(bool),
     Float,
     Text,
@@ -77,23 +98,23 @@ pub enum Type {
     Datetime,
 }
 
-impl Type {
+impl ValueType {
     pub fn descriptor(&self) -> String {
         match self {
-            Type::Integer(signed, ..) => {
+            ValueType::Integer(signed, ..) => {
                 if *signed {
                     "INTEGER".to_string()
                 } else {
                     "UNSIGNED INTEGER".to_string()
                 }
             }
-            Type::Float => "FLOAT".to_string(),
-            Type::Text => "TEXT".to_string(),
-            Type::Boolean => "BOOLEAN".to_string(),
-            Type::Blob => "BLOB".to_string(),
-            Type::Id => "UNSIGNED BIGINT".to_string(),
-            Type::Token => "TEXT".to_string(),
-            Type::Datetime => "DATETIME".to_string(),
+            ValueType::Float => "FLOAT".to_string(),
+            ValueType::Text => "TEXT".to_string(),
+            ValueType::Boolean => "BOOLEAN".to_string(),
+            ValueType::Blob => "BLOB".to_string(),
+            ValueType::Id => "UNSIGNED BIGINT".to_string(),
+            ValueType::Token => "TEXT".to_string(),
+            ValueType::Datetime => "DATETIME".to_string(),
         }
     }
 }
@@ -155,7 +176,7 @@ impl Access {
     ///
     /// if the access level is [`Access::Owner`], the `object` must me [`Some`].
     #[allow(clippy::expect_fun_call)]
-    pub fn can_access<T: DbObject + ?Sized>(
+    pub fn can_access<'a, T: DbObject + ?Sized>(
         &self,
         object: Option<&T>,
         user: &User,
@@ -175,19 +196,9 @@ impl Access {
                     match self {
                         Access::User => true,
                         //Access::Owner() => object.expect("owner access used with object being None").params()[] == user.id.to_sql().unwrap(),
-                        Access::Owner(owner_column_name) => {
-                            let object = object.expect("Access::User must have object");
-                            object.params()[T::get_column_index(owner_column_name).expect(
-                                format!(
-                                    "column with the name of {} not found in {}",
-                                    owner_column_name,
-                                    T::table_name()
-                                )
-                                .as_str(),
-                            )] == user
-                                .id
-                                .to_sql()
-                                .expect("failed to convert the user's id to an sql value")
+                        Access::Owner(_) => {
+                            let object = object.expect("Access::User must provide an object");
+                            object.owner_id().expect("object does not implement owner_id()", ) == user.id
                         }
                         Access::PrivilegedUser => group.is_privileged,
                         Access::None => false,
@@ -202,7 +213,7 @@ impl Access {
         }
     }
 
-    pub fn access_filter<T: DbObject + ?Sized>(&self, user: &User, group: &Group) -> String {
+    pub fn access_filter<'a, T: DbObject + ?Sized>(&self, user: &User, group: &Group) -> String {
         match self {
             Access::All => "1".to_string(),
             Access::And(left, right) => {
@@ -248,17 +259,16 @@ impl Access {
 /// It should be used in the numeric form in in the low level in the backend (eg. database fields), and in the string form everywhere else (like `JSON` fields).
 ///
 /// `Default::default()` generates a random Id
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub struct Id {
-    id: i64,
-}
+#[derive(Clone, Copy, PartialEq, Eq, Type)]
+#[sqlx(transparent)]
+pub struct Id (i64);
 
 impl Id {
     pub fn from_i64(value: i64) -> Result<Self> {
         if value > ID_MAX_VALUE {
             return Err(anyhow::anyhow!("id is out of the 48 bit range"));
         }
-        Ok(Self { id: value })
+        Ok(Self(value))
     }
     #[deprecated(note = "please use `from_u64` instead")]
     pub fn from_u64(value: u64) -> Result<Self> {
@@ -282,7 +292,7 @@ impl Id {
             id |= i64::from(i);
         }
 
-        Ok(Self { id })
+        Ok(Self(id))
     }
 
     pub fn new_random() -> Self {
@@ -291,21 +301,27 @@ impl Id {
     }
 
     pub fn as_i64(self) -> i64 {
-        self.id
+        self.0
+    }
+
+    pub fn to_sql_string(&self) -> String {
+        self.as_i64().to_string()
     }
 }
 
-impl FromSql for Id {
-    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
-        Self::from_i64(value.as_i64()?).map_or_else(|_| Err(FromSqlError::InvalidType), Ok)
+/*
+impl<'r, DB: Database> Decode<'r, DB> for Id
+where
+    &'r str: Decode<'r, DB>
+{
+    fn decode(
+        value: <DB as Database>::ValueRef<'r>,
+    ) -> Result<Id, Box<dyn Error + 'static + Send + Sync>> {
+        let value = <&i64 as Decode<DB>>::decode(value)?;
+        Ok(value.parse()?)
     }
 }
-
-impl ToSql for Id {
-    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
-        Ok(ToSqlOutput::from(self.as_i64())) //we need this tomfoolery to convert u64 into i64 because rusqlite doesn't allow u64
-    }
-}
+ */
 
 impl FromStr for Id {
     type Err = anyhow::Error;
@@ -338,13 +354,13 @@ impl<'de> Deserialize<'de> for Id {
 
 impl Hash for Id {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.id.hash(state);
+        self.hash(state);
     }
 }
 
 impl From<Id> for i64 {
     fn from(value: Id) -> Self {
-        value.id
+        value.0
     }
 }
 
@@ -355,7 +371,7 @@ impl From<Id> for String {
 }
 
 impl Display for Id {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         write!(
             f,
             "{}",
@@ -365,7 +381,7 @@ impl Display for Id {
 }
 
 impl Debug for Id {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         write!(f, "{self}")
     }
 }
@@ -412,17 +428,18 @@ fn id() {
     assert_eq!(Id::new_random().to_string().len(), 8);
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub struct Token {
-    token: String,
-}
+/*
+#[derive(Debug, PartialEq, Eq, Clone, Type, Encode, Decode)]
+#[sqlx(transparent)]
+pub struct Token ([u64; 4]);
 
 /// A base64 encoded auth token. By default it has the length of 4 (giving 32 bytes)
 impl Token {
-    pub fn new(size: usize) -> Self {
+    pub fn new() -> Self {
         let mut rng = rand::rngs::OsRng;
 
-        let token = (0..size)
+        /*
+        let token = (0..4)
             .map(|_| {
                 base64_encode(
                     &rng.try_next_u64()
@@ -431,15 +448,19 @@ impl Token {
                 )
             })
             .collect::<String>();
+         */
+        let token = (0..4).map(|_| rng.next_u64()).collect::<Vec<_>>().try_into().unwrap();
+
+
         Self { token }
     }
 
     pub fn from_string_ckecked(string: String) -> Result<Self> {
         //check if is decodable
-        match base64_decode(string.as_str()) {
-            Ok(_) => Ok(Self { token: string }),
-            Err((err, _)) => Err(anyhow::anyhow!(err.to_string())),
-        }
+        let vals = base64_decode(string.as_str())?;
+        let token = (0..4).map(|i| (vals[i * 4] as u64) << 48 | (vals[i * 4 + 1] as u64) << 32 | (vals[i * 4 + 2] as u64) << 16 | (vals[i * 4 + 3] as u64)).collect::<Vec<_>>().try_into().unwrap();
+
+        Ok(Self {token})
     }
 }
 
@@ -449,7 +470,7 @@ impl Default for Token {
     }
 }
 impl Display for Token {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         write!(f, "{}", self.token)
     }
 }
@@ -474,19 +495,6 @@ impl FromStr for Token {
     }
 }
 
-impl FromSql for Token {
-    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
-        Ok(Self {
-            token: value.as_str()?.to_string(),
-        })
-    }
-}
-
-impl ToSql for Token {
-    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
-        Ok(ToSqlOutput::from(self.token.as_str()))
-    }
-}
 
 impl Serialize for Token {
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -509,3 +517,4 @@ impl<'de> Deserialize<'de> for Token {
         }
     }
 }
+*/

@@ -97,13 +97,13 @@ pub static CONFIG: Lazy<Config> = Lazy::new(|| {
 });
 
 pub mod secrets {
-    use crate::database::types::Token;
     use crate::util;
     use config::Config;
     use once_cell::sync::Lazy;
+    use uuid::Uuid;
 
     pub struct Secrets {
-        pub api_secret: Token,
+        pub api_secret: Uuid,
     }
 
     impl TryFrom<Config> for Secrets {

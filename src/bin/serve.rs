@@ -1,4 +1,3 @@
-use log::{error, info};
 use crate::api::filters;
 use crate::api::handlers::ApiObject;
 use crate::config;
@@ -7,6 +6,9 @@ use crate::database::Database;
 use crate::database::objects::{Group, InviteLink, Mod, ModLoader, Session, User, Version, World};
 use crate::minecraft::velocity::{InternalVelocityServer, VelocityServer};
 use crate::{api, util};
+use log::{error, info};
+use sqlx::any::AnyPoolOptions;
+use sqlx::sqlite::SqlitePoolOptions;
 use std::io::Write;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::Path;
@@ -47,10 +49,12 @@ pub async fn main() -> anyhow::Result<()> {
     });
 
     env_logger::init();
-    let conn = rusqlite::Connection::open(Path::new(&util::dirs::data_dir().join("database.db")))
-        .expect("failed to open the database");
-    let database = Database { conn };
-    database.init().expect("failed to initialize database");
+    let pool = SqlitePoolOptions::new()
+        .max_connections(5)
+        .connect("sqlite://data/database.db")
+        .await?;
+    let database = Database { pool };
+    database.init().await.expect("failed to initialize database");
     let config_path = util::dirs::base_dir().join("config.toml");
     if !config_path.exists() {
         let mut config_file = std::fs::File::create(config_path)?;
@@ -64,7 +68,8 @@ pub async fn main() -> anyhow::Result<()> {
 pub async fn run(database: Database, config: config::Config) {
     util::dirs::init_dirs().expect("Failed to initialize the data directory");
 
-    let db_mutex = Arc::new(Mutex::new(database));
+    let database = Arc::new(database);
+
 
     let limit = config.public_routes_rate_limit;
 
@@ -81,7 +86,7 @@ pub async fn run(database: Database, config: config::Config) {
         ))
         .and(warp::path!("api" / "register"))
         .and(warp::path::end())
-        .and(filters::with_db(db_mutex.clone()))
+        .and(filters::with_db(database.clone()))
         .and(warp::body::content_length_limit(1024 * 16))
         .and(warp::body::json())
         .and(warp::query::<Vec<(String, String)>>())
@@ -93,7 +98,7 @@ pub async fn run(database: Database, config: config::Config) {
         ))
         .and(warp::path!("api" / "login"))
         .and(warp::path::end())
-        .and(filters::with_db(db_mutex.clone()))
+        .and(filters::with_db(database.clone()))
         .and(warp::body::content_length_limit(1024 * 16))
         .and(warp::body::json())
         .and_then(api::handlers::user_auth);
@@ -104,7 +109,7 @@ pub async fn run(database: Database, config: config::Config) {
         ))
         .and(warp::path!("api" / "user"))
         .and(warp::path::end())
-        .and(filters::with_auth(db_mutex.clone()))
+        .and(filters::with_auth(database.clone()))
         .and_then(api::handlers::user_info);
 
     let is_taken = warp::get()
@@ -114,7 +119,7 @@ pub async fn run(database: Database, config: config::Config) {
         .and(warp::path!("api" / "is_taken" / String / String))
         .and(warp::path::end())
         .and(warp::get())
-        .and(filters::with_db(db_mutex.clone()))
+        .and(filters::with_db(database.clone()))
         .and_then(api::handlers::check_free);
 
     let log = warp::log("info");
@@ -125,35 +130,35 @@ pub async fn run(database: Database, config: config::Config) {
             .or(user_info)
             .or(is_taken)
             .or(Mod::filters(
-                db_mutex.clone(),
+                database.clone(),
                 private_routes_rate_limit.clone(),
             ))
             .or(Version::filters(
-                db_mutex.clone(),
+                database.clone(),
                 private_routes_rate_limit.clone(),
             ))
             .or(ModLoader::filters(
-                db_mutex.clone(),
+                database.clone(),
                 private_routes_rate_limit.clone(),
             ))
             .or(World::filters(
-                db_mutex.clone(),
+                database.clone(),
                 private_routes_rate_limit.clone(),
             ))
             .or(Group::filters(
-                db_mutex.clone(),
+                database.clone(),
                 private_routes_rate_limit.clone(),
             ))
             .or(User::filters(
-                db_mutex.clone(),
+                database.clone(),
                 private_routes_rate_limit.clone(),
             ))
             .or(Session::filters(
-                db_mutex.clone(),
+                database.clone(),
                 private_routes_rate_limit.clone(),
             ))
             .or(InviteLink::filters(
-                db_mutex.clone(),
+                database.clone(),
                 private_routes_rate_limit.clone(),
             ))
             .recover(api::handlers::handle_rejection)

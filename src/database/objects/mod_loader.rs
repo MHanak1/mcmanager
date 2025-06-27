@@ -1,17 +1,16 @@
 use crate::api::handlers::{ApiCreate, ApiGet, ApiList, ApiObject, ApiRemove, ApiUpdate};
 use crate::database::Database;
-use crate::database::objects::{DbObject, FromJson, UpdateJson, User};
-use crate::database::types::{Access, Column, Id, Type};
-use rusqlite::types::ToSqlOutput;
-use rusqlite::{Row, ToSql};
+use crate::database::objects::{DbObject, FromJson, Mod, UpdateJson, User};
+use crate::database::types::{Access, Column, Id, ValueType};
 use serde::{Deserialize, Serialize};
+use sqlx::{Arguments, Encode, FromRow, IntoArguments};
 use std::fmt::Debug;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use warp::{Filter, Rejection, Reply};
 use warp_rate_limit::RateLimitConfig;
 
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, FromRow)]
 pub struct ModLoader {
     /// The mod loader's unique [`Id`]
     pub id: Id,
@@ -40,40 +39,27 @@ impl DbObject for ModLoader {
 
     fn columns() -> Vec<Column> {
         vec![
-            Column::new("id", Type::Id).primary_key(),
-            Column::new("name", Type::Text).not_null(),
-            Column::new("can_load_mods", Type::Boolean)
+            Column::new("id", ValueType::Id).primary_key(),
+            Column::new("name", ValueType::Text).not_null(),
+            Column::new("can_load_mods", ValueType::Boolean)
                 .not_null()
                 .default("false"),
         ]
     }
-    fn from_row(row: &Row) -> rusqlite::Result<Self>
-    where
-        Self: Sized,
-    {
-        Ok(Self {
-            id: row.get(0)?,
-            name: row.get(1)?,
-            can_load_mods: row.get(2)?,
-        })
-    }
-
     fn get_id(&self) -> Id {
         self.id
     }
+}
 
-    fn params(&self) -> Vec<ToSqlOutput> {
-        vec![
-            self.id
-                .to_sql()
-                .expect("failed to convert the value to sql"),
-            self.name
-                .to_sql()
-                .expect("failed to convert the value to sql"),
-            self.can_load_mods
-                .to_sql()
-                .expect("failed to convert the value to sql"),
-        ]
+impl<'a> IntoArguments<'a, crate::database::DatabaseType> for ModLoader {
+    fn into_arguments(self) -> <crate::database::DatabaseType as sqlx::Database>::Arguments<'a> {
+        let mut arguments = <crate::database::DatabaseType as sqlx::Database>::Arguments::default();
+        arguments.add(self.id).expect("Failed to add argument");
+        arguments.add(self.name).expect("Failed to add argument");
+        arguments
+            .add(self.can_load_mods)
+            .expect("Failed to add argument");
+        arguments
     }
 }
 
@@ -113,24 +99,24 @@ impl UpdateJson for ModLoader {
 
 impl ApiObject for ModLoader {
     fn filters(
-        db_mutex: Arc<Mutex<Database>>,
+        database: Arc<Database>,
         rate_limit_config: RateLimitConfig,
     ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
-        Self::list_filter(db_mutex.clone(), rate_limit_config.clone())
+        Self::list_filter(database.clone(), rate_limit_config.clone())
             .or(Self::get_filter(
-                db_mutex.clone(),
+                database.clone(),
                 rate_limit_config.clone(),
             ))
             .or(Self::create_filter(
-                db_mutex.clone(),
+                database.clone(),
                 rate_limit_config.clone(),
             ))
             .or(Self::update_filter(
-                db_mutex.clone(),
+                database.clone(),
                 rate_limit_config.clone(),
             ))
             .or(Self::remove_filter(
-                db_mutex.clone(),
+                database,
                 rate_limit_config.clone(),
             ))
     }

@@ -1,13 +1,14 @@
-use std::collections::HashMap;
-use rusqlite::{Row, ToSql};
-use rusqlite::types::ToSqlOutput;
+use crate::api::handlers::{ApiCreate, ApiGet, ApiList, ApiObject, ApiRemove, ApiUpdate};
+use crate::database::objects::{DbObject, FromJson, InviteLink, UpdateJson, User};
+use crate::database::types::{Access, Column, Id, ValueType};
+use crate::minecraft::server::ServerConfigLimit;
 use serde::{Deserialize, Deserializer, Serialize};
+use sqlx::{Arguments, Encode, Error, FromRow, IntoArguments, Row};
+use std::collections::HashMap;
+use std::sync::Arc;
 use warp::{Filter, Rejection, Reply};
 use warp_rate_limit::RateLimitConfig;
-use crate::api::handlers::{ApiCreate, ApiGet, ApiList, ApiObject, ApiRemove, ApiUpdate, DbMutex};
-use crate::database::objects::{DbObject, FromJson, InviteLink, UpdateJson, User};
-use crate::database::types::{Access, Column, Id, Type};
-use crate::minecraft::server::ServerConfigLimit;
+use crate::database::{Database, DatabaseType};
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub struct Group {
@@ -16,15 +17,15 @@ pub struct Group {
     /// group's name
     pub name: String,
     /// limit of user's total allocatable memory in MiB. [`None`] means no limit
-    pub total_memory_limit: Option<u32>,
+    pub total_memory_limit: Option<i32>,
     /// limit of user's per-world allocatable memory in MiB. [`None`] means no limit
-    pub per_world_memory_limit: Option<u32>,
+    pub per_world_memory_limit: Option<i32>,
     /// how many worlds can a user create. [`None`] means no limit
-    pub world_limit: Option<u32>,
+    pub world_limit: Option<i32>,
     /// how many worlds can be enabled at a time. [`None`] means no limit
-    pub active_world_limit: Option<u32>,
+    pub active_world_limit: Option<i32>,
     /// how much storage is available to a user in MiB. [`None`] means no limit
-    pub storage_limit: Option<u32>,
+    pub storage_limit: Option<i32>,
     /// server.properties config limitation. for more info look at the description in the config file
     pub config_blacklist: Vec<String>,
     /// server.properties config limitation. for more info look at the description in the config file
@@ -54,106 +55,112 @@ impl DbObject for Group {
 
     fn columns() -> Vec<Column> {
         vec![
-            Column::new("id", Type::Id).primary_key(),
-            Column::new("name", Type::Text).not_null(),
-            Column::new("total_memory_limit", Type::Integer(false)),
-            Column::new("per_world_memory_limit", Type::Integer(false)),
-            Column::new("world_limit", Type::Integer(false)),
-            Column::new("active_world_limit", Type::Integer(false)),
-            Column::new("storage_limit", Type::Integer(false)),
-            Column::new("config_blacklist", Type::Text),
-            Column::new("config_whitelist", Type::Text),
-            Column::new("config_limits", Type::Text),
-            Column::new("is_privileged", Type::Boolean)
+            Column::new("id", ValueType::Id).primary_key(),
+            Column::new("name", ValueType::Text).not_null(),
+            Column::new("total_memory_limit", ValueType::Integer(false)),
+            Column::new("per_world_memory_limit", ValueType::Integer(false)),
+            Column::new("world_limit", ValueType::Integer(false)),
+            Column::new("active_world_limit", ValueType::Integer(false)),
+            Column::new("storage_limit", ValueType::Integer(false)),
+            Column::new("config_blacklist", ValueType::Text),
+            Column::new("config_whitelist", ValueType::Text),
+            Column::new("config_limits", ValueType::Text),
+            Column::new("is_privileged", ValueType::Boolean)
                 .not_null()
                 .default("false"),
         ]
     }
 
-    fn from_row(row: &Row) -> rusqlite::Result<Self>
-    where
-        Self: Sized,
-    {
-        Ok(Self {
-            id: row.get(0)?,
-            name: row.get(1)?,
-            total_memory_limit: row.get(2)?,
-            per_world_memory_limit: row.get(3)?,
-            world_limit: row.get(4)?,
-            active_world_limit: row.get(5)?,
-            storage_limit: row.get(6)?,
-            // yes. I am storing JSON in a database. no. you cannot stop me.
-            config_blacklist: serde_json::from_str(&row.get::<usize, String>(7)?)
-                .map_err(|_| rusqlite::Error::UnwindingPanic)?,
-            config_whitelist: serde_json::from_str(&row.get::<usize, String>(8)?)
-                .map_err(|_| rusqlite::Error::UnwindingPanic)?,
-            config_limits: serde_json::from_str(&row.get::<usize, String>(9)?)
-                .map_err(|_| rusqlite::Error::UnwindingPanic)?,
-            is_privileged: row.get(10)?,
-        })
-    }
-
     fn get_id(&self) -> Id {
         self.id
     }
+}
 
-    fn params(&self) -> Vec<ToSqlOutput> {
+impl<'a> FromRow<'_, <DatabaseType as sqlx::Database>::Row> for Group {
+    fn from_row(row: &'_ <DatabaseType as sqlx::Database>::Row) -> Result<Self, Error> {
+        Ok(Self {
+            id: row.try_get("id")?,
+            name: row.try_get("name")?,
+            total_memory_limit: row.try_get("total_memory_limit")?,
+            per_world_memory_limit: row.try_get("per_world_memory_limit")?,
+            world_limit: row.try_get("world_limit")?,
+            active_world_limit: row.try_get("active_world_limit")?,
+            storage_limit: row.try_get("storage_limit")?,
+            config_blacklist: serde_json::from_str(&row.try_get::<String, _>("config_blacklist")?)
+                .unwrap(),
+            config_whitelist: serde_json::from_str(&row.try_get::<String, _>("config_whitelist")?)
+                .unwrap(),
+            config_limits: serde_json::from_str(&row.try_get::<String, _>("config_limits")?)
+                .unwrap(),
+            is_privileged: row.try_get("is_privileged")?,
+        })
+    }
+}
+
+impl<'a> IntoArguments<'a, crate::database::DatabaseType> for Group {
+    fn into_arguments(self) -> <crate::database::DatabaseType as sqlx::Database>::Arguments<'a> {
         let config_blacklist =
             serde_json::to_string(&self.config_blacklist).expect("serialization failed");
         let config_whitelist =
             serde_json::to_string(&self.config_whitelist).expect("serialization failed");
         let config_limits =
             serde_json::to_string(&self.config_limits).expect("serialization failed");
-        vec![
-            self.id
-                .to_sql()
-                .expect("failed to convert the value to sql"),
-            self.name.to_sql().expect("failed to convert value to sql"),
-            self.total_memory_limit
-                .to_sql()
-                .expect("failed to convert the value to sql"),
-            self.per_world_memory_limit
-                .to_sql()
-                .expect("failed to convert the value to sql"),
-            self.world_limit
-                .to_sql()
-                .expect("failed to convert the value to sql"),
-            self.active_world_limit
-                .to_sql()
-                .expect("failed to convert the value to sql"),
-            self.storage_limit
-                .to_sql()
-                .expect("failed to convert the value to sql"),
-            ToSqlOutput::from(config_blacklist),
-            ToSqlOutput::from(config_whitelist),
-            ToSqlOutput::from(config_limits),
-            self.is_privileged
-                .to_sql()
-                .expect("failed to convert the value to sql"),
-        ]
+
+        let mut arguments = <crate::database::DatabaseType as sqlx::Database>::Arguments::default();
+
+        arguments.add(self.id).expect("Failed to add argument");
+        arguments.add(self.name).expect("Failed to argument");
+        arguments
+            .add(self.total_memory_limit)
+            .expect("Failed to add argument");
+        arguments
+            .add(self.per_world_memory_limit)
+            .expect("Failed to add argument");
+        arguments
+            .add(self.world_limit)
+            .expect("Failed to add argument");
+        arguments
+            .add(self.active_world_limit)
+            .expect("Failed to add argument");
+        arguments
+            .add(self.storage_limit)
+            .expect("Failed to add argument");
+        arguments
+            .add(config_blacklist)
+            .expect("Failed to add argument");
+        arguments
+            .add(config_whitelist)
+            .expect("Failed to add argument");
+        arguments
+            .add(config_limits)
+            .expect("Failed to add argument");
+        arguments
+            .add(self.is_privileged)
+            .expect("Failed to add argument");
+        arguments
     }
 }
 
 impl ApiObject for Group {
-    fn filters(
-        db_mutex: DbMutex,
+    fn filters (
+        database: Arc<Database>,
         rate_limit_config: RateLimitConfig,
     ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
-        Self::list_filter(db_mutex.clone(), rate_limit_config.clone())
+        Self::list_filter(database.clone(), rate_limit_config.clone())
             .or(Self::get_filter(
-                db_mutex.clone(),
+                database.clone(),
                 rate_limit_config.clone(),
             ))
             .or(Self::create_filter(
-                db_mutex.clone(),
+                database.clone(),
                 rate_limit_config.clone(),
             ))
             .or(Self::update_filter(
-                db_mutex.clone(),
+                database.clone(),
                 rate_limit_config.clone(),
             ))
             .or(Self::remove_filter(
-                db_mutex.clone(),
+                database,
                 rate_limit_config.clone(),
             ))
     }
@@ -162,11 +169,11 @@ impl ApiObject for Group {
 #[derive(Debug, Clone, Deserialize)]
 pub struct JsonFrom {
     pub name: String,
-    pub total_memory_limit: Option<u32>,
-    pub per_world_memory_limit: Option<u32>,
-    pub world_limit: Option<u32>,
-    pub active_world_limit: Option<u32>,
-    pub storage_limit: Option<u32>,
+    pub total_memory_limit: Option<i32>,
+    pub per_world_memory_limit: Option<i32>,
+    pub world_limit: Option<i32>,
+    pub active_world_limit: Option<i32>,
+    pub storage_limit: Option<i32>,
     pub config_blacklist: Option<Vec<String>>,
     pub config_whitelist: Option<Vec<String>>,
     pub config_limits: Option<HashMap<String, ServerConfigLimit>>,
@@ -192,7 +199,7 @@ impl FromJson for Group {
     }
 }
 
-// Any value that is present is considered Some value, including null.
+// crate::database::DatabaseType value that is present is considered Some value, including null.
 fn deserialize_some<'de, T, D>(deserializer: D) -> Result<Option<T>, D::Error>
 where
     T: Deserialize<'de>,
@@ -208,15 +215,15 @@ pub struct JsonUpdate {
     #[serde(default, deserialize_with = "deserialize_some")]
     pub avatar_id: Option<Option<Id>>,
     #[serde(default, deserialize_with = "deserialize_some")]
-    pub total_memory_limit: Option<Option<u32>>,
+    pub total_memory_limit: Option<Option<i32>>,
     #[serde(default, deserialize_with = "deserialize_some")]
-    pub per_world_memory_limit: Option<Option<u32>>,
+    pub per_world_memory_limit: Option<Option<i32>>,
     #[serde(default, deserialize_with = "deserialize_some")]
-    pub world_limit: Option<Option<u32>>,
+    pub world_limit: Option<Option<i32>>,
     #[serde(default, deserialize_with = "deserialize_some")]
-    pub active_world_limit: Option<Option<u32>>,
+    pub active_world_limit: Option<Option<i32>>,
     #[serde(default, deserialize_with = "deserialize_some")]
-    pub storage_limit: Option<Option<u32>>,
+    pub storage_limit: Option<Option<i32>>,
     #[serde(default, deserialize_with = "deserialize_some")]
     pub config_blacklist: Option<Vec<String>>,
     #[serde(default, deserialize_with = "deserialize_some")]

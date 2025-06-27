@@ -8,9 +8,9 @@ use tokio::sync::Mutex;
 use warp::{Filter, Rejection};
 
 pub fn with_db(
-    db: Arc<Mutex<Database>>,
-) -> impl Filter<Extract = (Arc<Mutex<Database>>,), Error = Infallible> + Clone {
-    warp::any().map(move || Arc::clone(&db))
+    db: Arc<Database>,
+) -> impl Filter<Extract = (Arc<Database>,), Error = Infallible> + Clone {
+    warp::any().map(move || db.clone())
 }
 
 pub fn with_bearer_token() -> impl Filter<Extract = (String,), Error = Rejection> + Clone {
@@ -23,7 +23,7 @@ pub fn with_bearer_token() -> impl Filter<Extract = (String,), Error = Rejection
     })
 }
 pub fn with_auth(
-    database: Arc<Mutex<Database>>,
+    database: Arc<Database>,
 ) -> impl Filter<Extract = (User,), Error = Rejection> + Clone {
     with_bearer_token()
         .or(warp::cookie("sessionToken"))
@@ -31,33 +31,20 @@ pub fn with_auth(
         .and_then(move |token: String| {
             let database = database.clone();
             async move {
-                let database = database.lock().await;
-
-                let session = database.get_filtered::<Session>(vec![("token".to_string(), token)], None)
-                    .map_err(
-                        |err|
-                        match err {
-                            DatabaseError::SqliteError(rusqlite::Error::QueryReturnedNoRows) => {
-                                warp::reject::custom(rejections::Unauthorized)
-                            }
-                            _ => {
-                                warp::reject::custom(rejections::InternalServerError::from(err.to_string()))
-                            }
-                        }
-                    )?;
-                let session = session.first().cloned();
-                if session.is_none() {
+                let session = database
+                    .get_one_filtered::<Session>(vec![("token".to_string(), token)], None)
+                    .await;
+                if session.is_err() {
                     return Err(warp::reject::custom(rejections::Unauthorized));
                 }
                 let session = session.unwrap();
 
-                database.get_one::<User>(session.user_id, None).map_err(|err| {
-                    error!("Orphaned session found, token: {}, user: {}. deleting (note: this should never happen because of SQLite foreign key requirement",session.token, session.user_id);
-                        if let Err(err) = database.remove(&session, None) {
-                            error!("Failed to remove orphaned session: {err}\n(what the fuck)");
-                        };
+                Ok(database
+                    .get_one::<User>(session.user_id, None)
+                    .await
+                    .map_err(|err| {
                         warp::reject::custom(rejections::InternalServerError::from(err.to_string()))
-                })
+                    })?)
             }
         })
 }

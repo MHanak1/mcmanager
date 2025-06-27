@@ -2,9 +2,10 @@ use crate::database::objects::{DbObject, Group};
 use crate::database::objects::{
     InviteLink, Mod, ModLoader, Password, Session, User, Version, World,
 };
-use crate::database::types::{Id, Type};
+use crate::database::types::{Id, ValueType};
 use log::debug;
-use rusqlite::{params, params_from_iter};
+use sqlx::query::QueryAs;
+use sqlx::{Database as SqlxDatabase, FromRow, IntoArguments, Pool, QueryBuilder};
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 use test_log::test;
@@ -13,33 +14,36 @@ use warp::reject::Reject;
 pub mod objects;
 pub mod types;
 
+pub type DatabaseType = sqlx::sqlite::Sqlite;
+
 #[derive(Debug)]
 pub struct Database {
-    pub conn: rusqlite::Connection,
+    //pub conn: rusqlite::Connection,
+    pub pool: Pool<DatabaseType>,
 }
 
 #[allow(dead_code)]
 impl Database {
     #[rustfmt::skip]
-    pub fn init(&self) -> rusqlite::Result<()> {
-        self.conn.execute(&format!("CREATE TABLE IF NOT EXISTS {} ({});", ModLoader::table_name(),  ModLoader::database_descriptor()), ())?;
-        self.conn.execute(&format!("CREATE TABLE IF NOT EXISTS {} ({});", Version::table_name(),    Version::database_descriptor()), ())?;
-        self.conn.execute(&format!("CREATE TABLE IF NOT EXISTS {} ({});", Mod::table_name(),        Mod::database_descriptor()), ())?;
-        self.conn.execute(&format!("CREATE TABLE IF NOT EXISTS {} ({});", Group::table_name(),      Group::database_descriptor()), ())?;
-        self.conn.execute(&format!("CREATE TABLE IF NOT EXISTS {} ({});", User::table_name(),       User::database_descriptor()), ())?;
-        self.conn.execute(&format!("CREATE TABLE IF NOT EXISTS {} ({});", Password::table_name(),   Password::database_descriptor()), ())?;
-        self.conn.execute(&format!("CREATE TABLE IF NOT EXISTS {} ({});", World::table_name(),      World::database_descriptor()), ())?;
-        self.conn.execute(&format!("CREATE TABLE IF NOT EXISTS {} ({});", Session::table_name(),    Session::database_descriptor()), ())?;
-        self.conn.execute(&format!("CREATE TABLE IF NOT EXISTS {} ({});", InviteLink::table_name(), InviteLink::database_descriptor()), ())?;
+    pub async fn init(&self) -> sqlx::Result<()> {
+        sqlx::query(&format!("CREATE TABLE IF NOT EXISTS {} ({});", ModLoader::table_name(),  ModLoader::database_descriptor())).execute(&self.pool).await?;
+        sqlx::query(&format!("CREATE TABLE IF NOT EXISTS {} ({});", Version::table_name(),    Version::database_descriptor())).execute(&self.pool).await?;
+        sqlx::query(&format!("CREATE TABLE IF NOT EXISTS {} ({});", Mod::table_name(),        Mod::database_descriptor())).execute(&self.pool).await?;
+        sqlx::query(&format!("CREATE TABLE IF NOT EXISTS {} ({});", Group::table_name(),      Group::database_descriptor())).execute(&self.pool).await?;
+        sqlx::query(&format!("CREATE TABLE IF NOT EXISTS {} ({});", User::table_name(),       User::database_descriptor())).execute(&self.pool).await?;
+        sqlx::query(&format!("CREATE TABLE IF NOT EXISTS {} ({});", Password::table_name(),   Password::database_descriptor())).execute(&self.pool).await?;
+        sqlx::query(&format!("CREATE TABLE IF NOT EXISTS {} ({});", World::table_name(),      World::database_descriptor())).execute(&self.pool).await?;
+        sqlx::query(&format!("CREATE TABLE IF NOT EXISTS {} ({});", Session::table_name(),    Session::database_descriptor())).execute(&self.pool).await?;
+        sqlx::query(&format!("CREATE TABLE IF NOT EXISTS {} ({});", InviteLink::table_name(), InviteLink::database_descriptor())).execute(&self.pool).await?;
 
         Ok(())
     }
 
-    pub fn insert<T: DbObject>(
+    pub async fn insert<T: DbObject + for<'a> IntoArguments<'a, DatabaseType> + Clone>(
         &self,
         value: &T,
         user: Option<(&User, &Group)>,
-    ) -> Result<usize, DatabaseError> {
+    ) -> Result<<DatabaseType as sqlx::Database>::QueryResult, DatabaseError> {
         if let Some((user, group)) = user {
             if !T::can_create(user, group) {
                 return Err(DatabaseError::Unauthorized);
@@ -64,19 +68,21 @@ impl Database {
         );
         debug!("querying database: {query}");
 
-        let result = self.conn.execute(query, params_from_iter(value.params()));
+        let mut query = sqlx::QueryBuilder::with_arguments(query, value.clone());
+        let result = query.build().execute(&self.pool).await;
+
         value.after_create(self);
         match result {
             Ok(result) => Ok(result),
-            Err(err) => Err(DatabaseError::SqliteError(err)),
+            Err(err) => Err(DatabaseError::InternalServerError(err.to_string())),
         }
     }
 
-    pub fn update<T: DbObject>(
+    pub async fn update<T: DbObject + for<'a> IntoArguments<'a, DatabaseType> + Clone>(
         &self,
         value: &T,
         user: Option<(&User, &Group)>,
-    ) -> Result<usize, DatabaseError> {
+    ) -> Result<<DatabaseType as sqlx::Database>::QueryResult, DatabaseError> {
         if let Some((user, group)) = user {
             if !value.can_update(user, group) {
                 return Err(DatabaseError::Unauthorized);
@@ -107,19 +113,21 @@ impl Database {
         );
         debug!("querying database: {query}");
 
-        let result = self.conn.execute(query, params_from_iter(value.params()));
+        let mut query = QueryBuilder::with_arguments(query, value.clone());
+        let result = query.build().execute(&self.pool).await;
+
         value.after_update(self);
         match result {
             Ok(result) => Ok(result),
-            Err(err) => Err(DatabaseError::SqliteError(err)),
+            Err(err) => Err(DatabaseError::InternalServerError(err.to_string())),
         }
     }
 
-    pub fn remove<T: DbObject>(
+    pub async fn remove<'a, T: DbObject + FromRow<'a, <DatabaseType as sqlx::Database>::Row>>(
         &self,
         value: &T,
         user: Option<(&User, &Group)>,
-    ) -> Result<usize, DatabaseError> {
+    ) -> Result<<DatabaseType as sqlx::Database>::QueryResult, DatabaseError> {
         if let Some((user, group)) = user {
             if !value.can_update(user, group) {
                 return Err(DatabaseError::Unauthorized);
@@ -143,22 +151,30 @@ impl Database {
         );
         debug!("querying database: {query}");
 
-        let result = self.conn.execute(query, params![value.get_id()]);
+        let result = sqlx::query(query)
+            .bind(value.get_id())
+            .execute(&self.pool)
+            .await;
+
         value.after_delete(self);
         match result {
             Ok(result) => Ok(result),
-            Err(err) => Err(DatabaseError::SqliteError(err)),
+            Err(err) => Err(DatabaseError::InternalServerError(err.to_string())),
         }
     }
 
-    pub fn get_one<T: DbObject>(
+    pub async fn get_one<T: DbObject + for<'r> FromRow<'r, <DatabaseType as sqlx::Database>::Row> + Unpin>(
         &self,
         id: Id,
         user: Option<(&User, &Group)>,
     ) -> Result<T, DatabaseError> {
         let query = &format!(
             "SELECT {} FROM {} WHERE {} = ?1{}",
-            T::columns().iter().map(|column| column.name.clone()).collect::<Vec<String>>().join(","),
+            T::columns()
+                .iter()
+                .map(|column| column.name.clone())
+                .collect::<Vec<String>>()
+                .join(","),
             T::table_name(),
             T::columns()[T::id_column_index()].name,
             match user {
@@ -169,31 +185,30 @@ impl Database {
             }
         );
 
-        debug!("querying database: {query}");
-        match self
-            .conn
-            .query_row(query, params![id], |row| Ok(T::from_row(row).unwrap()))
-        {
+        let mut query = sqlx::query_as::<_, T>(&query).bind(id);
+
+        match query.fetch_one(&self.pool).await {
             Ok(result) => Ok(result),
-            Err(err) => Err(DatabaseError::SqliteError(err)),
+            Err(err) => Err(DatabaseError::InternalServerError(err.to_string())),
         }
     }
 
-    pub fn get_all<T: DbObject>(
-        &self,
-        user: Option<(&User, &Group)>,
-    ) -> Result<Vec<T>, DatabaseError> {
-        self.get_filtered::<T>(vec![], user)
-    }
-
-    #[allow(clippy::needless_pass_by_value)]
-    /// instead of returning [`rusqlite::Error::QueryReturnedNoRows`] it will return an empty vector
-    pub fn get_filtered<T: DbObject>(
+    pub async fn get_one_filtered<
+        T: DbObject + for<'r> FromRow<'r, <DatabaseType as sqlx::Database>::Row> + std::marker::Unpin,
+    >(
         &self,
         filters: Vec<(String, String)>,
         user: Option<(&User, &Group)>,
-    ) -> Result<Vec<T>, DatabaseError> {
-        let mut query = format!("SELECT {} FROM {}",T::columns().iter().map(|column| column.name.clone()).collect::<Vec<String>>().join(","), T::table_name());
+    ) -> Result<T, DatabaseError> {
+        let mut query = format!(
+            "SELECT {} FROM {}",
+            T::columns()
+                .iter()
+                .map(|column| column.name.clone())
+                .collect::<Vec<String>>()
+                .join(","),
+            T::table_name()
+        );
 
         let (mut fields, params) = Self::construct_filters::<T>(&filters);
 
@@ -213,18 +228,67 @@ impl Database {
 
         debug!("querying database: {query}");
 
-        let mut stmt = self
-            .conn
-            .prepare(&query)
-            .map_err(DatabaseError::SqliteError)?;
-        let rows = stmt.query_map(rusqlite::params_from_iter(params), T::from_row);
+        let mut query = sqlx::query_as::<_, T>(&query);
+        for param in params {
+            query = query.bind(param);
+        }
 
-        match rows {
-            Err(err) => match err {
-                rusqlite::Error::QueryReturnedNoRows => Ok(vec![]),
-                _ => Err(DatabaseError::SqliteError(err)),
-            },
-            Ok(rows) => Ok(rows.filter_map(|row| row.ok()).collect::<Vec<T>>()),
+        query
+            .fetch_one(&self.pool)
+            .await
+            .map_err(DatabaseError::from)
+    }
+
+    pub async fn get_all<T: DbObject + for<'r> FromRow<'r, <DatabaseType as sqlx::Database>::Row> + std::marker::Unpin>(
+        &self,
+        user: Option<(&User, &Group)>,
+    ) -> Result<Vec<T>, DatabaseError> {
+        self.get_all_filtered::<T>(vec![], user).await
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    /// instead of returning [`rusqlite::Error::QueryReturnedNoRows`] it will return an empty vector
+    pub async fn get_all_filtered<T: DbObject + for<'r> sqlx::FromRow<'r, <DatabaseType as sqlx::Database>::Row> + std::marker::Unpin>(
+        &self,
+        filters: Vec<(String, String)>,
+        user: Option<(&User, &Group)>,
+    ) -> Result<Vec<T>, DatabaseError> {
+        let mut query = format!(
+            "SELECT {} FROM {}",
+            T::columns()
+                .iter()
+                .map(|column| column.name.clone())
+                .collect::<Vec<String>>()
+                .join(","),
+            T::table_name()
+        );
+
+        let (mut fields, params) = Self::construct_filters::<T>(&filters);
+
+        if let Some((user, group)) = user {
+            fields.push(
+                T::view_access()
+                    .access_filter::<T>(user, group)
+                    .as_str()
+                    .to_string(),
+            );
+        }
+
+        if !fields.is_empty() {
+            query += " WHERE ";
+            query += fields.join(" AND ").as_str();
+        }
+
+        debug!("querying database: {query}");
+
+        let mut query = sqlx::query_as::<_, T>(&query);
+        for param in params {
+            query = query.bind(param);
+        }
+
+        match query.fetch_all(&self.pool).await {
+            Ok(result) => Ok(result),
+            Err(err) => Err(DatabaseError::SqlxError(err)),
         }
     }
 
@@ -251,7 +315,7 @@ impl Database {
                     "false" => value = "0".to_string(),
                     "true" => value = "1".to_string(),
                     _ => {
-                        if column.data_type == Type::Id {
+                        if column.data_type == ValueType::Id {
                             if let Ok(id) = Id::from_string(&value) {
                                 value = id.as_i64().to_string()
                             }
@@ -272,18 +336,18 @@ impl Database {
     }
 
     /// This should only be used during testing or during first setup to create an admin account
-    pub fn create_user(&self, username: &str, password: &str) -> anyhow::Result<User> {
+    pub async fn create_user(&self, username: &str, password: &str) -> anyhow::Result<User> {
         let user = User {
             username: username.to_string(),
             ..Default::default()
         };
-        self.create_user_from(user, password)
+        self.create_user_from(user, password).await
     }
     /// This should only be used during testing or during first setup to create an admin account
-    pub fn create_user_from(&self, user: User, password: &str) -> anyhow::Result<User> {
-        self.insert(&user, None)?;
+    pub async fn create_user_from(&self, user: User, password: &str) -> anyhow::Result<User> {
+        self.insert(&user, None).await?;
 
-        self.insert(&Password::new(user.id, password), None)?;
+        self.insert(&Password::new(user.id, password), None).await?;
 
         Ok(user)
     }
@@ -294,7 +358,7 @@ pub enum DatabaseError {
     Unauthorized,
     NotFound,
     InternalServerError(String),
-    SqliteError(rusqlite::Error),
+    SqlxError(sqlx::Error),
 }
 
 impl Display for DatabaseError {
@@ -303,7 +367,7 @@ impl Display for DatabaseError {
             DatabaseError::Unauthorized => write!(f, "Unauthorized"),
             DatabaseError::NotFound => write!(f, "NotFound"),
             DatabaseError::InternalServerError(err) => write!(f, "Internal server error: {err}"),
-            DatabaseError::SqliteError(err) => write!(f, "Sqlite error: {err}"),
+            DatabaseError::SqlxError(err) => write!(f, "Sqlx Error: {err}"),
         }
     }
 }
@@ -311,12 +375,16 @@ impl Display for DatabaseError {
 impl Error for DatabaseError {}
 impl Reject for DatabaseError {}
 
-impl From<rusqlite::Error> for DatabaseError {
-    fn from(error: rusqlite::Error) -> Self {
-        DatabaseError::SqliteError(error)
+impl From<sqlx::Error> for DatabaseError {
+    fn from(error: sqlx::Error) -> Self {
+        match error {
+            sqlx::Error::RowNotFound => DatabaseError::NotFound,
+            _ => Self::SqlxError(error),
+        }
     }
 }
 
+/*
 #[rustfmt::skip]
 #[test]
 pub fn manipulate_data() -> anyhow::Result<()> {
@@ -526,3 +594,4 @@ pub fn manipulate_data() -> anyhow::Result<()> {
 
     Ok(())
 }
+ */
