@@ -56,34 +56,34 @@ pub trait DbObject: Send + Sync {
 
     #[allow(unused)]
     /// Called before the object gets inserted into the database
-    async fn before_create(&self, database: &Database) -> Result<(), DatabaseError> {
+    fn before_create(&self, database: &Database) -> impl std::future::Future<Output = Result<(), DatabaseError>> + std::marker::Send {async {
         Ok(())
-    }
+    }}
     #[allow(unused)]
     /// Called after the object gets inserted into the database
-    async fn before_update(&self, database: &Database) -> Result<(), DatabaseError> {
+    fn before_update(&self, database: &Database) -> impl std::future::Future<Output = Result<(), DatabaseError>> + std::marker::Send {async {
         Ok(())
-    }
+    }}
     #[allow(unused)]
     /// Called before the object gets updated in the database
-    async fn before_delete(&self, database: &Database) -> Result<(), DatabaseError> {
+    fn before_delete(&self, database: &Database) -> impl std::future::Future<Output = Result<(), DatabaseError>> + std::marker::Send {async {
         Ok(())
-    }
+    }}
     #[allow(unused)]
     /// Called after the object gets updated the database
-    async fn after_create(&self, database: &Database) -> Result<(), DatabaseError> {
+    fn after_create(&self, database: &Database)  -> impl std::future::Future<Output = Result<(), DatabaseError>> + std::marker::Send {async {
         Ok(())
-    }
+    }}
     #[allow(unused)]
     /// Called before the object gets removed from the database
-    async fn after_update(&self, database: &Database) -> Result<(), DatabaseError> {
+    fn after_update(&self, database: &Database)  -> impl std::future::Future<Output = Result<(), DatabaseError>> + std::marker::Send {async {
         Ok(())
-    }
+    }}
     #[allow(unused)]
     /// Called before the object gets removed from the database
-    async fn after_delete(&self, database: &Database) -> Result<(), DatabaseError> {
+    fn after_delete(&self, database: &Database)  -> impl std::future::Future<Output = Result<(), DatabaseError>> + std::marker::Send {async {
         Ok(())
-    }
+    }}
 
     /// the name of the table SQL table the object will be stored in. used also for api routing
     fn table_name() -> &'static str;
@@ -91,12 +91,14 @@ pub trait DbObject: Send + Sync {
     /// a vector of [`Column`]s to be stored in the database
     fn columns() -> Vec<Column>;
     /// returns object's [`Id`]
-    fn get_id(&self) -> Id;
+    fn id(&self) -> Id;
     /// the index of the column with the [`Id`] of the object. default is 0
     fn id_column_index() -> usize {
         0
     }
-    fn owner_id(&self) -> Option<Id> { None }
+    fn owner_id(&self) -> Option<Id> {
+        None
+    }
     /// returns a [`Column`] at a specified index
     fn get_column(name: &str) -> Option<Column> {
         Self::columns()

@@ -1,10 +1,12 @@
 use crate::api::util::rejections;
+use crate::database;
 use crate::database::objects::{Session, User};
 use crate::database::{Database, DatabaseError};
 use log::error;
 use std::convert::Infallible;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use uuid::Uuid;
 use warp::{Filter, Rejection};
 
 pub fn with_db(
@@ -13,10 +15,10 @@ pub fn with_db(
     warp::any().map(move || db.clone())
 }
 
-pub fn with_bearer_token() -> impl Filter<Extract = (String,), Error = Rejection> + Clone {
+pub fn with_bearer_token() -> impl Filter<Extract = (Uuid,), Error = Rejection> + Clone {
     warp::header::<String>("Authorization").and_then(|header: String| async move {
         if header[0..7] == *"Bearer " {
-            Ok(header[7..].to_string())
+            Ok(Uuid::parse_str(&header[7..]).map_err(|_| rejections::InvalidBearerToken)?)
         } else {
             Err(warp::reject::custom(rejections::InvalidBearerToken))
         }
@@ -28,12 +30,10 @@ pub fn with_auth(
     with_bearer_token()
         .or(warp::cookie("sessionToken"))
         .unify()
-        .and_then(move |token: String| {
+        .and_then(move |token: Uuid| {
             let database = database.clone();
             async move {
-                let session = database
-                    .get_one_filtered::<Session>(vec![("token".to_string(), token)], None)
-                    .await;
+                let session = database.get_where::<Session, _>("token", token, None).await;
                 if session.is_err() {
                     return Err(warp::reject::custom(rejections::Unauthorized));
                 }

@@ -1,15 +1,14 @@
 use crate::api::handlers::{ApiCreate, ApiGet, ApiList, ApiObject, ApiRemove};
 use crate::database::objects::{DbObject, FromJson, User};
-use crate::database::types::{Access, Column, Id, ValueType};
-use crate::database::{Database, DatabaseType};
+use crate::database::types::{Access, Column, Id};
+use crate::database::{Database, DatabaseType, ValueType};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{Arguments, FromRow, IntoArguments, Row};
 use std::fmt::Debug;
 use std::str::FromStr;
 use std::sync::Arc;
-use sqlx::types::time::Time;
-use uuid::{Timestamp, Uuid};
+use uuid::Uuid;
 use warp::{Filter, Rejection, Reply};
 use warp_rate_limit::RateLimitConfig;
 
@@ -18,6 +17,7 @@ pub struct InviteLink {
     /// Unique [`Id`] of the invite link
     pub id: Id,
     /// A [`Token`] that allows for creation of an account. expires after use.
+    #[serde(with = "uuid::serde::simple")]
     pub invite_token: uuid::Uuid,
     /// The user who created the link
     pub creator_id: Id,
@@ -44,7 +44,9 @@ impl DbObject for InviteLink {
     fn columns() -> Vec<Column> {
         vec![
             Column::new("id", ValueType::Id).primary_key(),
-            Column::new("invite_token", ValueType::Text).not_null().unique(),
+            Column::new("invite_token", ValueType::Text)
+                .not_null()
+                .unique(),
             Column::new("creator_id", ValueType::Id)
                 .not_null()
                 .references("users(id)"),
@@ -58,7 +60,7 @@ impl DbObject for InviteLink {
         ]
     }
 
-    fn get_id(&self) -> Id {
+    fn id(&self) -> Id {
         self.id
     }
 }
@@ -126,10 +128,7 @@ impl ApiObject for InviteLink {
                 database.clone(),
                 rate_limit_config.clone(),
             ))
-            .or(Self::remove_filter(
-                database,
-                rate_limit_config.clone(),
-            ))
+            .or(Self::remove_filter(database, rate_limit_config.clone()))
     }
 }
 impl ApiList for InviteLink {}

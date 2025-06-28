@@ -1,14 +1,14 @@
 use crate::api::handlers::{ApiCreate, ApiGet, ApiList, ApiObject, ApiRemove, ApiUpdate};
-use crate::database::objects::{DbObject, FromJson, InviteLink, UpdateJson, User};
-use crate::database::types::{Access, Column, Id, ValueType};
+use crate::database::objects::{DbObject, FromJson, UpdateJson, User};
+use crate::database::types::{Access, Column, Id};
+use crate::database::{Database, DatabaseType, ValueType};
 use crate::minecraft::server::ServerConfigLimit;
 use serde::{Deserialize, Deserializer, Serialize};
-use sqlx::{Arguments, Encode, Error, FromRow, IntoArguments, Row};
+use sqlx::{Arguments, Error, FromRow, IntoArguments, Row};
 use std::collections::HashMap;
 use std::sync::Arc;
 use warp::{Filter, Rejection, Reply};
 use warp_rate_limit::RateLimitConfig;
-use crate::database::{Database, DatabaseType};
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub struct Group {
@@ -17,15 +17,15 @@ pub struct Group {
     /// group's name
     pub name: String,
     /// limit of user's total allocatable memory in MiB. [`None`] means no limit
-    pub total_memory_limit: Option<i32>,
+    pub total_memory_limit: Option<u32>,
     /// limit of user's per-world allocatable memory in MiB. [`None`] means no limit
-    pub per_world_memory_limit: Option<i32>,
+    pub per_world_memory_limit: Option<u32>,
     /// how many worlds can a user create. [`None`] means no limit
-    pub world_limit: Option<i32>,
+    pub world_limit: Option<u32>,
     /// how many worlds can be enabled at a time. [`None`] means no limit
-    pub active_world_limit: Option<i32>,
+    pub active_world_limit: Option<u32>,
     /// how much storage is available to a user in MiB. [`None`] means no limit
-    pub storage_limit: Option<i32>,
+    pub storage_limit: Option<u32>,
     /// server.properties config limitation. for more info look at the description in the config file
     pub config_blacklist: Vec<String>,
     /// server.properties config limitation. for more info look at the description in the config file
@@ -71,7 +71,7 @@ impl DbObject for Group {
         ]
     }
 
-    fn get_id(&self) -> Id {
+    fn id(&self) -> Id {
         self.id
     }
 }
@@ -142,7 +142,7 @@ impl<'a> IntoArguments<'a, crate::database::DatabaseType> for Group {
 }
 
 impl ApiObject for Group {
-    fn filters (
+    fn filters(
         database: Arc<Database>,
         rate_limit_config: RateLimitConfig,
     ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
@@ -159,21 +159,18 @@ impl ApiObject for Group {
                 database.clone(),
                 rate_limit_config.clone(),
             ))
-            .or(Self::remove_filter(
-                database,
-                rate_limit_config.clone(),
-            ))
+            .or(Self::remove_filter(database, rate_limit_config.clone()))
     }
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct JsonFrom {
     pub name: String,
-    pub total_memory_limit: Option<i32>,
-    pub per_world_memory_limit: Option<i32>,
-    pub world_limit: Option<i32>,
-    pub active_world_limit: Option<i32>,
-    pub storage_limit: Option<i32>,
+    pub total_memory_limit: Option<u32>,
+    pub per_world_memory_limit: Option<u32>,
+    pub world_limit: Option<u32>,
+    pub active_world_limit: Option<u32>,
+    pub storage_limit: Option<u32>,
     pub config_blacklist: Option<Vec<String>>,
     pub config_whitelist: Option<Vec<String>>,
     pub config_limits: Option<HashMap<String, ServerConfigLimit>>,
@@ -215,15 +212,15 @@ pub struct JsonUpdate {
     #[serde(default, deserialize_with = "deserialize_some")]
     pub avatar_id: Option<Option<Id>>,
     #[serde(default, deserialize_with = "deserialize_some")]
-    pub total_memory_limit: Option<Option<i32>>,
+    pub total_memory_limit: Option<Option<u32>>,
     #[serde(default, deserialize_with = "deserialize_some")]
-    pub per_world_memory_limit: Option<Option<i32>>,
+    pub per_world_memory_limit: Option<Option<u32>>,
     #[serde(default, deserialize_with = "deserialize_some")]
-    pub world_limit: Option<Option<i32>>,
+    pub world_limit: Option<Option<u32>>,
     #[serde(default, deserialize_with = "deserialize_some")]
-    pub active_world_limit: Option<Option<i32>>,
+    pub active_world_limit: Option<Option<u32>>,
     #[serde(default, deserialize_with = "deserialize_some")]
-    pub storage_limit: Option<Option<i32>>,
+    pub storage_limit: Option<Option<u32>>,
     #[serde(default, deserialize_with = "deserialize_some")]
     pub config_blacklist: Option<Vec<String>>,
     #[serde(default, deserialize_with = "deserialize_some")]

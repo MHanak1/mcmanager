@@ -3,8 +3,8 @@ use crate::api::handlers::{ApiCreate, ApiGet, ApiList, ApiObject, ApiRemove, Api
 use crate::config::CONFIG;
 use crate::database;
 use crate::database::objects::{DbObject, FromJson, Group, Mod, UpdateJson, World};
-use crate::database::types::{Access, Column, Id, ValueType};
-use crate::database::{Database, DatabaseError, DatabaseType};
+use crate::database::types::{Access, Column, Id};
+use crate::database::{Database, DatabaseError, DatabaseType, ValueType};
 use crate::minecraft::server::ServerConfigLimit;
 use async_trait::async_trait;
 use futures::future;
@@ -47,14 +47,14 @@ impl DbObject for User {
 
     // delete passwords and sessions. worlds and mods are handled asynchronously through `before_api_remove()`
     async fn before_delete(&self, database: &database::Database) -> Result<(), DatabaseError> {
-        if let Ok(passwords) = database.get_all_filtered::<Password>(vec![(String::from("user_id"), self.id.as_i64().to_string())], None/*in theory here the access restriction should be put but i couldn't be bothered with that*/).await {
+        if let Ok(passwords) = database.get_all_where::<Password, _>("user_id", self.id, None/*in theory here the access restriction should be put but i couldn't be bothered with that*/).await {
             //no idea why i am iterating here but couldn't hurt can it?
             for password in passwords {
                 database.remove(&password, None).await?;
             }
         }
 
-        if let Ok(sessions) = database.get_all_filtered::<Session>(vec![(String::from("user_id"), self.id.as_i64().to_string())], None/*in theory here the access restriction should be put but i couldn't be bothered with that*/).await {
+        if let Ok(sessions) = database.get_all_where::<Session, _>("user_id", self.id, None/*in theory here the access restriction should be put but i couldn't be bothered with that*/).await {
             for session in sessions {
                 database.remove(&session, None).await?;
             }
@@ -79,7 +79,7 @@ impl DbObject for User {
                 .default("true"),
         ]
     }
-    fn get_id(&self) -> Id {
+    fn id(&self) -> Id {
         self.id
     }
 }
@@ -184,10 +184,7 @@ impl ApiObject for User {
                 database.clone(),
                 rate_limit_config.clone(),
             ))
-            .or(Self::remove_filter(
-                database,
-                rate_limit_config.clone(),
-            ))
+            .or(Self::remove_filter(database, rate_limit_config.clone()))
     }
 }
 
@@ -203,7 +200,8 @@ impl ApiCreate for User {
     ) -> Result<(), DatabaseError> {
         database
             .insert(&Password::new(self.id, &json.password), None)
-            .await.expect("failed to create the password for the user.");
+            .await
+            .expect("failed to create the password for the user.");
         Ok(())
     }
 }
@@ -221,7 +219,8 @@ impl ApiUpdate for User {
                 Ok(password) => {
                     database
                         .remove(&password, None)
-                        .await.expect("failed to remove the password for the user");
+                        .await
+                        .expect("failed to remove the password for the user");
                 }
                 Err(err) => {
                     warn!("password not found for the user {}: {}", self.username, err);
@@ -230,16 +229,21 @@ impl ApiUpdate for User {
 
             database
                 .insert(&Password::new(self.id, &password), None)
-                .await.expect("update the password for the user");
+                .await
+                .expect("update the password for the user");
         }
         Ok(())
     }
 }
 #[async_trait]
 impl ApiRemove for User {
-    async fn before_api_delete(&self, database: Arc<Database>, user: &User) -> Result<(), DatabaseError> {
+    async fn before_api_delete(
+        &self,
+        database: Arc<Database>,
+        user: &User,
+    ) -> Result<(), DatabaseError> {
         info!("removing user {}", self.id);
-        let worlds = database.get_all_filtered::<World>(vec![(String::from("owner_id"), self.id.as_i64().to_string())], None/*in theory here the access restriction should be put but i couldn't be bothered with that*/).await?;
+        let worlds = database.get_all_where::<World, _>("owner_id", self.id, None/*in theory here the access restriction should be put but i couldn't be bothered with that*/).await?;
         let worlds_task = async {
             let tasks = worlds.iter().map(|world| async {
                 if let Err(err) = world.before_api_delete(database.clone(), user).await {
@@ -255,7 +259,7 @@ impl ApiRemove for User {
             future::join_all(tasks).await
         };
 
-        let mods = database.get_all_filtered::<Mod>(vec![(String::from("owner_id"), self.id.as_i64().to_string())], None/*in theory here the access restriction should be put but i couldn't be bothered with that*/).await?;
+        let mods = database.get_all_where::<Mod, _>("owner_id", self.id, None/*in theory here the access restriction should be put but i couldn't be bothered with that*/).await?;
         let mods_task = async {
             let database = database.clone();
             let tasks = mods.iter().map(|mcmod| async {
@@ -289,14 +293,14 @@ impl User {
 }
 
 pub mod password {
-    use std::str::FromStr;
-    use crate::database::objects::{DbObject, Group, User};
-    use crate::database::types::{Access, Column, Id, ValueType};
-    use argon2::password_hash::{PasswordHashString, SaltString};
+    use crate::database::objects::DbObject;
+    use crate::database::types::{Access, Column, Id};
+    use crate::database::{DatabaseType, ValueType};
     use argon2::password_hash::rand_core::OsRng;
-    use argon2::{Argon2, PasswordHash, PasswordHasher};
-    use sqlx::{Arguments, Encode, Error, FromRow, IntoArguments, Row};
-    use crate::database::DatabaseType;
+    use argon2::password_hash::{PasswordHashString, SaltString};
+    use argon2::{Argon2, PasswordHasher};
+    use sqlx::{Arguments, Error, FromRow, IntoArguments, Row};
+    use std::str::FromStr;
 
     /// `user_id`: unique [`Id`] of the user to whom the password belongs
     ///
@@ -315,9 +319,11 @@ pub mod password {
 
             Self {
                 user_id,
-                hash: PasswordHashString::from(argon
-                    .hash_password(password.as_bytes(), &salt)
-                    .expect("could not hash password")),
+                hash: PasswordHashString::from(
+                    argon
+                        .hash_password(password.as_bytes(), &salt)
+                        .expect("could not hash password"),
+                ),
             }
         }
     }
@@ -344,11 +350,11 @@ pub mod password {
                 Column::new("user_id", ValueType::Id)
                     .primary_key()
                     .references("users(id)"),
-                Column::new("hash", ValueType::Text).not_null(),
+                Column::new("hash", ValueType::Text).not_null().hidden(),
             ]
         }
 
-        fn get_id(&self) -> Id {
+        fn id(&self) -> Id {
             self.user_id
         }
     }
@@ -357,7 +363,9 @@ pub mod password {
         fn into_arguments(self) -> <DatabaseType as sqlx::Database>::Arguments<'a> {
             let mut arguments = <DatabaseType as sqlx::Database>::Arguments::default();
             arguments.add(self.user_id).expect("Failed to add argument");
-            arguments.add(self.hash.to_string()).expect("Failed to add argument");
+            arguments
+                .add(self.hash.to_string())
+                .expect("Failed to add argument");
             arguments
         }
     }
@@ -366,7 +374,12 @@ pub mod password {
         fn from_row(row: &'_ <DatabaseType as sqlx::Database>::Row) -> Result<Self, Error> {
             Ok(Self {
                 user_id: row.get(0),
-                hash: PasswordHashString::from_str(row.get(1)).map_err(|err| { sqlx::Error::ColumnDecode { index: "hash".to_string(), source: Box::new(err) } })?,
+                hash: PasswordHashString::from_str(row.get(1)).map_err(|err| {
+                    sqlx::Error::ColumnDecode {
+                        index: "hash".to_string(),
+                        source: Box::new(err),
+                    }
+                })?,
             })
         }
     }
@@ -375,14 +388,13 @@ pub mod password {
 pub mod session {
     use crate::api::handlers::{ApiCreate, ApiGet, ApiList, ApiObject, ApiRemove};
     use crate::database::objects::{DbObject, FromJson, User};
-    use crate::database::types::{Access, Column, Id, ValueType};
-    use crate::database::{Database, DatabaseError, DatabaseType};
+    use crate::database::types::{Access, Column, Id};
+    use crate::database::{Database, DatabaseType, ValueType};
     use chrono::{DateTime, Utc};
     use serde::{Deserialize, Serialize, Serializer};
-    use sqlx::{Arguments, Encode, Error, FromRow, IntoArguments, Row};
+    use sqlx::{Arguments, Error, FromRow, IntoArguments, Row};
     use std::str::FromStr;
     use std::sync::Arc;
-    use tokio::sync::Mutex;
     use uuid::Uuid;
     use warp::{Filter, Rejection, Reply};
     use warp_rate_limit::RateLimitConfig;
@@ -422,7 +434,7 @@ pub mod session {
         fn columns() -> Vec<Column> {
             vec![
                 Column::new("user_id", ValueType::Id).references("users(id)"),
-                Column::new("token", ValueType::Text).primary_key(),
+                Column::new("token", ValueType::Text).primary_key().hidden(),
                 Column::new("created", ValueType::Datetime).not_null(),
                 Column::new("expires", ValueType::Boolean)
                     .not_null()
@@ -430,7 +442,7 @@ pub mod session {
             ]
         }
 
-        fn get_id(&self) -> Id {
+        fn id(&self) -> Id {
             self.user_id
         }
     }
@@ -516,10 +528,7 @@ pub mod session {
                     database.clone(),
                     rate_limit_config.clone(),
                 ))
-                .or(Self::remove_filter(
-                    database,
-                    rate_limit_config.clone(),
-                ))
+                .or(Self::remove_filter(database, rate_limit_config.clone()))
         }
     }
 

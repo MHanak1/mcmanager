@@ -1,20 +1,26 @@
+use std::io::Read;
 use crate::api::util::rejections;
 use crate::api::util::rejections::BadRequest;
 use crate::api::{auth, filters};
 use crate::config::CONFIG;
 use crate::database::objects::{DbObject, FromJson, InviteLink, UpdateJson, User, World};
-use crate::database::types::{Id};
+use crate::database::types::Id;
 pub(crate) use crate::database::{Database, DatabaseError};
+use crate::database::{DatabaseType, QueryBuilder, ValueType, WhereOperand};
 use async_trait::async_trait;
+use futures::StreamExt;
 use log::error;
 use serde::{Deserialize, Serialize};
-use sqlx::{FromRow, IntoArguments};
+use sqlx::{Encode, FromRow, IntoArguments, Type};
+use std::str::FromStr;
 use std::sync::Arc;
+use chrono::DateTime;
 use tokio::sync::Mutex;
+use uuid::Uuid;
 use warp::http::StatusCode;
 use warp::{Filter, Rejection, Reply, reject};
 use warp_rate_limit::{RateLimitConfig, RateLimitInfo};
-use crate::database::DatabaseType;
+use crate::util::base64::base64_decode;
 
 pub trait ApiObject: DbObject {
     fn filters(
@@ -38,11 +44,99 @@ where
         user: User,
         filters: Vec<(String, String)>,
     ) -> Result<impl warp::Reply, warp::Rejection> {
+
         let group = user.group(database.clone(), None).await;
-        let objects = {
-            database
-                .get_all_filtered::<Self>(filters, Some((&user, &group)))
+        let objects: Vec<Self> = {
+            let mut query = QueryBuilder::select::<Self>();
+            for (column, value) in filters {
+
+                let (value, filter_type) = {
+                    if let Some(value) = value.strip_prefix("!") {
+                        (value.to_string(), WhereOperand::NotEqual)
+                    } else if let Some(value) = value.strip_prefix("<=") {
+                        (value.to_string(), WhereOperand::LessThanOrEqual)
+                    } else if let Some(value) = value.strip_prefix(">=") {
+                        (value.to_string(), WhereOperand::GreaterThanOrEqual)
+                    } else if let Some(value) = value.strip_prefix("<") {
+                        (value.to_string(), WhereOperand::LessThan)
+                    } else if let Some(value) = value.strip_prefix(">") {
+                        (value.to_string(), WhereOperand::GreaterThan)
+                    } else { (value, WhereOperand::Equal) }
+
+                };
+
+                if let Some(column) = Self::get_column(&column) {
+                    if !column.hidden {
+                        if value.to_ascii_lowercase() == "null" && column.nullable {
+                            match filter_type {
+                                WhereOperand::Equal => {
+                                    query.where_null(column.name());
+                                }
+                                WhereOperand::NotEqual => {
+                                    query.where_not_null(column.name());
+                                }
+                                _ => {
+                                    //what do you mean you want "less than or equal to null"?
+                                }
+                            }
+                        } else {
+                            match column.data_type {
+                                ValueType::Id => {
+                                    if let Ok(value) = Id::from_string(&value) {
+                                        query.where_operand(column.name(), value, filter_type);
+                                    }
+                                }
+                                ValueType::Token => {
+                                    if let Ok(value) = Uuid::from_str(&value) {
+                                        query.where_operand(column.name(), value, filter_type);
+                                    }
+                                }
+                                ValueType::Datetime => {
+                                    if let Ok(value) = DateTime::parse_from_rfc3339(&value) {
+                                        query.where_operand(column.name(), value, filter_type);
+                                    }
+                                },
+                                ValueType::Float => {
+                                    if let Ok(value) = f32::from_str(&value) {
+                                        query.where_operand(column.name(), value, filter_type);
+                                    }
+                                },
+                                ValueType::Integer(true) => {
+                                    if let Ok(value) = i64::from_str(&value) {
+                                        query.where_operand(column.name(), value, filter_type);
+                                    }
+                                },
+                                ValueType::Integer(false) => {
+                                    if let Ok(value) = u32::from_str(&value) {
+                                        query.where_operand(column.name(), value, filter_type);
+                                    }
+                                },
+                                ValueType::Boolean => {
+                                    if let Ok(value) = bool::from_str(&value) {
+                                        query.where_operand(column.name(), value, filter_type);
+                                    }
+                                }
+                                // this may work :shrug:
+                                ValueType::Blob => {
+                                    if let Ok(value) = base64_decode(&value) {
+                                        query.where_operand(column.name(), value, filter_type);
+                                    }
+                                }
+                                ValueType::Text => {
+                                    query.where_operand(column.name(), value, filter_type)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            query
+                .query_builder
+                .build_query_as()
+                .fetch_all(&database.pool)
                 .await
+                .map_err(DatabaseError::from)
                 .map_err(handle_database_error)?
         };
         Ok(warp::reply::with_status(
@@ -68,7 +162,8 @@ where
     }
 }
 #[async_trait]
-pub trait ApiGet: ApiObject + for<'r> FromRow<'r, <DatabaseType as sqlx::Database>::Row> + Unpin
+pub trait ApiGet:
+    ApiObject + for<'r> FromRow<'r, <DatabaseType as sqlx::Database>::Row> + Unpin
 where
     Self: Sized + 'static,
     Self: Serialize,
@@ -125,7 +220,7 @@ where
         database: Arc<Database>,
         user: User,
         data: Self::JsonFrom,
-    ) -> Result<impl warp::Reply, warp::Rejection> {
+    ) -> Result<impl warp::Reply, warp::Rejection>{
         let mut data = data;
         let group = user.group(database.clone(), None).await;
         //in theory this is redundant, as database::insert checks it as well, but better safe than sorry
@@ -154,7 +249,7 @@ where
             warp::reply::with_header(
                 warp::reply::json(&object),
                 warp::http::header::LOCATION,
-                format!("api/{}/{}", Self::table_name(), object.get_id()),
+                format!("api/{}/{}", Self::table_name(), object.id()),
             ),
             StatusCode::CREATED,
         ))
@@ -339,14 +434,22 @@ where
 
     #[allow(unused)]
     /// runs before the database entry deletion
-    async fn before_api_delete(&self, database: Arc<Database>, user: &User) -> Result<(), DatabaseError> {
+    async fn before_api_delete(
+        &self,
+        database: Arc<Database>,
+        user: &User,
+    ) -> Result<(), DatabaseError> {
         Ok(())
     }
     #[allow(unused)]
     /// runs after the database entry deletion
     ///
     /// this returns a [`Result`], but there is no mechanism to undo the entry deletion. if this fails it should probably cause the program to panic
-    async fn after_api_delete(&self, database: Arc<Database>, user: &User) -> Result<(), DatabaseError> {
+    async fn after_api_delete(
+        &self,
+        database: Arc<Database>,
+        user: &User,
+    ) -> Result<(), DatabaseError> {
         Ok(())
     }
 
@@ -375,9 +478,9 @@ pub(crate) fn handle_database_error(err: DatabaseError) -> warp::Rejection {
         DatabaseError::InternalServerError(error) => {
             reject::custom(rejections::InternalServerError { error })
         }
-        DatabaseError::SqlxError(error) => {
-            reject::custom(rejections::InternalServerError { error: error.to_string() })
-        }
+        DatabaseError::SqlxError(error) => reject::custom(rejections::InternalServerError {
+            error: error.to_string(),
+        }),
     }
 }
 
@@ -424,15 +527,16 @@ pub async fn user_register(
     let mut token = None;
     for (parameter, value) in query {
         if parameter == "token" {
-            token = Some(value.trim().to_string());
+            token =
+                Some(Uuid::from_str(&value).map_err(|_| reject::custom(rejections::BadRequest))?);
             break;
         }
     }
+
     let mut can_continue = false;
     let invite = if let Some(token) = token {
-        let invites: Vec<InviteLink> = database
-            .get_all_filtered(vec![("invite_token".parse()?, String::from(token))], None).await?;
-        if let Some(invite) = invites.first().cloned() {
+        let invite: Result<InviteLink, _> = database.get_where("invite_token", token, None).await;
+        if let Ok(invite) = invite {
             can_continue = true;
             Some(invite)
         } else {
@@ -484,12 +588,12 @@ pub async fn user_auth(
     Ok(warp::reply::with_status(
         warp::reply::with_header(
             warp::reply::json(&TokenReply {
-                token: session.token.to_string(),
+                token: session.token.as_simple().to_string(),
             }),
             "Set-Cookie",
             format!(
                 "sessionToken={}; Path=/api; HttpOnly; Max-Age=1209600",
-                session.token
+                session.token.as_simple().to_string()
             ),
         ),
         StatusCode::CREATED,
@@ -504,10 +608,12 @@ pub async fn user_info(
     Ok(warp::reply::json(&user))
 }
 
-pub async fn check_free(
+pub async fn check_free<
+    T: for<'r> Encode<'r, DatabaseType> + Type<DatabaseType> + Clone + Send + Sync,
+>(
     _rate_limit_info: RateLimitInfo,
     field: String,
-    value: String,
+    value: T,
     database: Arc<Database>,
 ) -> Result<impl warp::Reply, warp::Rejection> {
     #[derive(Serialize)]
@@ -517,50 +623,43 @@ pub async fn check_free(
     match field.trim() {
         "username" => {
             match database
-                .get_all_filtered::<User>(vec![(String::from("username"), value)], None).await
+                .get_where::<User, _>("username", value, None)
+                .await
             {
-                Ok(users) => {
-                    if users.is_empty() {
-                        Ok(warp::reply::with_status(
-                            warp::reply::json(&Used { taken: false }),
-                            StatusCode::OK,
-                        ))
-                    } else {
-                        Ok(warp::reply::with_status(
-                            warp::reply::json(&Used { taken: true }),
-                            StatusCode::OK,
-                        ))
-                    }
+                Ok(user) => {
+                    Ok(warp::reply::with_status(
+                        warp::reply::json(&Used { taken: false }),
+                        StatusCode::OK,
+                    ))
                 }
-                Err(err) => Err(warp::reject::custom(rejections::InternalServerError::from(
-                    err,
-                ))),
+                Err(err) => {
+                    Ok(warp::reply::with_status(
+                        warp::reply::json(&Used { taken: true }),
+                        StatusCode::OK,
+                    ))
+                }
             }
         }
         "hostname" => {
             match database
-                .get_all_filtered::<World>(vec![(String::from("hostname"), value)], None).await
+                .get_where::<World, _>("hostname", value, None)
+                .await
             {
-                Ok(worlds) => {
-                    if worlds.is_empty() {
-                        Ok(warp::reply::with_status(
-                            warp::reply::json(&Used { taken: false }),
-                            StatusCode::OK,
-                        ))
-                    } else {
-                        Ok(warp::reply::with_status(
-                            warp::reply::json(&Used { taken: true }),
-                            StatusCode::OK,
-                        ))
-                    }
+                Ok(world) => {
+                    Ok(warp::reply::with_status(
+                        warp::reply::json(&Used { taken: false }),
+                        StatusCode::OK,
+                    ))
                 }
-                Err(err) => Err(warp::reject::custom(rejections::InternalServerError::from(
-                    err,
-                ))),
+                Err(err) => {
+                    Ok(warp::reply::with_status(
+                        warp::reply::json(&Used { taken: true }),
+                        StatusCode::OK,
+                    ))
+                }
             }
         }
         _ => {
-            println!("):");
             Err(warp::reject::custom(rejections::MethodNotAllowed))
         }
     }

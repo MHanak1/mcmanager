@@ -1,9 +1,9 @@
-use std::sync::Arc;
 use crate::database::objects::{DbObject, Password, Session, User};
 use crate::database::{Database, DatabaseError};
-use argon2::{PasswordHash, PasswordHasher, PasswordVerifier};
 use argon2::password_hash::{Salt, SaltString};
+use argon2::{PasswordHash, PasswordHasher, PasswordVerifier};
 use log::debug;
+use std::sync::Arc;
 use uuid::Uuid;
 
 pub async fn try_user_auth(
@@ -11,12 +11,7 @@ pub async fn try_user_auth(
     password: &str,
     database: Arc<Database>,
 ) -> Result<Session, DatabaseError> {
-    let user: Result<User, _> = database
-        .get_one_filtered(
-            vec![(String::from("username"), String::from(username))],
-            None,
-        )
-        .await;
+    let user: Result<User, _> = database.get_where("username", username.to_string(), None).await;
 
     let argon2 = argon2::Argon2::default();
 
@@ -39,7 +34,10 @@ pub async fn try_user_auth(
 
     let argon2 = argon2::Argon2::default();
 
-   if argon2.verify_password(password.as_ref(), &user_password.hash.password_hash()).is_err() {
+    if argon2
+        .verify_password(password.as_ref(), &user_password.hash.password_hash())
+        .is_err()
+    {
         debug!("rejecting auth for user {username}, password is invalid");
         return Err(DatabaseError::Unauthorized);
     }
@@ -64,7 +62,7 @@ fn bollocks_hash() {
     let _ = argon2.hash_password_into(b"RandomPassword", b"RandomSalt", &mut [0u8; 32]);
 }
 
-pub async fn get_user(token: &str, database: Arc<Database>) -> Result<User, DatabaseError> {
+pub async fn get_user(token: Uuid, database: Arc<Database>) -> Result<User, DatabaseError> {
     /*
     let session = database
         .conn
@@ -76,9 +74,7 @@ pub async fn get_user(token: &str, database: Arc<Database>) -> Result<User, Data
         .map_err(DatabaseError::SqlxError)?;
      */
 
-    let session: Session = database
-        .get_one_filtered(vec![(String::from("token"), String::from(token))], None)
-        .await?;
+    let session: Session = database.get_where("token", token, None).await?;
 
     Ok(database.get_one::<User>(session.user_id, None).await?)
 }

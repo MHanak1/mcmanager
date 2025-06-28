@@ -1,12 +1,11 @@
 use crate::api::handlers::{ApiCreate, ApiGet, ApiList, ApiObject, ApiRemove, ApiUpdate};
-use crate::database::Database;
-use crate::database::objects::{DbObject, FromJson, Mod, UpdateJson, User};
-use crate::database::types::{Access, Column, Id, ValueType};
+use crate::database::objects::{DbObject, FromJson, UpdateJson, User};
+use crate::database::types::{Access, Column, Id};
+use crate::database::{Database, ValueType};
 use serde::{Deserialize, Serialize};
-use sqlx::{Arguments, Encode, FromRow, IntoArguments};
+use sqlx::{Arguments, FromRow, IntoArguments};
 use std::fmt::Debug;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 use warp::{Filter, Rejection, Reply};
 use warp_rate_limit::RateLimitConfig;
 
@@ -46,7 +45,7 @@ impl DbObject for ModLoader {
                 .default("false"),
         ]
     }
-    fn get_id(&self) -> Id {
+    fn id(&self) -> Id {
         self.id
     }
 }
@@ -115,10 +114,7 @@ impl ApiObject for ModLoader {
                 database.clone(),
                 rate_limit_config.clone(),
             ))
-            .or(Self::remove_filter(
-                database,
-                rate_limit_config.clone(),
-            ))
+            .or(Self::remove_filter(database, rate_limit_config.clone()))
     }
 }
 

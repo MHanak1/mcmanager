@@ -2,11 +2,12 @@ use crate::api::filters;
 use crate::api::handlers::ApiObject;
 use crate::config;
 use crate::config::CONFIG;
-use crate::database::Database;
 use crate::database::objects::{Group, InviteLink, Mod, ModLoader, Session, User, Version, World};
+use crate::database::{Database, DatabaseType};
 use crate::minecraft::velocity::{InternalVelocityServer, VelocityServer};
 use crate::{api, util};
 use log::{error, info};
+use sqlx::Encode;
 use sqlx::any::AnyPoolOptions;
 use sqlx::sqlite::SqlitePoolOptions;
 use std::io::Write;
@@ -19,6 +20,7 @@ use std::time::Duration;
 use test_log::test;
 use tokio::sync::Mutex;
 use warp::Filter;
+use warp_rate_limit::RateLimitInfo;
 
 #[tokio::main]
 pub async fn main() -> anyhow::Result<()> {
@@ -54,7 +56,10 @@ pub async fn main() -> anyhow::Result<()> {
         .connect("sqlite://data/database.db")
         .await?;
     let database = Database { pool };
-    database.init().await.expect("failed to initialize database");
+    database
+        .init()
+        .await
+        .expect("failed to initialize database");
     let config_path = util::dirs::base_dir().join("config.toml");
     if !config_path.exists() {
         let mut config_file = std::fs::File::create(config_path)?;
@@ -69,7 +74,6 @@ pub async fn run(database: Database, config: config::Config) {
     util::dirs::init_dirs().expect("Failed to initialize the data directory");
 
     let database = Arc::new(database);
-
 
     let limit = config.public_routes_rate_limit;
 

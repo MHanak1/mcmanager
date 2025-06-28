@@ -16,7 +16,6 @@ pub struct Config {
     pub private_routes_rate_limit: (u32, u64),
     pub require_invite_to_register: bool,
     pub minecraft_server_type: ServerType,
-    pub internal: InternalConfig,
     pub remote: RemoteConfig,
     pub world: WorldConfig,
     pub user_defaults: UserDefaults,
@@ -29,11 +28,6 @@ pub struct Config {
 pub enum ServerType {
     Internal,
     Remote,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct InternalConfig {
-    pub launch_command: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]

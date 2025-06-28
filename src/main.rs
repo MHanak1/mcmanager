@@ -10,22 +10,27 @@ use mcmanager::minecraft::velocity::{InternalVelocityServer, VelocityServer};
 use mcmanager::{bin, util};
 use serde::Deserialize;
 use sqlx::any::AnyPoolOptions;
-use sqlx::sqlite::SqlitePoolOptions;
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+use sqlx::{SqliteConnection, SqlitePool};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
 use std::time::Duration;
+use warp::fs::file;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     env_logger::init();
     util::dirs::init_dirs().expect("Failed to initialize the data directory");
 
-    let pool = SqlitePoolOptions::new()
-        .max_connections(5)
-        .connect("sqlite://data/database.db")
-        .await?;
+    let pool = SqlitePool::connect_with(
+        SqliteConnectOptions::new()
+            .filename(util::dirs::data_dir().join("database.db"))
+            .create_if_missing(true),
+    )
+    .await?;
+
     let database = Database { pool };
     database.init().await.expect("Failed to init database");
 
@@ -151,21 +156,25 @@ async fn main() -> Result<()> {
 
             database
                 .insert(&default_group, None)
-                .await.expect("Failed to insert default user group");
+                .await
+                .expect("Failed to insert default user group");
             database
                 .insert(&admin_group, None)
-                .await.expect("Failed to insert administrator group");
+                .await
+                .expect("Failed to insert administrator group");
 
-            database.create_user_from(
-                User {
-                    id: Default::default(),
-                    username: String::from(username.trim()),
-                    avatar_id: None,
-                    group_id: admin_group.id,
-                    enabled: true,
-                },
-                password.trim(),
-            ).await?;
+            database
+                .create_user_from(
+                    User {
+                        id: Default::default(),
+                        username: String::from(username.trim()),
+                        avatar_id: None,
+                        group_id: admin_group.id,
+                        enabled: true,
+                    },
+                    password.trim(),
+                )
+                .await?;
 
             let mut config_file = File::create(&util::dirs::base_dir().join("config.toml"))
                 .expect("failed to create the config file");

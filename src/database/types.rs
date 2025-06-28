@@ -1,17 +1,15 @@
 use crate::database::objects::{DbObject, Group, User};
+pub(crate) use crate::database::{DatabaseType, ValueType};
 use crate::util;
-use crate::util::base64::{base64_decode, base64_encode};
+use crate::util::base64::base64_encode;
 use anyhow::Result;
-use rand::{RngCore, TryRngCore};
+use rand::TryRngCore;
 use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use sqlx::encode::IsNull;
-use sqlx::error::BoxDynError;
-use sqlx::{Any, Column as SqlxColumn, ColumnIndex, Database, Decode, Encode, Row, Sqlite, Type};
+use sqlx::{Column as SqlxColumn, ColumnIndex, Database, Decode, Encode, Row, Type};
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::str::FromStr;
-use sqlx::sqlite::SqliteTypeInfo;
 use test_log::test;
 
 pub(crate) const ID_MAX_VALUE: i64 = 281_474_976_710_655;
@@ -21,6 +19,8 @@ pub struct Column {
     pub name: String,
     pub data_type: ValueType,
     pub modifiers: Vec<Modifier>,
+    pub nullable: bool,
+    pub hidden: bool,
 }
 
 impl Column {
@@ -29,6 +29,8 @@ impl Column {
             name: name.to_string(),
             data_type,
             modifiers: Vec::new(),
+            nullable: true,
+            hidden: false,
         }
     }
 
@@ -45,7 +47,7 @@ impl Column {
     }
 
     pub fn with_modifier(self, modifier: Modifier) -> Self {
-        let mut new = self.clone();
+        let mut new = self;
         new.modifiers.push(modifier);
         new
     }
@@ -55,7 +57,9 @@ impl Column {
     }
 
     pub fn not_null(self) -> Self {
-        self.with_modifier(Modifier::NotNull)
+        let mut new = self;
+        new.nullable = false;
+        new.with_modifier(Modifier::NotNull)
     }
 
     pub fn unique(self) -> Self {
@@ -68,6 +72,12 @@ impl Column {
 
     pub fn default(self, value: &str) -> Self {
         self.with_modifier(Modifier::Default(value.to_string()))
+    }
+
+    pub fn hidden(self) -> Self {
+        let mut new = self;
+        new.hidden = true;
+        new
     }
 }
 
@@ -82,39 +92,6 @@ impl<T: Row> ColumnIndex<T> for Column {
         }) {
             Some(column) => Ok(column.ordinal()),
             None => Err(sqlx::Error::ColumnNotFound(self.name.clone())),
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ValueType {
-    Integer(bool),
-    Float,
-    Text,
-    Boolean,
-    Blob,
-    Id,
-    Token,
-    Datetime,
-}
-
-impl ValueType {
-    pub fn descriptor(&self) -> String {
-        match self {
-            ValueType::Integer(signed, ..) => {
-                if *signed {
-                    "INTEGER".to_string()
-                } else {
-                    "UNSIGNED INTEGER".to_string()
-                }
-            }
-            ValueType::Float => "FLOAT".to_string(),
-            ValueType::Text => "TEXT".to_string(),
-            ValueType::Boolean => "BOOLEAN".to_string(),
-            ValueType::Blob => "BLOB".to_string(),
-            ValueType::Id => "UNSIGNED BIGINT".to_string(),
-            ValueType::Token => "TEXT".to_string(),
-            ValueType::Datetime => "DATETIME".to_string(),
         }
     }
 }
@@ -198,7 +175,10 @@ impl Access {
                         //Access::Owner() => object.expect("owner access used with object being None").params()[] == user.id.to_sql().unwrap(),
                         Access::Owner(_) => {
                             let object = object.expect("Access::User must provide an object");
-                            object.owner_id().expect("object does not implement owner_id()", ) == user.id
+                            object
+                                .owner_id()
+                                .expect("object does not implement owner_id()")
+                                == user.id
                         }
                         Access::PrivilegedUser => group.is_privileged,
                         Access::None => false,
@@ -261,7 +241,7 @@ impl Access {
 /// `Default::default()` generates a random Id
 #[derive(Clone, Copy, PartialEq, Eq, Type)]
 #[sqlx(transparent)]
-pub struct Id (i64);
+pub struct Id(i64);
 
 impl Id {
     pub fn from_i64(value: i64) -> Result<Self> {
@@ -518,3 +498,23 @@ impl<'de> Deserialize<'de> for Token {
     }
 }
 */
+impl ValueType {
+    pub fn descriptor(&self) -> String {
+        match self {
+            ValueType::Integer(signed, ..) => {
+                if *signed {
+                    "INTEGER".to_string()
+                } else {
+                    "UNSIGNED INTEGER".to_string()
+                }
+            }
+            ValueType::Float => "FLOAT".to_string(),
+            ValueType::Text => "TEXT".to_string(),
+            ValueType::Boolean => "BOOLEAN".to_string(),
+            ValueType::Blob => "BLOB".to_string(),
+            ValueType::Id => "UNSIGNED BIGINT".to_string(),
+            ValueType::Token => "TEXT".to_string(),
+            ValueType::Datetime => "DATETIME".to_string(),
+        }
+    }
+}

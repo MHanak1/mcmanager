@@ -1,11 +1,10 @@
 use crate::api::handlers::{ApiCreate, ApiGet, ApiList, ApiObject, ApiRemove, ApiUpdate};
-use crate::database::Database;
 use crate::database::objects::{DbObject, FromJson, UpdateJson, User};
-use crate::database::types::{Access, Column, Id, ValueType};
+use crate::database::types::{Access, Column, Id};
+use crate::database::{Database, ValueType};
 use serde::{Deserialize, Serialize};
-use sqlx::{Arguments, Encode, FromRow, IntoArguments};
+use sqlx::{Arguments, FromRow, IntoArguments};
 use std::sync::Arc;
-use tokio::sync::Mutex;
 use warp::{Filter, Rejection, Reply};
 use warp_rate_limit::RateLimitConfig;
 
@@ -45,7 +44,7 @@ impl DbObject for Version {
                 .references("mod_loaders(id)"),
         ]
     }
-    fn get_id(&self) -> Id {
+    fn id(&self) -> Id {
         self.id
     }
 }
@@ -54,8 +53,12 @@ impl<'a> IntoArguments<'a, crate::database::DatabaseType> for Version {
     fn into_arguments(self) -> <crate::database::DatabaseType as sqlx::Database>::Arguments<'a> {
         let mut arguments = <crate::database::DatabaseType as sqlx::Database>::Arguments::default();
         arguments.add(self.id).expect("Failed to add argument");
-        arguments.add(self.minecraft_version).expect("Failed to argument");
-        arguments.add(self.mod_loader_id).expect("Failed to argument");
+        arguments
+            .add(self.minecraft_version)
+            .expect("Failed to argument");
+        arguments
+            .add(self.mod_loader_id)
+            .expect("Failed to argument");
         arguments
     }
 }
@@ -116,10 +119,7 @@ impl ApiObject for Version {
                 database.clone(),
                 rate_limit_config.clone(),
             ))
-            .or(Self::remove_filter(
-                database,
-                rate_limit_config.clone(),
-            ))
+            .or(Self::remove_filter(database, rate_limit_config.clone()))
     }
 }
 

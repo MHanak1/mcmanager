@@ -49,8 +49,8 @@ async fn run(config: Config) -> Result<()> {
     let list_worlds = warp::path!("api" / "worlds")
         .and(warp::get())
         .and(with_bearer_token())
-        .and_then(|token: String| async move {
-            if SECRETS.api_secret.to_string() == token {
+        .and_then(|token| async move {
+            if SECRETS.api_secret == token {
                 world_list().await
             } else {
                 Err(reject::custom(rejections::Unauthorized))
@@ -76,8 +76,8 @@ async fn run(config: Config) -> Result<()> {
         .and(warp::post().or(warp::put()).unify())
         .and(with_bearer_token())
         .and(warp::body::json())
-        .and_then(|token: String, world: World| async move {
-            if token == SECRETS.api_secret.to_string() {
+        .and_then(|token, world: World| async move {
+            if token == SECRETS.api_secret {
                 create_or_update_server(world).await
             } else {
                 Err(reject::custom(rejections::Unauthorized))
@@ -88,8 +88,8 @@ async fn run(config: Config) -> Result<()> {
         .and(warp::post())
         .and(with_bearer_token())
         .and(warp::body::json())
-        .and_then(|token: String, world: World| async move {
-            if token == SECRETS.api_secret.to_string() {
+        .and_then(|token, world: World| async move {
+            if token == SECRETS.api_secret {
                 world_remove(world).await
             } else {
                 Err(reject::custom(rejections::Unauthorized))
@@ -100,8 +100,8 @@ async fn run(config: Config) -> Result<()> {
         .and(warp::get())
         .and(with_bearer_token())
         .and(warp::body::json())
-        .and_then(|token: String, world: World| async move {
-            if SECRETS.api_secret.to_string() == token {
+        .and_then(|token, world: World| async move {
+            if SECRETS.api_secret == token {
                 match server::get_or_create_server(&world).await {
                     Ok(server) => Ok(warp::reply::json(
                         &server.lock().await.status().await.map_err(|err| {
