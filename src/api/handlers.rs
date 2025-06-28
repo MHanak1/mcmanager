@@ -20,6 +20,7 @@ use uuid::Uuid;
 use warp::http::StatusCode;
 use warp::{Filter, Rejection, Reply, reject};
 use warp_rate_limit::{RateLimitConfig, RateLimitInfo};
+use crate::database::DatabaseError::SqlxError;
 use crate::util::base64::base64_decode;
 
 pub trait ApiObject: DbObject {
@@ -130,6 +131,8 @@ where
                     }
                 }
             }
+
+            query.user_group::<Self>(&user, &group);
 
             query
                 .query_builder
@@ -478,9 +481,12 @@ pub(crate) fn handle_database_error(err: DatabaseError) -> warp::Rejection {
         DatabaseError::InternalServerError(error) => {
             reject::custom(rejections::InternalServerError { error })
         }
-        DatabaseError::SqlxError(error) => reject::custom(rejections::InternalServerError {
-            error: error.to_string(),
-        }),
+        DatabaseError::SqlxError(error) => match error {
+            sqlx::Error::RowNotFound => reject::custom(rejections::NotFound),
+            _ => reject::custom(rejections::InternalServerError {
+                error: error.to_string(),
+            }),
+        }
     }
 }
 

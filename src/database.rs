@@ -143,15 +143,14 @@ impl Database {
             query.user_group::<T>(user, group);
         }
 
-        match query
+        query
             .query_builder
             .build_query_as()
             .fetch_one(&self.pool)
             .await
-        {
-            Ok(result) => Ok(result),
-            Err(err) => Err(DatabaseError::InternalServerError(err.to_string())),
-        }
+            .map_err(DatabaseError::from)
+
+
     }
 
     pub async fn get_where <
@@ -169,15 +168,12 @@ impl Database {
             query.user_group::<T>(user, group);
         }
 
-        match query
+        query
             .query_builder
             .build_query_as()
             .fetch_one(&self.pool)
             .await
-        {
-            Ok(result) => Ok(result),
-            Err(err) => Err(DatabaseError::InternalServerError(err.to_string())),
-        }
+            .map_err(DatabaseError::from)
     }
 
     pub async fn get_all<
@@ -198,7 +194,10 @@ impl Database {
             .await
         {
             Ok(result) => Ok(result),
-            Err(err) => Err(DatabaseError::InternalServerError(err.to_string())),
+            Err(err) => match err {
+                sqlx::Error::RowNotFound => Ok(Vec::new()),
+                _ => Err(DatabaseError::from(err)),
+            }
         }
     }
 
@@ -225,7 +224,10 @@ impl Database {
             .await
         {
             Ok(result) => Ok(result),
-            Err(err) => Err(DatabaseError::InternalServerError(err.to_string())),
+            Err(err) => match err {
+                sqlx::Error::RowNotFound => Ok(Vec::new()),
+                _ => Err(DatabaseError::from(err)),
+            }
         }
     }
 
@@ -464,8 +466,13 @@ impl<'a> QueryBuilder<'a> {
             QueryType::Delete => T::update_access(),
         };
 
-        self.query_builder
-            .push(access.access_filter::<T>(user, group));
+        if self.params > 0 {
+            self.query_builder.push(format!(" AND {}", access.access_filter::<T>(user, group)));
+            self.params += 1;
+        } else {
+            self.query_builder.push(format!(" WHERE {}", access.access_filter::<T>(user, group)));
+            self.params += 1;
+        }
     }
 }
 
