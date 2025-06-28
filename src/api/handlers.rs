@@ -1,27 +1,27 @@
-use std::io::Read;
 use crate::api::util::rejections;
 use crate::api::util::rejections::BadRequest;
 use crate::api::{auth, filters};
 use crate::config::CONFIG;
+use crate::database::DatabaseError::SqlxError;
 use crate::database::objects::{DbObject, FromJson, InviteLink, UpdateJson, User, World};
 use crate::database::types::Id;
 pub(crate) use crate::database::{Database, DatabaseError};
-use crate::database::{DatabaseType, QueryBuilder, ValueType, WhereOperand};
+use crate::database::{DatabasePool, QueryBuilder, ValueType, WhereOperand};
+use crate::util::base64::base64_decode;
 use async_trait::async_trait;
+use chrono::DateTime;
 use futures::StreamExt;
 use log::error;
 use serde::{Deserialize, Serialize};
 use sqlx::{Encode, FromRow, IntoArguments, Type};
+use std::io::Read;
 use std::str::FromStr;
 use std::sync::Arc;
-use chrono::DateTime;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 use warp::http::StatusCode;
 use warp::{Filter, Rejection, Reply, reject};
 use warp_rate_limit::{RateLimitConfig, RateLimitInfo};
-use crate::database::DatabaseError::SqlxError;
-use crate::util::base64::base64_decode;
 
 pub trait ApiObject: DbObject {
     fn filters(
@@ -35,7 +35,8 @@ pub trait ApiList: ApiObject
 where
     Self: Sized + 'static,
     Self: Serialize,
-    for<'a> Self: FromRow<'a, <DatabaseType as sqlx::Database>::Row>,
+    for<'a> Self: FromRow<'a, sqlx::sqlite::SqliteRow>,
+    for<'a> Self: FromRow<'a, sqlx::postgres::PgRow>,
     Self: Unpin,
 {
     //in theory the user filter should be done within the sql query, but for the sake of simplicity we do that when collecting the results
@@ -45,102 +46,250 @@ where
         user: User,
         filters: Vec<(String, String)>,
     ) -> Result<impl warp::Reply, warp::Rejection> {
-
         let group = user.group(database.clone(), None).await;
         let objects: Vec<Self> = {
-            let mut query = QueryBuilder::select::<Self>();
-            for (column, value) in filters {
+            // i am sorry.
 
-                let (value, filter_type) = {
-                    if let Some(value) = value.strip_prefix("!") {
-                        (value.to_string(), WhereOperand::NotEqual)
-                    } else if let Some(value) = value.strip_prefix("<=") {
-                        (value.to_string(), WhereOperand::LessThanOrEqual)
-                    } else if let Some(value) = value.strip_prefix(">=") {
-                        (value.to_string(), WhereOperand::GreaterThanOrEqual)
-                    } else if let Some(value) = value.strip_prefix("<") {
-                        (value.to_string(), WhereOperand::LessThan)
-                    } else if let Some(value) = value.strip_prefix(">") {
-                        (value.to_string(), WhereOperand::GreaterThan)
-                    } else { (value, WhereOperand::Equal) }
-
-                };
-
-                if let Some(column) = Self::get_column(&column) {
-                    if !column.hidden {
-                        if value.to_ascii_lowercase() == "null" && column.nullable {
-                            match filter_type {
-                                WhereOperand::Equal => {
-                                    query.where_null(column.name());
-                                }
-                                WhereOperand::NotEqual => {
-                                    query.where_not_null(column.name());
-                                }
-                                _ => {
-                                    //what do you mean you want "less than or equal to null"?
-                                }
+            match &database.pool {
+                DatabasePool::Postgres(pool) => {
+                    let mut query = QueryBuilder::select::<Self>();
+                    for (column, value) in filters {
+                        let (value, filter_type) = {
+                            if let Some(value) = value.strip_prefix("!") {
+                                (value.to_string(), WhereOperand::NotEqual)
+                            } else if let Some(value) = value.strip_prefix("<=") {
+                                (value.to_string(), WhereOperand::LessThanOrEqual)
+                            } else if let Some(value) = value.strip_prefix(">=") {
+                                (value.to_string(), WhereOperand::GreaterThanOrEqual)
+                            } else if let Some(value) = value.strip_prefix("<") {
+                                (value.to_string(), WhereOperand::LessThan)
+                            } else if let Some(value) = value.strip_prefix(">") {
+                                (value.to_string(), WhereOperand::GreaterThan)
+                            } else {
+                                (value, WhereOperand::Equal)
                             }
-                        } else {
-                            match column.data_type {
-                                ValueType::Id => {
-                                    if let Ok(value) = Id::from_string(&value) {
-                                        query.where_operand(column.name(), value, filter_type);
+                        };
+
+                        if let Some(column) = Self::get_column(&column) {
+                            if !column.hidden {
+                                if value.to_ascii_lowercase() == "null" && column.nullable {
+                                    match filter_type {
+                                        WhereOperand::Equal => {
+                                            query.where_null(column.name());
+                                        }
+                                        WhereOperand::NotEqual => {
+                                            query.where_not_null(column.name());
+                                        }
+                                        _ => {
+                                            //what do you mean you want "less than or equal to null"?
+                                        }
                                     }
-                                }
-                                ValueType::Token => {
-                                    if let Ok(value) = Uuid::from_str(&value) {
-                                        query.where_operand(column.name(), value, filter_type);
+                                } else {
+                                    match column.data_type {
+                                        ValueType::Id => {
+                                            if let Ok(value) = Id::from_string(&value) {
+                                                query.where_operand(
+                                                    column.name(),
+                                                    value,
+                                                    filter_type,
+                                                );
+                                            }
+                                        }
+                                        ValueType::Token => {
+                                            if let Ok(value) = Uuid::from_str(&value) {
+                                                query.where_operand(
+                                                    column.name(),
+                                                    value,
+                                                    filter_type,
+                                                );
+                                            }
+                                        }
+                                        ValueType::Datetime => {
+                                            if let Ok(value) = DateTime::parse_from_rfc3339(&value)
+                                            {
+                                                query.where_operand(
+                                                    column.name(),
+                                                    value,
+                                                    filter_type,
+                                                );
+                                            }
+                                        }
+                                        ValueType::Float => {
+                                            if let Ok(value) = f32::from_str(&value) {
+                                                query.where_operand(
+                                                    column.name(),
+                                                    value,
+                                                    filter_type,
+                                                );
+                                            }
+                                        }
+                                        ValueType::Integer => {
+                                            if let Ok(value) = i64::from_str(&value) {
+                                                query.where_operand(
+                                                    column.name(),
+                                                    value,
+                                                    filter_type,
+                                                );
+                                            }
+                                        }
+                                        ValueType::Boolean => {
+                                            if let Ok(value) = bool::from_str(&value) {
+                                                query.where_operand(
+                                                    column.name(),
+                                                    value,
+                                                    filter_type,
+                                                );
+                                            }
+                                        }
+                                        // this may work :shrug:
+                                        ValueType::Blob => {
+                                            if let Ok(value) = base64_decode(&value) {
+                                                query.where_operand(
+                                                    column.name(),
+                                                    value,
+                                                    filter_type,
+                                                );
+                                            }
+                                        }
+                                        ValueType::Text => {
+                                            query.where_operand(column.name(), value, filter_type)
+                                        }
                                     }
-                                }
-                                ValueType::Datetime => {
-                                    if let Ok(value) = DateTime::parse_from_rfc3339(&value) {
-                                        query.where_operand(column.name(), value, filter_type);
-                                    }
-                                },
-                                ValueType::Float => {
-                                    if let Ok(value) = f32::from_str(&value) {
-                                        query.where_operand(column.name(), value, filter_type);
-                                    }
-                                },
-                                ValueType::Integer(true) => {
-                                    if let Ok(value) = i64::from_str(&value) {
-                                        query.where_operand(column.name(), value, filter_type);
-                                    }
-                                },
-                                ValueType::Integer(false) => {
-                                    if let Ok(value) = u32::from_str(&value) {
-                                        query.where_operand(column.name(), value, filter_type);
-                                    }
-                                },
-                                ValueType::Boolean => {
-                                    if let Ok(value) = bool::from_str(&value) {
-                                        query.where_operand(column.name(), value, filter_type);
-                                    }
-                                }
-                                // this may work :shrug:
-                                ValueType::Blob => {
-                                    if let Ok(value) = base64_decode(&value) {
-                                        query.where_operand(column.name(), value, filter_type);
-                                    }
-                                }
-                                ValueType::Text => {
-                                    query.where_operand(column.name(), value, filter_type)
                                 }
                             }
                         }
                     }
+
+                    query.user_group::<Self>(&user, &group);
+
+                    query
+                        .query_builder
+                        .build_query_as()
+                        .fetch_all(pool)
+                        .await
+                        .map_err(DatabaseError::from)
+                        .map_err(handle_database_error)?
+                }
+                DatabasePool::Sqlite(pool) => {
+                    let mut query = QueryBuilder::select::<Self>();
+                    for (column, value) in filters {
+                        let (value, filter_type) = {
+                            if let Some(value) = value.strip_prefix("!") {
+                                (value.to_string(), WhereOperand::NotEqual)
+                            } else if let Some(value) = value.strip_prefix("<=") {
+                                (value.to_string(), WhereOperand::LessThanOrEqual)
+                            } else if let Some(value) = value.strip_prefix(">=") {
+                                (value.to_string(), WhereOperand::GreaterThanOrEqual)
+                            } else if let Some(value) = value.strip_prefix("<") {
+                                (value.to_string(), WhereOperand::LessThan)
+                            } else if let Some(value) = value.strip_prefix(">") {
+                                (value.to_string(), WhereOperand::GreaterThan)
+                            } else {
+                                (value, WhereOperand::Equal)
+                            }
+                        };
+
+                        if let Some(column) = Self::get_column(&column) {
+                            if !column.hidden {
+                                if value.to_ascii_lowercase() == "null" && column.nullable {
+                                    match filter_type {
+                                        WhereOperand::Equal => {
+                                            query.where_null(column.name());
+                                        }
+                                        WhereOperand::NotEqual => {
+                                            query.where_not_null(column.name());
+                                        }
+                                        _ => {
+                                            //what do you mean you want "less than or equal to null"?
+                                        }
+                                    }
+                                } else {
+                                    match column.data_type {
+                                        ValueType::Id => {
+                                            if let Ok(value) = Id::from_string(&value) {
+                                                query.where_operand(
+                                                    column.name(),
+                                                    value,
+                                                    filter_type,
+                                                );
+                                            }
+                                        }
+                                        ValueType::Token => {
+                                            if let Ok(value) = Uuid::from_str(&value) {
+                                                query.where_operand(
+                                                    column.name(),
+                                                    value,
+                                                    filter_type,
+                                                );
+                                            }
+                                        }
+                                        ValueType::Datetime => {
+                                            if let Ok(value) = DateTime::parse_from_rfc3339(&value)
+                                            {
+                                                query.where_operand(
+                                                    column.name(),
+                                                    value,
+                                                    filter_type,
+                                                );
+                                            }
+                                        }
+                                        ValueType::Float => {
+                                            if let Ok(value) = f32::from_str(&value) {
+                                                query.where_operand(
+                                                    column.name(),
+                                                    value,
+                                                    filter_type,
+                                                );
+                                            }
+                                        }
+                                        ValueType::Integer => {
+                                            if let Ok(value) = i64::from_str(&value) {
+                                                query.where_operand(
+                                                    column.name(),
+                                                    value,
+                                                    filter_type,
+                                                );
+                                            }
+                                        }
+                                        ValueType::Boolean => {
+                                            if let Ok(value) = bool::from_str(&value) {
+                                                query.where_operand(
+                                                    column.name(),
+                                                    value,
+                                                    filter_type,
+                                                );
+                                            }
+                                        }
+                                        // this may work :shrug:
+                                        ValueType::Blob => {
+                                            if let Ok(value) = base64_decode(&value) {
+                                                query.where_operand(
+                                                    column.name(),
+                                                    value,
+                                                    filter_type,
+                                                );
+                                            }
+                                        }
+                                        ValueType::Text => {
+                                            query.where_operand(column.name(), value, filter_type)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    query.user_group::<Self>(&user, &group);
+
+                    query
+                        .query_builder
+                        .build_query_as()
+                        .fetch_all(pool)
+                        .await
+                        .map_err(DatabaseError::from)
+                        .map_err(handle_database_error)?
                 }
             }
-
-            query.user_group::<Self>(&user, &group);
-
-            query
-                .query_builder
-                .build_query_as()
-                .fetch_all(&database.pool)
-                .await
-                .map_err(DatabaseError::from)
-                .map_err(handle_database_error)?
         };
         Ok(warp::reply::with_status(
             warp::reply::json(&objects),
@@ -165,12 +314,13 @@ where
     }
 }
 #[async_trait]
-pub trait ApiGet:
-    ApiObject + for<'r> FromRow<'r, <DatabaseType as sqlx::Database>::Row> + Unpin
+pub trait ApiGet: ApiObject
 where
     Self: Sized + 'static,
     Self: Serialize,
-    for<'a> Self: FromRow<'a, <DatabaseType as sqlx::Database>::Row>,
+    for<'a> Self: FromRow<'a, sqlx::sqlite::SqliteRow>,
+    for<'a> Self: FromRow<'a, sqlx::postgres::PgRow>,
+    Self: Unpin,
 {
     async fn api_get(
         _rate_limit_info: RateLimitInfo,
@@ -216,14 +366,15 @@ where
     Self: Sized + 'static,
     Self: Serialize,
     Self: Clone,
-    Self: for<'a> IntoArguments<'a, crate::database::DatabaseType>,
+    Self: for<'a> IntoArguments<'a, sqlx::Sqlite>,
+    Self: for<'a> IntoArguments<'a, sqlx::Postgres>,
 {
     async fn api_create(
         _rate_limit_info: RateLimitInfo,
         database: Arc<Database>,
         user: User,
         data: Self::JsonFrom,
-    ) -> Result<impl warp::Reply, warp::Rejection>{
+    ) -> Result<impl warp::Reply, warp::Rejection> {
         let mut data = data;
         let group = user.group(database.clone(), None).await;
         //in theory this is redundant, as database::insert checks it as well, but better safe than sorry
@@ -303,8 +454,10 @@ pub trait ApiUpdate: ApiObject + UpdateJson
 where
     Self: Sized + 'static,
     Self: serde::Serialize,
-    Self: for<'a> IntoArguments<'a, crate::database::DatabaseType>,
-    Self: for<'r> FromRow<'r, <DatabaseType as sqlx::Database>::Row>,
+    Self: for<'a> IntoArguments<'a, sqlx::Sqlite>,
+    Self: for<'r> FromRow<'r, sqlx::sqlite::SqliteRow>,
+    Self: for<'a> IntoArguments<'a, sqlx::Postgres>,
+    Self: for<'r> FromRow<'r, sqlx::postgres::PgRow>,
     Self: Unpin,
     Self: Clone,
 {
@@ -396,7 +549,8 @@ where
 pub trait ApiRemove: ApiObject
 where
     Self: Sized + 'static,
-    Self: for<'r> FromRow<'r, <DatabaseType as sqlx::Database>::Row>,
+    Self: for<'r> FromRow<'r, sqlx::sqlite::SqliteRow>,
+    Self: for<'r> FromRow<'r, sqlx::postgres::PgRow>,
     Self: serde::Serialize,
     Self: Unpin,
 {
@@ -486,7 +640,7 @@ pub(crate) fn handle_database_error(err: DatabaseError) -> warp::Rejection {
             _ => reject::custom(rejections::InternalServerError {
                 error: error.to_string(),
             }),
-        }
+        },
     }
 }
 
@@ -615,7 +769,13 @@ pub async fn user_info(
 }
 
 pub async fn check_free<
-    T: for<'r> Encode<'r, DatabaseType> + Type<DatabaseType> + Clone + Send + Sync,
+    T: for<'r> Encode<'r, sqlx::Sqlite>
+        + Type<sqlx::Sqlite>
+        + for<'r> Encode<'r, sqlx::Postgres>
+        + Type<sqlx::Postgres>
+        + Clone
+        + Send
+        + Sync,
 >(
     _rate_limit_info: RateLimitInfo,
     field: String,
@@ -627,47 +787,32 @@ pub async fn check_free<
         taken: bool,
     }
     match field.trim() {
-        "username" => {
-            match database
-                .get_where::<User, _>("username", value, None)
-                .await
-            {
-                Ok(user) => {
-                    Ok(warp::reply::with_status(
-                        warp::reply::json(&Used { taken: false }),
-                        StatusCode::OK,
-                    ))
-                }
-                Err(err) => {
-                    Ok(warp::reply::with_status(
-                        warp::reply::json(&Used { taken: true }),
-                        StatusCode::OK,
-                    ))
-                }
-            }
-        }
+        "username" => match database.get_where::<User, _>("username", value, None).await {
+            Ok(user) => Ok(warp::reply::with_status(
+                warp::reply::json(&Used { taken: false }),
+                StatusCode::OK,
+            )),
+            Err(err) => Ok(warp::reply::with_status(
+                warp::reply::json(&Used { taken: true }),
+                StatusCode::OK,
+            )),
+        },
         "hostname" => {
             match database
                 .get_where::<World, _>("hostname", value, None)
                 .await
             {
-                Ok(world) => {
-                    Ok(warp::reply::with_status(
-                        warp::reply::json(&Used { taken: false }),
-                        StatusCode::OK,
-                    ))
-                }
-                Err(err) => {
-                    Ok(warp::reply::with_status(
-                        warp::reply::json(&Used { taken: true }),
-                        StatusCode::OK,
-                    ))
-                }
+                Ok(world) => Ok(warp::reply::with_status(
+                    warp::reply::json(&Used { taken: false }),
+                    StatusCode::OK,
+                )),
+                Err(err) => Ok(warp::reply::with_status(
+                    warp::reply::json(&Used { taken: true }),
+                    StatusCode::OK,
+                )),
             }
         }
-        _ => {
-            Err(warp::reject::custom(rejections::MethodNotAllowed))
-        }
+        _ => Err(warp::reject::custom(rejections::MethodNotAllowed)),
     }
 }
 

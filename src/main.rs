@@ -4,12 +4,13 @@ use log::{error, info};
 use mcmanager::config::CONFIG;
 use mcmanager::database::objects::{Group, User, World};
 use mcmanager::database::types::Id;
-use mcmanager::database::{Database, objects};
+use mcmanager::database::{Database, DatabasePool, objects};
 use mcmanager::minecraft::server::ServerConfigLimit;
 use mcmanager::minecraft::velocity::{InternalVelocityServer, VelocityServer};
 use mcmanager::{bin, util};
 use serde::Deserialize;
 use sqlx::any::AnyPoolOptions;
+use sqlx::postgres::PgPoolOptions;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{SqliteConnection, SqlitePool};
 use std::collections::HashMap;
@@ -31,7 +32,16 @@ async fn main() -> Result<()> {
     )
     .await?;
 
-    let database = Database { pool };
+    /*
+    let pool = PgPoolOptions::new()
+        .max_connections(5)
+        .connect("postgres://postgres:password@localhost")
+        .await?;
+     */
+
+    let database = Database {
+        pool: DatabasePool::from(pool),
+    };
     database.init().await.expect("Failed to init database");
 
     let first_launch = database.get_all::<User>(None).await?.is_empty();

@@ -11,7 +11,9 @@ pub async fn try_user_auth(
     password: &str,
     database: Arc<Database>,
 ) -> Result<Session, DatabaseError> {
-    let user: Result<User, _> = database.get_where("username", username.to_string(), None).await;
+    let user: Result<User, _> = database
+        .get_where("username", username.to_string(), None)
+        .await;
 
     let argon2 = argon2::Argon2::default();
 

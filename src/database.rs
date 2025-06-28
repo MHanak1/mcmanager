@@ -1,14 +1,15 @@
+use crate::api::handlers::handle_database_error;
 use crate::database::objects::{DbObject, Group};
 use crate::database::objects::{
     InviteLink, Mod, ModLoader, Password, Session, User, Version, World,
 };
-use crate::database::types::{Id};
+use crate::database::types::Id;
 use anyhow::bail;
 use log::{debug, error};
 use serde::{Deserialize, Deserializer};
 use sqlx::query::QueryAs;
 use sqlx::{
-    Database as SqlxDatabase, Encode, FromRow, IntoArguments, Pool,
+    Database as SqlxDatabase, Encode, FromRow, IntoArguments, Pool, Postgres,
     QueryBuilder as SqlxQueryBuilder, Type,
 };
 use std::error::Error;
@@ -19,38 +20,72 @@ use warp::reject::Reject;
 pub mod objects;
 pub mod types;
 
-pub type DatabaseType = sqlx::sqlite::Sqlite;
+#[derive(Debug)]
+pub enum DatabasePool {
+    Postgres(Pool<sqlx::Postgres>),
+    Sqlite(Pool<sqlx::sqlite::Sqlite>),
+}
+
+impl From<Pool<sqlx::Postgres>> for DatabasePool {
+    fn from(pool: Pool<sqlx::Postgres>) -> Self {
+        Self::Postgres(pool)
+    }
+}
+
+impl From<Pool<sqlx::sqlite::Sqlite>> for DatabasePool {
+    fn from(pool: Pool<sqlx::sqlite::Sqlite>) -> Self {
+        Self::Sqlite(pool)
+    }
+}
 
 #[derive(Debug)]
 pub struct Database {
     //pub conn: rusqlite::Connection,
-    pub pool: Pool<DatabaseType>,
+    pub pool: DatabasePool,
 }
 
 #[allow(dead_code)]
 impl Database {
     #[rustfmt::skip]
     pub async fn init(&self) -> sqlx::Result<()> {
-        sqlx::query(&format!("CREATE TABLE IF NOT EXISTS {} ({});", ModLoader::table_name(),  ModLoader::database_descriptor())).execute(&self.pool).await?;
-        sqlx::query(&format!("CREATE TABLE IF NOT EXISTS {} ({});", Version::table_name(),    Version::database_descriptor())).execute(&self.pool).await?;
-        sqlx::query(&format!("CREATE TABLE IF NOT EXISTS {} ({});", Mod::table_name(),        Mod::database_descriptor())).execute(&self.pool).await?;
-        sqlx::query(&format!("CREATE TABLE IF NOT EXISTS {} ({});", Group::table_name(),      Group::database_descriptor())).execute(&self.pool).await?;
-        sqlx::query(&format!("CREATE TABLE IF NOT EXISTS {} ({});", User::table_name(),       User::database_descriptor())).execute(&self.pool).await?;
-        sqlx::query(&format!("CREATE TABLE IF NOT EXISTS {} ({});", Password::table_name(),   Password::database_descriptor())).execute(&self.pool).await?;
-        sqlx::query(&format!("CREATE TABLE IF NOT EXISTS {} ({});", World::table_name(),      World::database_descriptor())).execute(&self.pool).await?;
-        sqlx::query(&format!("CREATE TABLE IF NOT EXISTS {} ({});", Session::table_name(),    Session::database_descriptor())).execute(&self.pool).await?;
-        sqlx::query(&format!("CREATE TABLE IF NOT EXISTS {} ({});", InviteLink::table_name(), InviteLink::database_descriptor())).execute(&self.pool).await?;
+    match &self.pool {
+        DatabasePool::Postgres(pool) => {
+        sqlx::query(&format!("CREATE TABLE IF NOT EXISTS {} ({});", ModLoader::table_name(),  ModLoader::database_descriptor())).execute(pool).await?;
+        sqlx::query(&format!("CREATE TABLE IF NOT EXISTS {} ({});", Version::table_name(),    Version::database_descriptor())).execute(pool).await?;
+        sqlx::query(&format!("CREATE TABLE IF NOT EXISTS {} ({});", Mod::table_name(),        Mod::database_descriptor())).execute(pool).await?;
+        sqlx::query(&format!("CREATE TABLE IF NOT EXISTS {} ({});", Group::table_name(),      Group::database_descriptor())).execute(pool).await?;
+        sqlx::query(&format!("CREATE TABLE IF NOT EXISTS {} ({});", User::table_name(),       User::database_descriptor())).execute(pool).await?;
+        sqlx::query(&format!("CREATE TABLE IF NOT EXISTS {} ({});", Password::table_name(),   Password::database_descriptor())).execute(pool).await?;
+        sqlx::query(&format!("CREATE TABLE IF NOT EXISTS {} ({});", World::table_name(),      World::database_descriptor())).execute(pool).await?;
+        sqlx::query(&format!("CREATE TABLE IF NOT EXISTS {} ({});", Session::table_name(),    Session::database_descriptor())).execute(pool).await?;
+        sqlx::query(&format!("CREATE TABLE IF NOT EXISTS {} ({});", InviteLink::table_name(), InviteLink::database_descriptor())).execute(pool).await?;
+        }
+        DatabasePool::Sqlite(pool) => {
+        sqlx::query(&format!("CREATE TABLE IF NOT EXISTS {} ({});", ModLoader::table_name(),  ModLoader::database_descriptor())).execute(pool).await?;
+        sqlx::query(&format!("CREATE TABLE IF NOT EXISTS {} ({});", Version::table_name(),    Version::database_descriptor())).execute(pool).await?;
+        sqlx::query(&format!("CREATE TABLE IF NOT EXISTS {} ({});", Mod::table_name(),        Mod::database_descriptor())).execute(pool).await?;
+        sqlx::query(&format!("CREATE TABLE IF NOT EXISTS {} ({});", Group::table_name(),      Group::database_descriptor())).execute(pool).await?;
+        sqlx::query(&format!("CREATE TABLE IF NOT EXISTS {} ({});", User::table_name(),       User::database_descriptor())).execute(pool).await?;
+        sqlx::query(&format!("CREATE TABLE IF NOT EXISTS {} ({});", Password::table_name(),   Password::database_descriptor())).execute(pool).await?;
+        sqlx::query(&format!("CREATE TABLE IF NOT EXISTS {} ({});", World::table_name(),      World::database_descriptor())).execute(pool).await?;
+        sqlx::query(&format!("CREATE TABLE IF NOT EXISTS {} ({});", Session::table_name(),    Session::database_descriptor())).execute(pool).await?;
+        sqlx::query(&format!("CREATE TABLE IF NOT EXISTS {} ({});", InviteLink::table_name(), InviteLink::database_descriptor())).execute(pool).await?;
+        }
+    }
 
         Ok(())
     }
 
     pub async fn insert<
-        T: DbObject + for<'a> IntoArguments<'a, DatabaseType> + Clone,
+        T: DbObject
+            + for<'a> IntoArguments<'a, sqlx::Sqlite>
+            + for<'a> IntoArguments<'a, sqlx::Postgres>
+            + Clone,
     >(
         &self,
         value: &T,
         user: Option<(&User, &Group)>,
-    ) -> Result<<DatabaseType as sqlx::Database>::QueryResult, DatabaseError> {
+    ) -> Result<(), DatabaseError> {
         if let Some((user, group)) = user {
             if !T::can_create(user, group) {
                 return Err(DatabaseError::Unauthorized);
@@ -58,23 +93,41 @@ impl Database {
         }
         value.before_create(self).await?;
 
-        let mut query = QueryBuilder::insert(value.clone());
-        let result = query.query_builder.build().execute(&self.pool).await;
-
-        value.after_create(self).await?;
-        match result {
-            Ok(result) => Ok(result),
-            Err(err) => Err(DatabaseError::InternalServerError(err.to_string())),
+        match &self.pool {
+            DatabasePool::Postgres(pool) => {
+                let mut query = QueryBuilder::insert(value.clone());
+                query
+                    .query_builder
+                    .build()
+                    .execute(pool)
+                    .await
+                    .map_err(DatabaseError::from)?;
+            }
+            DatabasePool::Sqlite(pool) => {
+                let mut query = QueryBuilder::insert(value.clone());
+                query
+                    .query_builder
+                    .build()
+                    .execute(pool)
+                    .await
+                    .map_err(DatabaseError::from)?;
+            }
         }
+        value.after_create(self).await?;
+
+        Ok(())
     }
 
     pub async fn update<
-        T: DbObject + for<'a> IntoArguments<'a, DatabaseType> + Clone,
+        T: DbObject
+            + for<'a> IntoArguments<'a, sqlx::Sqlite>
+            + for<'a> IntoArguments<'a, sqlx::Postgres>
+            + Clone,
     >(
         &self,
         value: &T,
         user: Option<(&User, &Group)>,
-    ) -> Result<<DatabaseType as sqlx::Database>::QueryResult, DatabaseError> {
+    ) -> Result<(), DatabaseError> {
         if let Some((user, group)) = user {
             if !value.can_update(user, group) {
                 return Err(DatabaseError::Unauthorized);
@@ -82,30 +135,53 @@ impl Database {
         }
         value.before_update(self).await?;
 
-        let mut query = QueryBuilder::update(value.clone());
+        match &self.pool {
+            DatabasePool::Postgres(pool) => {
+                let mut query = QueryBuilder::update(value.clone());
 
-        query.where_id::<T>(value.id());
+                query.where_id::<T>(value.id());
 
-        if let Some((user, group)) = user {
-            query.user_group::<T>(user, group);
+                if let Some((user, group)) = user {
+                    query.user_group::<T>(user, group);
+                }
+                query
+                    .query_builder
+                    .build()
+                    .execute(pool)
+                    .await
+                    .map_err(DatabaseError::from)?;
+            }
+            DatabasePool::Sqlite(pool) => {
+                let mut query = QueryBuilder::update(value.clone());
+
+                query.where_id::<T>(value.id());
+
+                if let Some((user, group)) = user {
+                    query.user_group::<T>(user, group);
+                }
+                query
+                    .query_builder
+                    .build()
+                    .execute(pool)
+                    .await
+                    .map_err(DatabaseError::from)?;
+            }
         }
-
-        let result = query.query_builder.build().execute(&self.pool).await;
 
         value.after_update(self).await?;
-        match result {
-            Ok(result) => Ok(result),
-            Err(err) => Err(DatabaseError::InternalServerError(err.to_string())),
-        }
+        Ok(())
     }
 
     pub async fn remove<
-        T: DbObject + for<'a> FromRow<'a, <DatabaseType as sqlx::Database>::Row>,
+        T: DbObject
+            + for<'r> FromRow<'r, sqlx::sqlite::SqliteRow>
+            + for<'r> FromRow<'r, sqlx::postgres::PgRow>
+            + Unpin,
     >(
         &self,
         value: &T,
         user: Option<(&User, &Group)>,
-    ) -> Result<<DatabaseType as sqlx::Database>::QueryResult, DatabaseError> {
+    ) -> Result<(), DatabaseError> {
         if let Some((user, group)) = user {
             if !value.can_update(user, group) {
                 return Err(DatabaseError::Unauthorized);
@@ -113,97 +189,178 @@ impl Database {
         }
         value.before_delete(self).await?;
 
-        let mut query = QueryBuilder::delete::<T>();
+        match &self.pool {
+            DatabasePool::Postgres(pool) => {
+                let mut query = QueryBuilder::delete::<T>();
 
-        query.where_id::<T>(value.id());
+                query.where_id::<T>(value.id());
 
-        if let Some((user, group)) = user {
-            query.user_group::<T>(user, group);
+                if let Some((user, group)) = user {
+                    query.user_group::<T>(user, group);
+                }
+                query
+                    .query_builder
+                    .build()
+                    .execute(pool)
+                    .await
+                    .map_err(DatabaseError::from)?;
+            }
+            DatabasePool::Sqlite(pool) => {
+                let mut query = QueryBuilder::delete::<T>();
+
+                query.where_id::<T>(value.id());
+
+                if let Some((user, group)) = user {
+                    query.user_group::<T>(user, group);
+                }
+                query
+                    .query_builder
+                    .build()
+                    .execute(pool)
+                    .await
+                    .map_err(DatabaseError::from)?;
+            }
         }
-
-        let result = query.query_builder.build().execute(&self.pool).await;
 
         value.after_delete(self).await?;
-        match result {
-            Ok(result) => Ok(result),
-            Err(err) => Err(DatabaseError::InternalServerError(err.to_string())),
-        }
+        Ok(())
     }
 
     pub async fn get_one<
-        T: DbObject + for<'r> FromRow<'r, <DatabaseType as sqlx::Database>::Row> + Unpin,
+        T: DbObject
+            + for<'r> FromRow<'r, sqlx::sqlite::SqliteRow>
+            + for<'r> FromRow<'r, sqlx::postgres::PgRow>
+            + Unpin,
     >(
         &self,
         id: Id,
         user: Option<(&User, &Group)>,
     ) -> Result<T, DatabaseError> {
-        let mut query = QueryBuilder::select::<T>();
-        query.where_id::<T>(id);
-        if let Some((user, group)) = user {
-            query.user_group::<T>(user, group);
+        match &self.pool {
+            DatabasePool::Postgres(pool) => {
+                let mut query = QueryBuilder::select::<T>();
+                query.where_id::<T>(id);
+                if let Some((user, group)) = user {
+                    query.user_group::<T>(user, group);
+                }
+                query
+                    .query_builder
+                    .build_query_as()
+                    .fetch_one(pool)
+                    .await
+                    .map_err(DatabaseError::from)
+            }
+            DatabasePool::Sqlite(pool) => {
+                let mut query = QueryBuilder::select::<T>();
+                query.where_id::<T>(id);
+                if let Some((user, group)) = user {
+                    query.user_group::<T>(user, group);
+                }
+                query
+                    .query_builder
+                    .build_query_as()
+                    .fetch_one(pool)
+                    .await
+                    .map_err(DatabaseError::from)
+            }
         }
-
-        query
-            .query_builder
-            .build_query_as()
-            .fetch_one(&self.pool)
-            .await
-            .map_err(DatabaseError::from)
-
-
     }
 
-    pub async fn get_where <
-        T: DbObject + for<'r> FromRow<'r, <DatabaseType as sqlx::Database>::Row> + Unpin,
-        V: for<'r> Encode<'r, DatabaseType> + Type<DatabaseType> + Clone,
+    pub async fn get_where<
+        T: DbObject
+            + for<'r> FromRow<'r, sqlx::sqlite::SqliteRow>
+            + for<'r> FromRow<'r, sqlx::postgres::PgRow>
+            + Unpin,
+        V: for<'r> Encode<'r, sqlx::Sqlite>
+            + Type<sqlx::Sqlite>
+            + for<'r> Encode<'r, sqlx::Postgres>
+            + Type<sqlx::Postgres>
+            + Clone,
     >(
         &self,
         column: &str,
         value: V,
         user: Option<(&User, &Group)>,
     ) -> Result<T, DatabaseError> {
-        let mut query = QueryBuilder::select::<T>();
-        query.where_(column, value);
-        if let Some((user, group)) = user {
-            query.user_group::<T>(user, group);
-        }
+        match &self.pool {
+            DatabasePool::Postgres(pool) => {
+                let mut query: QueryBuilder<Postgres> = QueryBuilder::select::<T>();
+                query.where_(column, value);
+                if let Some((user, group)) = user {
+                    query.user_group::<T>(user, group);
+                }
 
-        query
-            .query_builder
-            .build_query_as()
-            .fetch_one(&self.pool)
-            .await
-            .map_err(DatabaseError::from)
+                query
+                    .query_builder
+                    .build_query_as()
+                    .fetch_one(pool)
+                    .await
+                    .map_err(DatabaseError::from)
+            }
+            DatabasePool::Sqlite(pool) => {
+                let mut query = QueryBuilder::select::<T>();
+                query.where_(column, value);
+                if let Some((user, group)) = user {
+                    query.user_group::<T>(user, group);
+                }
+
+                query
+                    .query_builder
+                    .build_query_as()
+                    .fetch_one(pool)
+                    .await
+                    .map_err(DatabaseError::from)
+            }
+        }
     }
 
     pub async fn get_all<
-        T: DbObject + for<'r> FromRow<'r, <DatabaseType as sqlx::Database>::Row> + std::marker::Unpin,
+        T: DbObject
+            + for<'r> FromRow<'r, sqlx::sqlite::SqliteRow>
+            + for<'r> FromRow<'r, sqlx::postgres::PgRow>
+            + std::marker::Unpin,
     >(
         &self,
         user: Option<(&User, &Group)>,
     ) -> Result<Vec<T>, DatabaseError> {
-        let mut query = QueryBuilder::select::<T>();
-        if let Some((user, group)) = user {
-            query.user_group::<T>(user, group);
-        }
-
-        match query
-            .query_builder
-            .build_query_as()
-            .fetch_all(&self.pool)
-            .await
-        {
-            Ok(result) => Ok(result),
-            Err(err) => match err {
-                sqlx::Error::RowNotFound => Ok(Vec::new()),
-                _ => Err(DatabaseError::from(err)),
+        match &self.pool {
+            DatabasePool::Postgres(pool) => {
+                let mut query = QueryBuilder::select::<T>();
+                if let Some((user, group)) = user {
+                    query.user_group::<T>(user, group);
+                }
+                query
+                    .query_builder
+                    .build_query_as()
+                    .fetch_all(pool)
+                    .await
+                    .map_err(DatabaseError::from)
+            }
+            DatabasePool::Sqlite(pool) => {
+                let mut query = QueryBuilder::select::<T>();
+                if let Some((user, group)) = user {
+                    query.user_group::<T>(user, group);
+                }
+                query
+                    .query_builder
+                    .build_query_as()
+                    .fetch_all(pool)
+                    .await
+                    .map_err(DatabaseError::from)
             }
         }
     }
 
     pub async fn get_all_where<
-        T: DbObject + for<'r> FromRow<'r, <DatabaseType as sqlx::Database>::Row> + Unpin,
-        V: for<'v> Encode<'v, DatabaseType> + Type<DatabaseType> + Clone,
+        T: DbObject
+            + for<'r> FromRow<'r, sqlx::sqlite::SqliteRow>
+            + for<'r> FromRow<'r, sqlx::postgres::PgRow>
+            + Unpin,
+        V: for<'r> Encode<'r, sqlx::Sqlite>
+            + Type<sqlx::Sqlite>
+            + for<'r> Encode<'r, sqlx::Postgres>
+            + Type<sqlx::Postgres>
+            + Clone,
     >(
         &self,
         column: &str,
@@ -211,22 +368,33 @@ impl Database {
         user: Option<(&User, &Group)>,
     ) -> Result<Vec<T>, DatabaseError> {
         let value = value.clone();
-        let mut query = QueryBuilder::select::<T>();
-        query.where_(column, value);
-        if let Some((user, group)) = user {
-            query.user_group::<T>(user, group);
-        }
 
-        match query
-            .query_builder
-            .build_query_as()
-            .fetch_all(&self.pool)
-            .await
-        {
-            Ok(result) => Ok(result),
-            Err(err) => match err {
-                sqlx::Error::RowNotFound => Ok(Vec::new()),
-                _ => Err(DatabaseError::from(err)),
+        match &self.pool {
+            DatabasePool::Postgres(pool) => {
+                let mut query = QueryBuilder::select::<T>();
+                query.where_(column, value);
+                if let Some((user, group)) = user {
+                    query.user_group::<T>(user, group);
+                }
+                query
+                    .query_builder
+                    .build_query_as()
+                    .fetch_all(pool)
+                    .await
+                    .map_err(DatabaseError::from)
+            }
+            DatabasePool::Sqlite(pool) => {
+                let mut query = QueryBuilder::select::<T>();
+                query.where_(column, value);
+                if let Some((user, group)) = user {
+                    query.user_group::<T>(user, group);
+                }
+                query
+                    .query_builder
+                    .build_query_as()
+                    .fetch_all(pool)
+                    .await
+                    .map_err(DatabaseError::from)
             }
         }
     }
@@ -249,8 +417,8 @@ impl Database {
     }
 }
 
-pub struct QueryBuilder<'a> {
-    pub query_builder: sqlx::QueryBuilder<'a, DatabaseType>,
+pub struct QueryBuilder<'a, T: sqlx::Database> {
+    pub query_builder: sqlx::QueryBuilder<'a, T>,
     pub query_type: QueryType,
     params: usize,
 }
@@ -274,28 +442,30 @@ pub enum WhereOperand {
 impl Display for WhereOperand {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            WhereOperand::Equal => {f.write_str("=")}
-            WhereOperand::NotEqual => {f.write_str("!=")}
-            WhereOperand::GreaterThan => {f.write_str(">")}
-            WhereOperand::GreaterThanOrEqual => {f.write_str(">=")}
-            WhereOperand::LessThan => {f.write_str("<")}
-            WhereOperand::LessThanOrEqual => {f.write_str("<=")}
+            WhereOperand::Equal => f.write_str("="),
+            WhereOperand::NotEqual => f.write_str("!="),
+            WhereOperand::GreaterThan => f.write_str(">"),
+            WhereOperand::GreaterThanOrEqual => f.write_str(">="),
+            WhereOperand::LessThan => f.write_str("<"),
+            WhereOperand::LessThanOrEqual => f.write_str("<="),
         }
     }
 }
 
-impl<'a> QueryBuilder<'a> {
-    pub fn new(query_builder: sqlx::QueryBuilder<'a, DatabaseType>, query_type: QueryType) -> Self {
+impl<'a, DB: sqlx::Database> QueryBuilder<'a, DB>
+where
+    i64: sqlx::Type<DB>,
+    for<'r> i64: sqlx::Encode<'r, DB>,
+{
+    pub fn new(query_builder: sqlx::QueryBuilder<'a, DB>, query_type: QueryType) -> Self {
         Self {
             query_builder,
             query_type,
             params: 0,
         }
     }
-}
 
-impl<'a> QueryBuilder<'a> {
-    pub fn insert<T: DbObject + IntoArguments<'a, DatabaseType>>(value: T) -> Self {
+    pub fn insert<T: DbObject + IntoArguments<'a, DB>>(value: T) -> Self {
         let query = &format!(
             "INSERT INTO {} ({}) VALUES ({})",
             T::table_name(),
@@ -318,7 +488,7 @@ impl<'a> QueryBuilder<'a> {
         }
     }
 
-    pub fn select<T: DbObject>() -> QueryBuilder<'a> {
+    pub fn select<T: DbObject>() -> QueryBuilder<'a, DB> {
         let query = &format!(
             "SELECT {} FROM {}",
             T::columns()
@@ -335,7 +505,7 @@ impl<'a> QueryBuilder<'a> {
         }
     }
 
-    pub fn update<T: DbObject + IntoArguments<'a, DatabaseType>>(value: T) -> QueryBuilder<'a> {
+    pub fn update<T: DbObject + IntoArguments<'a, DB>>(value: T) -> QueryBuilder<'a, DB> {
         let query = &format!(
             "UPDATE {} SET {}",
             T::table_name(),
@@ -354,7 +524,7 @@ impl<'a> QueryBuilder<'a> {
         }
     }
 
-    pub fn delete<T: DbObject>() -> QueryBuilder<'a> {
+    pub fn delete<T: DbObject>() -> QueryBuilder<'a, DB> {
         let query = &format!("DELETE FROM {}", T::table_name(),);
         Self {
             query_builder: sqlx::QueryBuilder::new(query),
@@ -367,47 +537,37 @@ impl<'a> QueryBuilder<'a> {
         self.where_(T::columns()[T::id_column_index()].name(), id)
     }
 
-    pub fn where_operand<F: Type<DatabaseType> + Encode<'a, DatabaseType> + 'a>(
+    pub fn where_operand<F: Type<DB> + Encode<'a, DB> + 'a>(
         &mut self,
         column: &str,
         value: F,
         operator: WhereOperand,
     ) {
         if self.params > 0 {
-            self.query_builder.push(format!(" AND {} {} ", column, operator.to_string()));
+            self.query_builder
+                .push(format!(" AND {} {} ", column, operator.to_string()));
             self.params += 1;
         } else {
-            self.query_builder.push(format!(" WHERE {} {} ", column, operator.to_string()));
+            self.query_builder
+                .push(format!(" WHERE {} {} ", column, operator.to_string()));
             self.params += 1;
         }
         self.query_builder.push_bind(value);
     }
 
-    pub fn where_<F: Type<DatabaseType> + Encode<'a, DatabaseType> + 'a>(
-        &mut self,
-        column: &str,
-        value: F,
-    ) {
+    pub fn where_<F: Type<DB> + Encode<'a, DB> + 'a>(&mut self, column: &str, value: F) {
         self.where_operand(column, value, WhereOperand::Equal);
     }
 
-    pub fn where_not<F: Type<DatabaseType> + Encode<'a, DatabaseType> + 'a>(
-        &mut self,
-        column: &str,
-        value: F,
-    ) {
+    pub fn where_not<F: Type<DB> + Encode<'a, DB> + 'a>(&mut self, column: &str, value: F) {
         self.where_operand(column, value, WhereOperand::NotEqual);
     }
 
-    pub fn where_less_than<F: Type<DatabaseType> + Encode<'a, DatabaseType> + 'a>(
-        &mut self,
-        column: &str,
-        value: F,
-    ) {
+    pub fn where_less_than<F: Type<DB> + Encode<'a, DB> + 'a>(&mut self, column: &str, value: F) {
         self.where_operand(column, value, WhereOperand::LessThan);
     }
 
-    pub fn where_less_than_or_equal<F: Type<DatabaseType> + Encode<'a, DatabaseType> + 'a>(
+    pub fn where_less_than_or_equal<F: Type<DB> + Encode<'a, DB> + 'a>(
         &mut self,
         column: &str,
         value: F,
@@ -415,7 +575,7 @@ impl<'a> QueryBuilder<'a> {
         self.where_operand(column, value, WhereOperand::LessThanOrEqual);
     }
 
-    pub fn where_greater_than<F: Type<DatabaseType> + Encode<'a, DatabaseType> + 'a>(
+    pub fn where_greater_than<F: Type<DB> + Encode<'a, DB> + 'a>(
         &mut self,
         column: &str,
         value: F,
@@ -423,7 +583,7 @@ impl<'a> QueryBuilder<'a> {
         self.where_operand(column, value, WhereOperand::GreaterThan);
     }
 
-    pub fn where_greater_than_or_equal<F: Type<DatabaseType> + Encode<'a, DatabaseType> + 'a>(
+    pub fn where_greater_than_or_equal<F: Type<DB> + Encode<'a, DB> + 'a>(
         &mut self,
         column: &str,
         value: F,
@@ -431,29 +591,25 @@ impl<'a> QueryBuilder<'a> {
         self.where_operand(column, value, WhereOperand::GreaterThanOrEqual);
     }
 
-    pub fn where_null(
-        &mut self,
-        column: &str,
-    ) {
+    pub fn where_null(&mut self, column: &str) {
         if self.params > 0 {
             self.query_builder.push(format!(" AND {} IS NULL ", column));
             self.params += 1;
         } else {
-            self.query_builder.push(format!(" WHERE {} IS NULL ", column));
+            self.query_builder
+                .push(format!(" WHERE {} IS NULL ", column));
             self.params += 1;
         }
     }
 
-
-    pub fn where_not_null(
-        &mut self,
-        column: &str,
-    ) {
+    pub fn where_not_null(&mut self, column: &str) {
         if self.params > 0 {
-            self.query_builder.push(format!(" AND {} IS NOT NULL ", column));
+            self.query_builder
+                .push(format!(" AND {} IS NOT NULL ", column));
             self.params += 1;
         } else {
-            self.query_builder.push(format!(" WHERE {} IS NOT NULL ", column));
+            self.query_builder
+                .push(format!(" WHERE {} IS NOT NULL ", column));
             self.params += 1;
         }
     }
@@ -467,10 +623,12 @@ impl<'a> QueryBuilder<'a> {
         };
 
         if self.params > 0 {
-            self.query_builder.push(format!(" AND {}", access.access_filter::<T>(user, group)));
+            self.query_builder
+                .push(format!(" AND {}", access.access_filter::<T>(user, group)));
             self.params += 1;
         } else {
-            self.query_builder.push(format!(" WHERE {}", access.access_filter::<T>(user, group)));
+            self.query_builder
+                .push(format!(" WHERE {}", access.access_filter::<T>(user, group)));
             self.params += 1;
         }
     }
@@ -721,7 +879,7 @@ pub fn manipulate_data() -> anyhow::Result<()> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ValueType {
     /// Integer(signed: bool)
-    Integer(bool),
+    Integer,
     Float,
     Text,
     Boolean,
@@ -730,4 +888,3 @@ pub enum ValueType {
     Token,
     Datetime,
 }
-

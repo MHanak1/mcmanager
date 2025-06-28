@@ -56,34 +56,52 @@ pub trait DbObject: Send + Sync {
 
     #[allow(unused)]
     /// Called before the object gets inserted into the database
-    fn before_create(&self, database: &Database) -> impl std::future::Future<Output = Result<(), DatabaseError>> + std::marker::Send {async {
-        Ok(())
-    }}
+    fn before_create(
+        &self,
+        database: &Database,
+    ) -> impl std::future::Future<Output = Result<(), DatabaseError>> + std::marker::Send {
+        async { Ok(()) }
+    }
     #[allow(unused)]
     /// Called after the object gets inserted into the database
-    fn before_update(&self, database: &Database) -> impl std::future::Future<Output = Result<(), DatabaseError>> + std::marker::Send {async {
-        Ok(())
-    }}
+    fn before_update(
+        &self,
+        database: &Database,
+    ) -> impl std::future::Future<Output = Result<(), DatabaseError>> + std::marker::Send {
+        async { Ok(()) }
+    }
     #[allow(unused)]
     /// Called before the object gets updated in the database
-    fn before_delete(&self, database: &Database) -> impl std::future::Future<Output = Result<(), DatabaseError>> + std::marker::Send {async {
-        Ok(())
-    }}
+    fn before_delete(
+        &self,
+        database: &Database,
+    ) -> impl std::future::Future<Output = Result<(), DatabaseError>> + std::marker::Send {
+        async { Ok(()) }
+    }
     #[allow(unused)]
     /// Called after the object gets updated the database
-    fn after_create(&self, database: &Database)  -> impl std::future::Future<Output = Result<(), DatabaseError>> + std::marker::Send {async {
-        Ok(())
-    }}
+    fn after_create(
+        &self,
+        database: &Database,
+    ) -> impl std::future::Future<Output = Result<(), DatabaseError>> + std::marker::Send {
+        async { Ok(()) }
+    }
     #[allow(unused)]
     /// Called before the object gets removed from the database
-    fn after_update(&self, database: &Database)  -> impl std::future::Future<Output = Result<(), DatabaseError>> + std::marker::Send {async {
-        Ok(())
-    }}
+    fn after_update(
+        &self,
+        database: &Database,
+    ) -> impl std::future::Future<Output = Result<(), DatabaseError>> + std::marker::Send {
+        async { Ok(()) }
+    }
     #[allow(unused)]
     /// Called before the object gets removed from the database
-    fn after_delete(&self, database: &Database)  -> impl std::future::Future<Output = Result<(), DatabaseError>> + std::marker::Send {async {
-        Ok(())
-    }}
+    fn after_delete(
+        &self,
+        database: &Database,
+    ) -> impl std::future::Future<Output = Result<(), DatabaseError>> + std::marker::Send {
+        async { Ok(()) }
+    }
 
     /// the name of the table SQL table the object will be stored in. used also for api routing
     fn table_name() -> &'static str;

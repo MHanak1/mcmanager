@@ -1,8 +1,9 @@
 use crate::api::handlers::{ApiCreate, ApiGet, ApiList, ApiObject, ApiRemove, ApiUpdate};
 use crate::database::objects::{DbObject, FromJson, UpdateJson, User};
 use crate::database::types::{Access, Column, Id};
-use crate::database::{Database, DatabaseType, ValueType};
+use crate::database::{Database, ValueType};
 use crate::minecraft::server::ServerConfigLimit;
+use duplicate::duplicate_item;
 use serde::{Deserialize, Deserializer, Serialize};
 use sqlx::{Arguments, Error, FromRow, IntoArguments, Row};
 use std::collections::HashMap;
@@ -17,15 +18,15 @@ pub struct Group {
     /// group's name
     pub name: String,
     /// limit of user's total allocatable memory in MiB. [`None`] means no limit
-    pub total_memory_limit: Option<u32>,
+    pub total_memory_limit: Option<i64>,
     /// limit of user's per-world allocatable memory in MiB. [`None`] means no limit
-    pub per_world_memory_limit: Option<u32>,
+    pub per_world_memory_limit: Option<i64>,
     /// how many worlds can a user create. [`None`] means no limit
-    pub world_limit: Option<u32>,
+    pub world_limit: Option<i64>,
     /// how many worlds can be enabled at a time. [`None`] means no limit
-    pub active_world_limit: Option<u32>,
+    pub active_world_limit: Option<i64>,
     /// how much storage is available to a user in MiB. [`None`] means no limit
-    pub storage_limit: Option<u32>,
+    pub storage_limit: Option<i64>,
     /// server.properties config limitation. for more info look at the description in the config file
     pub config_blacklist: Vec<String>,
     /// server.properties config limitation. for more info look at the description in the config file
@@ -57,11 +58,11 @@ impl DbObject for Group {
         vec![
             Column::new("id", ValueType::Id).primary_key(),
             Column::new("name", ValueType::Text).not_null(),
-            Column::new("total_memory_limit", ValueType::Integer(false)),
-            Column::new("per_world_memory_limit", ValueType::Integer(false)),
-            Column::new("world_limit", ValueType::Integer(false)),
-            Column::new("active_world_limit", ValueType::Integer(false)),
-            Column::new("storage_limit", ValueType::Integer(false)),
+            Column::new("total_memory_limit", ValueType::Integer),
+            Column::new("per_world_memory_limit", ValueType::Integer),
+            Column::new("world_limit", ValueType::Integer),
+            Column::new("active_world_limit", ValueType::Integer),
+            Column::new("storage_limit", ValueType::Integer),
             Column::new("config_blacklist", ValueType::Text),
             Column::new("config_whitelist", ValueType::Text),
             Column::new("config_limits", ValueType::Text),
@@ -76,8 +77,9 @@ impl DbObject for Group {
     }
 }
 
-impl<'a> FromRow<'_, <DatabaseType as sqlx::Database>::Row> for Group {
-    fn from_row(row: &'_ <DatabaseType as sqlx::Database>::Row) -> Result<Self, Error> {
+#[duplicate_item(Row; [sqlx::sqlite::SqliteRow]; [sqlx::postgres::PgRow])]
+impl<'a> FromRow<'_, Row> for Group {
+    fn from_row(row: &'_ Row) -> Result<Self, Error> {
         Ok(Self {
             id: row.try_get("id")?,
             name: row.try_get("name")?,
@@ -97,8 +99,8 @@ impl<'a> FromRow<'_, <DatabaseType as sqlx::Database>::Row> for Group {
     }
 }
 
-impl<'a> IntoArguments<'a, crate::database::DatabaseType> for Group {
-    fn into_arguments(self) -> <crate::database::DatabaseType as sqlx::Database>::Arguments<'a> {
+impl<'a> IntoArguments<'a, sqlx::Sqlite> for Group {
+    fn into_arguments(self) -> sqlx::sqlite::SqliteArguments<'a> {
         let config_blacklist =
             serde_json::to_string(&self.config_blacklist).expect("serialization failed");
         let config_whitelist =
@@ -106,7 +108,51 @@ impl<'a> IntoArguments<'a, crate::database::DatabaseType> for Group {
         let config_limits =
             serde_json::to_string(&self.config_limits).expect("serialization failed");
 
-        let mut arguments = <crate::database::DatabaseType as sqlx::Database>::Arguments::default();
+        let mut arguments = sqlx::sqlite::SqliteArguments::default();
+
+        arguments.add(self.id).expect("Failed to add argument");
+        arguments.add(self.name).expect("Failed to argument");
+        arguments
+            .add(self.total_memory_limit)
+            .expect("Failed to add argument");
+        arguments
+            .add(self.per_world_memory_limit)
+            .expect("Failed to add argument");
+        arguments
+            .add(self.world_limit)
+            .expect("Failed to add argument");
+        arguments
+            .add(self.active_world_limit)
+            .expect("Failed to add argument");
+        arguments
+            .add(self.storage_limit)
+            .expect("Failed to add argument");
+        arguments
+            .add(config_blacklist)
+            .expect("Failed to add argument");
+        arguments
+            .add(config_whitelist)
+            .expect("Failed to add argument");
+        arguments
+            .add(config_limits)
+            .expect("Failed to add argument");
+        arguments
+            .add(self.is_privileged)
+            .expect("Failed to add argument");
+        arguments
+    }
+}
+
+impl<'a> IntoArguments<'a, sqlx::Postgres> for Group {
+    fn into_arguments(self) -> sqlx::postgres::PgArguments {
+        let config_blacklist =
+            serde_json::to_string(&self.config_blacklist).expect("serialization failed");
+        let config_whitelist =
+            serde_json::to_string(&self.config_whitelist).expect("serialization failed");
+        let config_limits =
+            serde_json::to_string(&self.config_limits).expect("serialization failed");
+
+        let mut arguments = sqlx::postgres::PgArguments::default();
 
         arguments.add(self.id).expect("Failed to add argument");
         arguments.add(self.name).expect("Failed to argument");
@@ -183,11 +229,11 @@ impl FromJson for Group {
         Self {
             id: Id::default(),
             name: data.name.clone(),
-            total_memory_limit: data.total_memory_limit,
-            per_world_memory_limit: data.per_world_memory_limit,
-            world_limit: data.world_limit,
-            active_world_limit: data.active_world_limit,
-            storage_limit: data.storage_limit,
+            total_memory_limit: data.total_memory_limit.map(|v| v as i64),
+            per_world_memory_limit: data.per_world_memory_limit.map(|v| v as i64),
+            world_limit: data.world_limit.map(|v| v as i64),
+            active_world_limit: data.active_world_limit.map(|v| v as i64),
+            storage_limit: data.storage_limit.map(|v| v as i64),
             config_blacklist: data.config_blacklist.clone().unwrap_or_default(),
             config_whitelist: data.config_whitelist.clone().unwrap_or_default(),
             config_limits: data.config_limits.clone().unwrap_or_default(),
@@ -196,7 +242,7 @@ impl FromJson for Group {
     }
 }
 
-// crate::database::DatabaseType value that is present is considered Some value, including null.
+// sqlx::Sqlite value that is present is considered Some value, including null.
 fn deserialize_some<'de, T, D>(deserializer: D) -> Result<Option<T>, D::Error>
 where
     T: Deserialize<'de>,
@@ -235,13 +281,26 @@ impl UpdateJson for Group {
     fn update_with_json(&self, data: &Self::JsonUpdate) -> Self {
         let mut new = self.clone();
         new.name = data.name.clone().unwrap_or(new.name);
-        new.total_memory_limit = data.total_memory_limit.unwrap_or(new.total_memory_limit);
+        new.total_memory_limit = data
+            .total_memory_limit
+            .map(|v| v.map(|v| v as i64))
+            .unwrap_or(new.total_memory_limit);
         new.per_world_memory_limit = data
             .per_world_memory_limit
+            .map(|v| v.map(|v| v as i64))
             .unwrap_or(new.per_world_memory_limit);
-        new.world_limit = data.world_limit.unwrap_or(new.world_limit);
-        new.active_world_limit = data.active_world_limit.unwrap_or(new.active_world_limit);
-        new.storage_limit = data.storage_limit.unwrap_or(new.storage_limit);
+        new.world_limit = data
+            .world_limit
+            .map(|v| v.map(|v| v as i64))
+            .unwrap_or(new.world_limit);
+        new.active_world_limit = data
+            .active_world_limit
+            .map(|v| v.map(|v| v as i64))
+            .unwrap_or(new.active_world_limit);
+        new.storage_limit = data
+            .storage_limit
+            .map(|v| v.map(|v| v as i64))
+            .unwrap_or(new.storage_limit);
         new.config_blacklist = data
             .config_blacklist
             .clone()

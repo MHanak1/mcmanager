@@ -1,8 +1,9 @@
 use crate::api::handlers::{ApiCreate, ApiGet, ApiList, ApiObject, ApiRemove};
 use crate::database::objects::{DbObject, FromJson, User};
 use crate::database::types::{Access, Column, Id};
-use crate::database::{Database, DatabaseType, ValueType};
+use crate::database::{Database, ValueType};
 use chrono::{DateTime, Utc};
+use duplicate::duplicate_item;
 use serde::{Deserialize, Serialize};
 use sqlx::{Arguments, FromRow, IntoArguments, Row};
 use std::fmt::Debug;
@@ -65,8 +66,9 @@ impl DbObject for InviteLink {
     }
 }
 
-impl FromRow<'_, <DatabaseType as sqlx::Database>::Row> for InviteLink {
-    fn from_row(row: &<DatabaseType as sqlx::Database>::Row) -> Result<Self, sqlx::Error> {
+#[duplicate_item(Row; [sqlx::sqlite::SqliteRow]; [sqlx::postgres::PgRow])]
+impl FromRow<'_, Row> for InviteLink {
+    fn from_row(row: &Row) -> Result<Self, sqlx::Error> {
         Ok(Self {
             id: row.try_get(0)?,
             invite_token: row.try_get(1)?,
@@ -81,9 +83,26 @@ impl FromRow<'_, <DatabaseType as sqlx::Database>::Row> for InviteLink {
     }
 }
 
-impl<'a> IntoArguments<'a, crate::database::DatabaseType> for InviteLink {
-    fn into_arguments(self) -> <crate::database::DatabaseType as sqlx::Database>::Arguments<'a> {
-        let mut arguments = <crate::database::DatabaseType as sqlx::Database>::Arguments::default();
+impl<'a> IntoArguments<'a, sqlx::Sqlite> for InviteLink {
+    fn into_arguments(self) -> sqlx::sqlite::SqliteArguments<'a> {
+        let mut arguments = sqlx::sqlite::SqliteArguments::default();
+        arguments.add(self.id).expect("Failed to add argument");
+        arguments
+            .add(self.invite_token)
+            .expect("Failed to add argument");
+        arguments
+            .add(self.creator_id)
+            .expect("Failed to add argument");
+        arguments
+            .add(self.created.to_string())
+            .expect("Failed to add argument");
+        arguments
+    }
+}
+
+impl<'a> IntoArguments<'a, sqlx::Postgres> for InviteLink {
+    fn into_arguments(self) -> sqlx::postgres::PgArguments {
+        let mut arguments = sqlx::postgres::PgArguments::default();
         arguments.add(self.id).expect("Failed to add argument");
         arguments
             .add(self.invite_token)

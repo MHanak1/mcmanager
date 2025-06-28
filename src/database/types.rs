@@ -1,5 +1,5 @@
+pub(crate) use crate::database::ValueType;
 use crate::database::objects::{DbObject, Group, User};
-pub(crate) use crate::database::{DatabaseType, ValueType};
 use crate::util;
 use crate::util::base64::base64_encode;
 use anyhow::Result;
@@ -501,13 +501,7 @@ impl<'de> Deserialize<'de> for Token {
 impl ValueType {
     pub fn descriptor(&self) -> String {
         match self {
-            ValueType::Integer(signed, ..) => {
-                if *signed {
-                    "INTEGER".to_string()
-                } else {
-                    "UNSIGNED INTEGER".to_string()
-                }
-            }
+            ValueType::Integer => "INTEGER".to_string(),
             ValueType::Float => "FLOAT".to_string(),
             ValueType::Text => "TEXT".to_string(),
             ValueType::Boolean => "BOOLEAN".to_string(),

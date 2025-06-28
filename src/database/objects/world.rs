@@ -4,7 +4,7 @@ use crate::api::util::rejections;
 use crate::database::objects::group::Group;
 use crate::database::objects::{DbObject, FromJson, UpdateJson, User, Version};
 use crate::database::types::{Access, Column, Id};
-use crate::database::{Database, DatabaseError, DatabaseType, ValueType};
+use crate::database::{Database, DatabaseError, ValueType};
 use crate::minecraft::server;
 use crate::minecraft::server::{MinecraftServerStatus, ServerConfigLimit};
 use async_trait::async_trait;
@@ -32,7 +32,7 @@ pub struct World {
     /// id of the icon stored in the filesystem (data/icons)
     pub icon_id: Option<Id>,
     /// amount of memory allocated to the server in MiB
-    pub allocated_memory: u32,
+    pub allocated_memory: i64,
     /// references [`Version`]
     pub version_id: Id,
     /// whether a server hosting this world should be running or not
@@ -65,7 +65,7 @@ impl DbObject for World {
             Column::new("name", ValueType::Text).not_null(),
             Column::new("hostname", ValueType::Text).not_null().unique(),
             Column::new("icon_id", ValueType::Id),
-            Column::new("allocated_memory", ValueType::Integer(false)).not_null(),
+            Column::new("allocated_memory", ValueType::Integer).not_null(),
             Column::new("version_id", ValueType::Id)
                 .not_null()
                 .references("versions(id)"),
@@ -80,9 +80,32 @@ impl DbObject for World {
     }
 }
 
-impl<'a> IntoArguments<'a, DatabaseType> for World {
-    fn into_arguments(self) -> <DatabaseType as sqlx::Database>::Arguments<'a> {
-        let mut arguments = <DatabaseType as sqlx::Database>::Arguments::default();
+impl<'a> IntoArguments<'a, sqlx::Sqlite> for World {
+    fn into_arguments(self) -> sqlx::sqlite::SqliteArguments<'a> {
+        let mut arguments = sqlx::sqlite::SqliteArguments::default();
+        arguments.add(self.id).expect("Failed to add argument");
+        arguments
+            .add(self.owner_id)
+            .expect("Failed to add argument");
+        arguments.add(self.name).expect("Failed to add argument");
+        arguments
+            .add(self.hostname)
+            .expect("Failed to add argument");
+        arguments.add(self.icon_id).expect("Failed to add argument");
+        arguments
+            .add(self.allocated_memory)
+            .expect("Failed to add argument");
+        arguments
+            .add(self.version_id)
+            .expect("Failed to add argument");
+        arguments.add(self.enabled).expect("Failed to add argument");
+        arguments
+    }
+}
+
+impl<'a> IntoArguments<'a, sqlx::Postgres> for World {
+    fn into_arguments(self) -> sqlx::postgres::PgArguments {
+        let mut arguments = sqlx::postgres::PgArguments::default();
         arguments.add(self.id).expect("Failed to add argument");
         arguments
             .add(self.owner_id)
@@ -161,7 +184,8 @@ impl FromJson for World {
             icon_id: data.icon_id,
             allocated_memory: data
                 .allocated_memory
-                .unwrap_or(crate::config::CONFIG.world_defaults.allocated_memory),
+                .unwrap_or(crate::config::CONFIG.world_defaults.allocated_memory)
+                as i64,
             version_id: data.version_id,
             enabled: false,
         }
@@ -187,6 +211,7 @@ impl UpdateJson for World {
         new.icon_id = data.icon_id.unwrap_or(new.icon_id);
         new.allocated_memory = data
             .allocated_memory
+            .map(|v| v as i64)
             .unwrap_or(new.allocated_memory);
         new.version_id = data.version_id.unwrap_or(new.version_id);
         new.enabled = data.enabled.unwrap_or(new.enabled);
@@ -243,10 +268,7 @@ impl ApiCreate for World {
     ) -> Result<(), DatabaseError> {
         let group = user.group(database.clone(), None).await;
         let user_worlds: Vec<World> = database
-            .get_all_where(
-                "owner_id", user.id,
-                Some((&user, &group)),
-            )
+            .get_all_where("owner_id", user.id, Some((&user, &group)))
             .await?;
         let group = user.group(database.clone(), None).await;
 
@@ -259,10 +281,7 @@ impl ApiCreate for World {
 
         json.hostname = into_valid_hostname(&json.hostname);
         if !database
-            .get_all_where::<World, _>(
-                "hostname", json.hostname.clone(),
-                None,
-            )
+            .get_all_where::<World, _>("hostname", json.hostname.clone(), None)
             .await?
             .is_empty()
         {
@@ -274,10 +293,7 @@ impl ApiCreate for World {
         if let Some(memory_limit) = group.total_memory_limit {
             if let Some(allocated_memory) = json.allocated_memory {
                 let user_worlds: Vec<World> = database
-                    .get_all_where(
-                        "owner_id", user.id,
-                        Some((&user, &group)),
-                    )
+                    .get_all_where("owner_id", user.id, Some((&user, &group)))
                     .await?;
 
                 let mut total_memory = 0;
@@ -323,10 +339,7 @@ impl ApiUpdate for World {
     ) -> Result<(), DatabaseError> {
         let group = user.group(database.clone(), None).await;
         let user_worlds: Vec<World> = database
-            .get_all_where(
-                "owner_id", user.id,
-                Some((&user, &group)),
-            )
+            .get_all_where("owner_id", user.id, Some((&user, &group)))
             .await?;
 
         //enforce the active world limit
@@ -348,17 +361,18 @@ impl ApiUpdate for World {
         }
         if let Some(hostname) = &json.hostname {
             if match database
-                .get_where::<World, _>("hostname", hostname.clone(), None,
-                )
-                .await {
+                .get_where::<World, _>("hostname", hostname.clone(), None)
+                .await
+            {
                 Ok(world) => {
                     if world.id == self.id {
                         false
-                    } else { true }
+                    } else {
+                        true
+                    }
                 }
-                Err(_) => {false}
-            }
-            {
+                Err(_) => false,
+            } {
                 debug!("hostname already used. adding a random value to it");
                 json.hostname = Some(hostname.clone() + &rand::random_range(0..100000).to_string());
             }

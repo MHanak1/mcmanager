@@ -50,9 +50,21 @@ impl DbObject for ModLoader {
     }
 }
 
-impl<'a> IntoArguments<'a, crate::database::DatabaseType> for ModLoader {
-    fn into_arguments(self) -> <crate::database::DatabaseType as sqlx::Database>::Arguments<'a> {
-        let mut arguments = <crate::database::DatabaseType as sqlx::Database>::Arguments::default();
+impl<'a> IntoArguments<'a, sqlx::Sqlite> for ModLoader {
+    fn into_arguments(self) -> sqlx::sqlite::SqliteArguments<'a> {
+        let mut arguments = sqlx::sqlite::SqliteArguments::default();
+        arguments.add(self.id).expect("Failed to add argument");
+        arguments.add(self.name).expect("Failed to add argument");
+        arguments
+            .add(self.can_load_mods)
+            .expect("Failed to add argument");
+        arguments
+    }
+}
+
+impl<'a> IntoArguments<'a, sqlx::Postgres> for ModLoader {
+    fn into_arguments(self) -> sqlx::postgres::PgArguments {
+        let mut arguments = sqlx::postgres::PgArguments::default();
         arguments.add(self.id).expect("Failed to add argument");
         arguments.add(self.name).expect("Failed to add argument");
         arguments

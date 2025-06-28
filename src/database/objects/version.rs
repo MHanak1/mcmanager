@@ -49,9 +49,23 @@ impl DbObject for Version {
     }
 }
 
-impl<'a> IntoArguments<'a, crate::database::DatabaseType> for Version {
-    fn into_arguments(self) -> <crate::database::DatabaseType as sqlx::Database>::Arguments<'a> {
-        let mut arguments = <crate::database::DatabaseType as sqlx::Database>::Arguments::default();
+impl<'a> IntoArguments<'a, sqlx::Sqlite> for Version {
+    fn into_arguments(self) -> sqlx::sqlite::SqliteArguments<'a> {
+        let mut arguments = sqlx::sqlite::SqliteArguments::default();
+        arguments.add(self.id).expect("Failed to add argument");
+        arguments
+            .add(self.minecraft_version)
+            .expect("Failed to argument");
+        arguments
+            .add(self.mod_loader_id)
+            .expect("Failed to argument");
+        arguments
+    }
+}
+
+impl<'a> IntoArguments<'a, sqlx::Postgres> for Version {
+    fn into_arguments(self) -> sqlx::postgres::PgArguments {
+        let mut arguments = sqlx::postgres::PgArguments::default();
         arguments.add(self.id).expect("Failed to add argument");
         arguments
             .add(self.minecraft_version)

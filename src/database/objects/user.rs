@@ -4,7 +4,7 @@ use crate::config::CONFIG;
 use crate::database;
 use crate::database::objects::{DbObject, FromJson, Group, Mod, UpdateJson, World};
 use crate::database::types::{Access, Column, Id};
-use crate::database::{Database, DatabaseError, DatabaseType, ValueType};
+use crate::database::{Database, DatabaseError, ValueType};
 use crate::minecraft::server::ServerConfigLimit;
 use async_trait::async_trait;
 use futures::future;
@@ -84,9 +84,21 @@ impl DbObject for User {
     }
 }
 
-impl<'a> IntoArguments<'a, DatabaseType> for User {
-    fn into_arguments(self) -> <DatabaseType as sqlx::Database>::Arguments<'a> {
-        let mut arguments = <DatabaseType as sqlx::Database>::Arguments::default();
+impl<'a> IntoArguments<'a, sqlx::Sqlite> for User {
+    fn into_arguments(self) -> sqlx::sqlite::SqliteArguments<'a> {
+        let mut arguments = sqlx::sqlite::SqliteArguments::default();
+        arguments.add(self.id).expect("Failed to argument");
+        arguments.add(self.username).expect("Failed to argument");
+        arguments.add(self.avatar_id).expect("Failed to argument");
+        arguments.add(self.group_id).expect("Failed to argument");
+        arguments.add(self.enabled).expect("Failed to argument");
+        arguments
+    }
+}
+
+impl<'a> IntoArguments<'a, sqlx::Postgres> for User {
+    fn into_arguments(self) -> sqlx::postgres::PgArguments {
+        let mut arguments = sqlx::postgres::PgArguments::default();
         arguments.add(self.id).expect("Failed to argument");
         arguments.add(self.username).expect("Failed to argument");
         arguments.add(self.avatar_id).expect("Failed to argument");
@@ -108,7 +120,7 @@ impl Default for User {
     }
 }
 
-// DatabaseType value that is present is considered Some value, including null.
+// sqlx::Sqlite value that is present is considered Some value, including null.
 fn deserialize_some<'de, T, D>(deserializer: D) -> Result<Option<T>, D::Error>
 where
     T: Deserialize<'de>,
@@ -293,12 +305,13 @@ impl User {
 }
 
 pub mod password {
+    use crate::database::ValueType;
     use crate::database::objects::DbObject;
     use crate::database::types::{Access, Column, Id};
-    use crate::database::{DatabaseType, ValueType};
     use argon2::password_hash::rand_core::OsRng;
     use argon2::password_hash::{PasswordHashString, SaltString};
     use argon2::{Argon2, PasswordHasher};
+    use duplicate::duplicate_item;
     use sqlx::{Arguments, Error, FromRow, IntoArguments, Row};
     use std::str::FromStr;
 
@@ -359,9 +372,9 @@ pub mod password {
         }
     }
 
-    impl<'a> IntoArguments<'a, DatabaseType> for Password {
-        fn into_arguments(self) -> <DatabaseType as sqlx::Database>::Arguments<'a> {
-            let mut arguments = <DatabaseType as sqlx::Database>::Arguments::default();
+    impl<'a> IntoArguments<'a, sqlx::Sqlite> for Password {
+        fn into_arguments(self) -> sqlx::sqlite::SqliteArguments<'a> {
+            let mut arguments = sqlx::sqlite::SqliteArguments::default();
             arguments.add(self.user_id).expect("Failed to add argument");
             arguments
                 .add(self.hash.to_string())
@@ -370,8 +383,20 @@ pub mod password {
         }
     }
 
-    impl<'a> FromRow<'_, <DatabaseType as sqlx::Database>::Row> for Password {
-        fn from_row(row: &'_ <DatabaseType as sqlx::Database>::Row) -> Result<Self, Error> {
+    impl<'a> IntoArguments<'a, sqlx::Postgres> for Password {
+        fn into_arguments(self) -> sqlx::postgres::PgArguments {
+            let mut arguments = sqlx::postgres::PgArguments::default();
+            arguments.add(self.user_id).expect("Failed to add argument");
+            arguments
+                .add(self.hash.to_string())
+                .expect("Failed to add argument");
+            arguments
+        }
+    }
+
+    #[duplicate_item(Row; [sqlx::sqlite::SqliteRow]; [sqlx::postgres::PgRow])]
+    impl<'a> FromRow<'_, Row> for Password {
+        fn from_row(row: &'_ Row) -> Result<Self, Error> {
             Ok(Self {
                 user_id: row.get(0),
                 hash: PasswordHashString::from_str(row.get(1)).map_err(|err| {
@@ -389,8 +414,9 @@ pub mod session {
     use crate::api::handlers::{ApiCreate, ApiGet, ApiList, ApiObject, ApiRemove};
     use crate::database::objects::{DbObject, FromJson, User};
     use crate::database::types::{Access, Column, Id};
-    use crate::database::{Database, DatabaseType, ValueType};
+    use crate::database::{Database, ValueType};
     use chrono::{DateTime, Utc};
+    use duplicate::duplicate_item;
     use serde::{Deserialize, Serialize, Serializer};
     use sqlx::{Arguments, Error, FromRow, IntoArguments, Row};
     use std::str::FromStr;
@@ -446,8 +472,10 @@ pub mod session {
             self.user_id
         }
     }
-    impl<'r> FromRow<'r, <DatabaseType as sqlx::Database>::Row> for Session {
-        fn from_row(row: &'r <DatabaseType as sqlx::Database>::Row) -> Result<Self, Error> {
+
+    #[duplicate_item(Row; [sqlx::sqlite::SqliteRow]; [sqlx::postgres::PgRow])]
+    impl<'r> FromRow<'r, Row> for Session {
+        fn from_row(row: &'r Row) -> Result<Self, Error> {
             Ok(Self {
                 user_id: row.get(0),
                 token: row.get(1),
@@ -462,9 +490,22 @@ pub mod session {
         }
     }
 
-    impl<'a> IntoArguments<'a, DatabaseType> for Session {
-        fn into_arguments(self) -> <DatabaseType as sqlx::Database>::Arguments<'a> {
-            let mut arguments = <DatabaseType as sqlx::Database>::Arguments::default();
+    impl<'a> IntoArguments<'a, sqlx::Sqlite> for Session {
+        fn into_arguments(self) -> sqlx::sqlite::SqliteArguments<'a> {
+            let mut arguments = sqlx::sqlite::SqliteArguments::default();
+            arguments.add(self.user_id).expect("Failed to add argument");
+            arguments.add(self.token).expect("Failed to add argument");
+            arguments
+                .add(self.created.to_string())
+                .expect("Failed to add argument");
+            arguments.add(self.expires).expect("Failed to add argument");
+            arguments
+        }
+    }
+
+    impl<'a> IntoArguments<'a, sqlx::Postgres> for Session {
+        fn into_arguments(self) -> sqlx::postgres::PgArguments {
+            let mut arguments = sqlx::postgres::PgArguments::default();
             arguments.add(self.user_id).expect("Failed to add argument");
             arguments.add(self.token).expect("Failed to add argument");
             arguments

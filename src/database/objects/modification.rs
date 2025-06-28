@@ -62,9 +62,9 @@ impl DbObject for Mod {
     }
 }
 
-impl<'a> IntoArguments<'a, crate::database::DatabaseType> for Mod {
-    fn into_arguments(self) -> <crate::database::DatabaseType as sqlx::Database>::Arguments<'a> {
-        let mut arguments = <crate::database::DatabaseType as sqlx::Database>::Arguments::default();
+impl<'a> IntoArguments<'a, sqlx::Sqlite> for Mod {
+    fn into_arguments(self) -> sqlx::sqlite::SqliteArguments<'a> {
+        let mut arguments = sqlx::sqlite::SqliteArguments::default();
         arguments.add(self.id).expect("Failed to add argument");
         arguments
             .add(self.owner_id)
@@ -81,7 +81,26 @@ impl<'a> IntoArguments<'a, crate::database::DatabaseType> for Mod {
     }
 }
 
-// crate::database::DatabaseType value that is present is considered Some value, including null.
+impl<'a> IntoArguments<'a, sqlx::Postgres> for Mod {
+    fn into_arguments(self) -> sqlx::postgres::PgArguments {
+        let mut arguments = sqlx::postgres::PgArguments::default();
+        arguments.add(self.id).expect("Failed to add argument");
+        arguments
+            .add(self.owner_id)
+            .expect("Failed to add argument");
+        arguments
+            .add(self.version_id)
+            .expect("Failed to add argument");
+        arguments.add(self.name).expect("Failed to add argument");
+        arguments
+            .add(self.description)
+            .expect("Failed to add argument");
+        arguments.add(self.icon_id).expect("Failed to add argument");
+        arguments
+    }
+}
+
+// sqlx::Sqlite value that is present is considered Some value, including null.
 fn deserialize_some<'de, T, D>(deserializer: D) -> Result<Option<T>, D::Error>
 where
     T: Deserialize<'de>,
