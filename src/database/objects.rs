@@ -1,5 +1,5 @@
 use crate::database::types::{Access, Column, Id};
-use crate::database::{Database, DatabaseError};
+use crate::database::{Database, DatabaseError, DatabaseType};
 use serde::de::DeserializeOwned;
 use sqlx::any::AnyRow;
 use sqlx::{Any, Encode, FromRow, IntoArguments, Row};
@@ -131,10 +131,10 @@ pub trait DbObject: Send + Sync {
     }
 
     /// generate the string needed to generate a SQL table
-    fn database_descriptor() -> String {
+    fn database_descriptor(db_type: &DatabaseType) -> String {
         Self::columns()
             .iter()
-            .map(|column| format!("{} {}", column.name, column.descriptor()))
+            .map(|column| format!("{} {}", column.name, column.descriptor(db_type)))
             .collect::<Vec<_>>()
             .join(", ")
     }

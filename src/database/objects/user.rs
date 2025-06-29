@@ -460,7 +460,7 @@ pub mod session {
         fn columns() -> Vec<Column> {
             vec![
                 Column::new("user_id", ValueType::Id).references("users(id)"),
-                Column::new("token", ValueType::Text).primary_key().hidden(),
+                Column::new("token", ValueType::Token).primary_key().hidden(),
                 Column::new("created", ValueType::Datetime).not_null(),
                 Column::new("expires", ValueType::Boolean)
                     .not_null()
@@ -479,12 +479,7 @@ pub mod session {
             Ok(Self {
                 user_id: row.get(0),
                 token: row.get(1),
-                created: DateTime::from_str(row.get(2)).map_err(|err| {
-                    sqlx::Error::ColumnDecode {
-                        index: "created".parse().unwrap(),
-                        source: Box::new(err),
-                    }
-                })?,
+                created: row.get(2),
                 expires: row.get(3),
             })
         }
@@ -496,7 +491,8 @@ pub mod session {
             arguments.add(self.user_id).expect("Failed to add argument");
             arguments.add(self.token).expect("Failed to add argument");
             arguments
-                .add(self.created.to_string())
+                //.add(self.created.to_string())
+                .add(self.created)
                 .expect("Failed to add argument");
             arguments.add(self.expires).expect("Failed to add argument");
             arguments
@@ -508,8 +504,7 @@ pub mod session {
             let mut arguments = sqlx::postgres::PgArguments::default();
             arguments.add(self.user_id).expect("Failed to add argument");
             arguments.add(self.token).expect("Failed to add argument");
-            arguments
-                .add(self.created.to_string())
+            arguments.add(self.created)
                 .expect("Failed to add argument");
             arguments.add(self.expires).expect("Failed to add argument");
             arguments

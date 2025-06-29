@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
 use std::ops::Range;
+use crate::database::DatabasePool;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
@@ -15,12 +16,27 @@ pub struct Config {
     pub public_routes_rate_limit: (u32, u64),
     pub private_routes_rate_limit: (u32, u64),
     pub require_invite_to_register: bool,
+    pub database: DatabaseConfig,
     pub minecraft_server_type: ServerType,
     pub remote: RemoteConfig,
     pub world: WorldConfig,
     pub user_defaults: UserDefaults,
     pub world_defaults: WorldDefaults,
     pub velocity: VelocityConfig,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DatabaseType {
+    Sqlite,
+    Postgres,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct DatabaseConfig {
+    pub database_type: DatabaseType,
+    pub max_connections: u32,
+    pub pg_host: String,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -69,6 +85,7 @@ pub static CONFIG: Lazy<Config> = Lazy::new(|| {
     let config_path = util::dirs::base_dir().join("config.toml");
 
     if config_path.exists() {
+        debug!("loading config: {}", config_path.display());
         config_builder = config_builder.add_source(config::File::with_name(
             util::dirs::base_dir()
                 .join("config.toml")
@@ -78,10 +95,6 @@ pub static CONFIG: Lazy<Config> = Lazy::new(|| {
         ));
     }
 
-    debug!(
-        "loading config: {}",
-        util::dirs::base_dir().join("config.toml").display()
-    );
 
     config_builder
         .build()

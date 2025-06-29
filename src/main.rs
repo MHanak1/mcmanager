@@ -1,7 +1,7 @@
 use anyhow::{Result, bail};
 use futures::{SinkExt, TryFutureExt};
 use log::{error, info};
-use mcmanager::config::CONFIG;
+use mcmanager::config::{DatabaseType, CONFIG};
 use mcmanager::database::objects::{Group, User, World};
 use mcmanager::database::types::Id;
 use mcmanager::database::{Database, DatabasePool, objects};
@@ -10,12 +10,12 @@ use mcmanager::minecraft::velocity::{InternalVelocityServer, VelocityServer};
 use mcmanager::{bin, util};
 use serde::Deserialize;
 use sqlx::any::AnyPoolOptions;
-use sqlx::postgres::PgPoolOptions;
+use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
-use sqlx::{SqliteConnection, SqlitePool};
+use sqlx::{PgPool, SqliteConnection, SqlitePool};
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::Path;
 use std::time::Duration;
 use warp::fs::file;
@@ -25,12 +25,35 @@ async fn main() -> Result<()> {
     env_logger::init();
     util::dirs::init_dirs().expect("Failed to initialize the data directory");
 
-    let pool = SqlitePool::connect_with(
-        SqliteConnectOptions::new()
-            .filename(util::dirs::data_dir().join("database.db"))
-            .create_if_missing(true),
-    )
-    .await?;
+    let config_path = util::dirs::base_dir().join("config.toml");
+
+    if !config_path.exists() {
+        let mut config_file = File::create(&config_path)?;
+        config_file.write_all(include_bytes!("resources/default_config.toml"))?;
+        println!("Config file written to {}", config_path.to_string_lossy());
+        println!("You can now edit the values in the config file and restart this executable.");
+        return Ok(())
+    }
+
+    let pool: DatabasePool = match CONFIG.database.database_type {
+        DatabaseType::Sqlite => {
+            let options = SqlitePoolOptions::new()
+                .max_connections(CONFIG.database.max_connections);
+
+            options.connect_with(
+                SqliteConnectOptions::new()
+                    .filename(util::dirs::data_dir().join("database.db"))
+                    .create_if_missing(true)
+            ).await?.into()
+        }
+        DatabaseType::Postgres => {
+            PgPoolOptions::new()
+                .max_connections(CONFIG.database.max_connections)
+                .connect(CONFIG.database.pg_host.as_str())
+                .await?
+                .into()
+        }
+    };
 
     /*
     let pool = PgPoolOptions::new()
@@ -40,13 +63,13 @@ async fn main() -> Result<()> {
      */
 
     let database = Database {
-        pool: DatabasePool::from(pool),
+        pool,
     };
     database.init().await.expect("Failed to init database");
 
-    let first_launch = database.get_all::<User>(None).await?.is_empty();
+    let second_launch = database.get_all::<User>(None).await?.is_empty();
 
-    if first_launch {
+    if second_launch {
         util::dirs::init_dirs().expect("Failed to initialize the data directory");
 
         println!(include_str!("resources/logo.txt"));
@@ -186,15 +209,19 @@ async fn main() -> Result<()> {
                 )
                 .await?;
 
-            let mut config_file = File::create(&util::dirs::base_dir().join("config.toml"))
-                .expect("failed to create the config file");
+            let mut config_file = File::open(&config_path)?;
+            let mut config_contents = String::new();
+            config_file.read_to_string(&mut config_contents)?;
+            drop(config_file);
+
+            let mut config_file = File::create(&config_path)?;
             config_file
                 .write_all(
-                    include_str!("resources/default_config.toml")
-                        .replace("$default_group_id", default_group.id.to_string().as_str())
+                    config_contents
+                        .replace("AAAAAAAA", default_group.id.to_string().as_str())
                         .as_bytes(),
                 )
-                .expect("failed to write default config file");
+                .expect("failed to write to the config file");
 
             let mut velocity_config_file =
                 File::create(&util::dirs::base_dir().join("velocity_config.toml"))
@@ -220,10 +247,9 @@ async fn main() -> Result<()> {
             }
         }
         println!(
-            "MCManager set up successfully. Now you should edit the config and restart this executable"
+            "MCManager set up successfully. You can now restart this executable."
         );
-
-        return Ok(());
+        return Ok(())
     }
 
     tokio::task::spawn(async {

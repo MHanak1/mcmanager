@@ -14,6 +14,15 @@ require_invite_to_register = true
 # how to launch and manage minecraft servers. avaliable: internal, remote, kubernetes (not implemented). this should always be "internal" for minimanager
 minecraft_server_type = "internal"
 
+[database]
+# database: sqlite or postgres
+database_type = "sqlite"
+# max concurrent connections
+max_connections = 5
+# PostgreSQL database host. includes username, password, hostname, port and database name
+pg_host = "postgres://mcmanager:PASSWORD@localhost:5432/mcmanager"
+
+# remote minecraft server configuration
 [remote] # run the servers on a separate system using minimanager
 host = "http://localhost:3031"
 
@@ -36,7 +45,7 @@ java_launch_command = "java -jar -Xms512m %max_mem% %jar% -nogui"
 
 [user_defaults]
 #default user group
-group_id = "$default_group_id" # this gets replaced with the actual id during the first setup
+group_id = "AAAAAAAA" # this gets replaced with the actual id during the first setup
 
 [world_defaults]
 # Default amount of memory allocated to a server (in MiB)

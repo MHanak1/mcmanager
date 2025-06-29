@@ -18,15 +18,15 @@ pub struct Group {
     /// group's name
     pub name: String,
     /// limit of user's total allocatable memory in MiB. [`None`] means no limit
-    pub total_memory_limit: Option<i64>,
+    pub total_memory_limit: Option<i32>,
     /// limit of user's per-world allocatable memory in MiB. [`None`] means no limit
-    pub per_world_memory_limit: Option<i64>,
+    pub per_world_memory_limit: Option<i32>,
     /// how many worlds can a user create. [`None`] means no limit
-    pub world_limit: Option<i64>,
+    pub world_limit: Option<i32>,
     /// how many worlds can be enabled at a time. [`None`] means no limit
-    pub active_world_limit: Option<i64>,
+    pub active_world_limit: Option<i32>,
     /// how much storage is available to a user in MiB. [`None`] means no limit
-    pub storage_limit: Option<i64>,
+    pub storage_limit: Option<i32>,
     /// server.properties config limitation. for more info look at the description in the config file
     pub config_blacklist: Vec<String>,
     /// server.properties config limitation. for more info look at the description in the config file
@@ -229,11 +229,11 @@ impl FromJson for Group {
         Self {
             id: Id::default(),
             name: data.name.clone(),
-            total_memory_limit: data.total_memory_limit.map(|v| v as i64),
-            per_world_memory_limit: data.per_world_memory_limit.map(|v| v as i64),
-            world_limit: data.world_limit.map(|v| v as i64),
-            active_world_limit: data.active_world_limit.map(|v| v as i64),
-            storage_limit: data.storage_limit.map(|v| v as i64),
+            total_memory_limit: data.total_memory_limit.map(|v| v.try_into().unwrap_or(i32::MAX)),
+            per_world_memory_limit: data.per_world_memory_limit.map(|v| v.try_into().unwrap_or(i32::MAX)),
+            world_limit: data.world_limit.map(|v| v.try_into().unwrap_or(i32::MAX)),
+            active_world_limit: data.active_world_limit.map(|v| v.try_into().unwrap_or(i32::MAX)),
+            storage_limit: data.storage_limit.map(|v| v.try_into().unwrap_or(i32::MAX)),
             config_blacklist: data.config_blacklist.clone().unwrap_or_default(),
             config_whitelist: data.config_whitelist.clone().unwrap_or_default(),
             config_limits: data.config_limits.clone().unwrap_or_default(),
@@ -283,23 +283,23 @@ impl UpdateJson for Group {
         new.name = data.name.clone().unwrap_or(new.name);
         new.total_memory_limit = data
             .total_memory_limit
-            .map(|v| v.map(|v| v as i64))
+            .map(|v| v.map(|v| v.try_into().unwrap_or(i32::MAX)))
             .unwrap_or(new.total_memory_limit);
         new.per_world_memory_limit = data
             .per_world_memory_limit
-            .map(|v| v.map(|v| v as i64))
+            .map(|v| v.map(|v| v.try_into().unwrap_or(i32::MAX)))
             .unwrap_or(new.per_world_memory_limit);
         new.world_limit = data
             .world_limit
-            .map(|v| v.map(|v| v as i64))
+            .map(|v| v.map(|v| v.try_into().unwrap_or(i32::MAX)))
             .unwrap_or(new.world_limit);
         new.active_world_limit = data
             .active_world_limit
-            .map(|v| v.map(|v| v as i64))
+            .map(|v| v.map(|v| v.try_into().unwrap_or(i32::MAX)))
             .unwrap_or(new.active_world_limit);
         new.storage_limit = data
             .storage_limit
-            .map(|v| v.map(|v| v as i64))
+            .map(|v| v.map(|v| v.try_into().unwrap_or(i32::MAX)))
             .unwrap_or(new.storage_limit);
         new.config_blacklist = data
             .config_blacklist

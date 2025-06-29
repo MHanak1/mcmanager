@@ -11,6 +11,7 @@ use std::fmt::{Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::str::FromStr;
 use test_log::test;
+use crate::database::DatabaseType;
 
 pub(crate) const ID_MAX_VALUE: i64 = 281_474_976_710_655;
 
@@ -38,8 +39,8 @@ impl Column {
         &self.name
     }
 
-    pub fn descriptor(&self) -> String {
-        let mut descriptor = self.data_type.descriptor();
+    pub fn descriptor(&self, db_type: &DatabaseType) -> String {
+        let mut descriptor = self.data_type.descriptor(db_type);
         for modifier in &self.modifiers {
             descriptor = modifier.apply_to(&descriptor);
         }
@@ -195,7 +196,7 @@ impl Access {
 
     pub fn access_filter<'a, T: DbObject + ?Sized>(&self, user: &User, group: &Group) -> String {
         match self {
-            Access::All => "1".to_string(),
+            Access::All => "TRUE".to_string(),
             Access::And(left, right) => {
                 format!(
                     "({} AND {})",
@@ -219,15 +220,15 @@ impl Access {
                             format!("{}={}", owner_column_name, user.id.as_i64()) // if something breaks blame the conversion to i64 here
                         }
                         Access::PrivilegedUser => {
-                            if group.is_privileged { "1" } else { "0" }.to_string()
+                            if group.is_privileged { "TRUE" } else { "FALSE" }.to_string()
                         }
-                        Access::None => "0".to_string(),
+                        Access::None => "FALSE".to_string(),
                         Access::All | Access::And(..) | Access::Or(..) => {
                             unreachable!();
                         }
                     }
                 } else {
-                    "0".to_string()
+                    "FALSE".to_string()
                 }
             }
         }
@@ -499,16 +500,22 @@ impl<'de> Deserialize<'de> for Token {
 }
 */
 impl ValueType {
-    pub fn descriptor(&self) -> String {
+    pub fn descriptor(&self, db_type: &DatabaseType) -> String {
         match self {
             ValueType::Integer => "INTEGER".to_string(),
-            ValueType::Float => "FLOAT".to_string(),
+            ValueType::Float => "REAL".to_string(),
             ValueType::Text => "TEXT".to_string(),
             ValueType::Boolean => "BOOLEAN".to_string(),
             ValueType::Blob => "BLOB".to_string(),
-            ValueType::Id => "UNSIGNED BIGINT".to_string(),
-            ValueType::Token => "TEXT".to_string(),
-            ValueType::Datetime => "DATETIME".to_string(),
+            ValueType::Id => "BIGINT".to_string(),
+            ValueType::Token => match db_type {
+                DatabaseType::Postgres => "UUID".to_string(),
+                DatabaseType::Sqlite => "TEXT".to_string(),
+            }
+            ValueType::Datetime => match db_type {
+                DatabaseType::Postgres => "TIMESTAMPTZ".to_string(),
+                DatabaseType::Sqlite => "DATETIME".to_string(),
+            }
         }
     }
 }

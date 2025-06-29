@@ -32,7 +32,7 @@ pub struct World {
     /// id of the icon stored in the filesystem (data/icons)
     pub icon_id: Option<Id>,
     /// amount of memory allocated to the server in MiB
-    pub allocated_memory: i64,
+    pub allocated_memory: i32,
     /// references [`Version`]
     pub version_id: Id,
     /// whether a server hosting this world should be running or not
@@ -185,7 +185,8 @@ impl FromJson for World {
             allocated_memory: data
                 .allocated_memory
                 .unwrap_or(crate::config::CONFIG.world_defaults.allocated_memory)
-                as i64,
+                .try_into()
+                .unwrap_or(i32::MAX),
             version_id: data.version_id,
             enabled: false,
         }
@@ -211,7 +212,7 @@ impl UpdateJson for World {
         new.icon_id = data.icon_id.unwrap_or(new.icon_id);
         new.allocated_memory = data
             .allocated_memory
-            .map(|v| v as i64)
+            .map(|v| v.try_into().unwrap_or(i32::MAX))
             .unwrap_or(new.allocated_memory);
         new.version_id = data.version_id.unwrap_or(new.version_id);
         new.enabled = data.enabled.unwrap_or(new.enabled);

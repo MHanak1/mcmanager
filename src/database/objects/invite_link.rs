@@ -45,7 +45,7 @@ impl DbObject for InviteLink {
     fn columns() -> Vec<Column> {
         vec![
             Column::new("id", ValueType::Id).primary_key(),
-            Column::new("invite_token", ValueType::Text)
+            Column::new("invite_token", ValueType::Token)
                 .not_null()
                 .unique(),
             Column::new("creator_id", ValueType::Id)
@@ -73,12 +73,7 @@ impl FromRow<'_, Row> for InviteLink {
             id: row.try_get(0)?,
             invite_token: row.try_get(1)?,
             creator_id: row.try_get(2)?,
-            created: chrono::DateTime::from_str(row.try_get::<&str, _>(3)?).map_err(|err| {
-                sqlx::Error::ColumnDecode {
-                    index: "created".parse().unwrap(),
-                    source: Box::new(err),
-                }
-            })?,
+            created: row.try_get(3)?,
         })
     }
 }
@@ -94,7 +89,7 @@ impl<'a> IntoArguments<'a, sqlx::Sqlite> for InviteLink {
             .add(self.creator_id)
             .expect("Failed to add argument");
         arguments
-            .add(self.created.to_string())
+            .add(self.created)
             .expect("Failed to add argument");
         arguments
     }
@@ -111,7 +106,7 @@ impl<'a> IntoArguments<'a, sqlx::Postgres> for InviteLink {
             .add(self.creator_id)
             .expect("Failed to add argument");
         arguments
-            .add(self.created.to_string())
+            .add(self.created)
             .expect("Failed to add argument");
         arguments
     }

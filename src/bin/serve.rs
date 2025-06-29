@@ -3,13 +3,12 @@ use crate::api::handlers::ApiObject;
 use crate::config;
 use crate::config::CONFIG;
 use crate::database::objects::{Group, InviteLink, Mod, ModLoader, Session, User, Version, World};
-use crate::database::{Database, DatabasePool};
+use crate::database::{Database};
 use crate::minecraft::velocity::{InternalVelocityServer, VelocityServer};
 use crate::{api, util};
 use log::{error, info};
 use sqlx::Encode;
 use sqlx::any::AnyPoolOptions;
-use sqlx::postgres::PgPoolOptions;
 use sqlx::sqlite::SqlitePoolOptions;
 use std::io::Write;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -56,16 +55,7 @@ pub async fn main() -> anyhow::Result<()> {
         .max_connections(5)
         .connect("sqlite://data/database.db")
         .await?;
-
-    /*
-    let pool = PgPoolOptions::new()
-        .max_connections(5)
-        .connect("postgres://postgres:password@localhost")
-        .await?;
-     */
-    let database = Database {
-        pool: DatabasePool::from(pool),
-    };
+    let database = Database { pool: crate::database::DatabasePool::from(pool) };
     database
         .init()
         .await

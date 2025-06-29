@@ -45,6 +45,60 @@ pub mod dirs {
     }
 }
 
+#[macro_export]
+macro_rules! execute_on_enum {
+    ($enum_:expr; ($variant:path) |$value:ident| $block:block) => {
+        match $enum_ {
+            $variant ($value) => $block,
+            _ => unreachable!()
+        }
+    };
+    ($enum_:expr; ($variant1:path, $variant2:path) |$value:ident| $block:block) => {
+        match $enum_ {
+            $variant1 ($value) => $block,
+            $variant2 ($value) => $block,
+        }
+    };
+
+    ($enum_:expr; ($variant1:path, $variant2:path, $variant3:path) |$value:ident| $block:block) => {
+        match $enum_ {
+            $variant1 ($value) => $block,
+            $variant2 ($value) => $block,
+            $variant3 ($value) => $block,
+        }
+    };
+
+    ($enum_:expr; ($variant1:path, $variant2:path, $variant3:path, $variant4:path) |$value:ident| $block:block) => {
+        match $enum_ {
+            $variant1 ($value) => $block,
+            $variant2 ($value) => $block,
+            $variant3 ($value) => $block,
+            $variant4 ($value) => $block,
+        }
+    };
+
+    ($enum_:expr; ($variant1:path, $variant2:path, $variant3:path, $variant4:path, $variant5:path) |$value:ident| $block:block) => {
+        match $enum_ {
+            $variant1 ($value) => $block,
+            $variant2 ($value) => $block,
+            $variant3 ($value) => $block,
+            $variant4 ($value) => $block,
+            $variant5 ($value) => $block,
+        }
+    };
+
+    ($enum_:expr; ($variant1:path, $variant2:path, $variant3:path, $variant4:path, $variant5:path, $($variants:path),+) |$value:ident| $block:block) => {
+        match $enum_ {
+            $variant1 ($value) => $block,
+            $variant2 ($value) => $block,
+            $variant3 ($value) => $block,
+            $variant4 ($value) => $block,
+            $variant5 ($value) => $block,
+            _ => execute_on_enum!($enum_; ($($variants),+) |$value| $block),
+        }
+    };
+}
+
 #[allow(clippy::all, clippy::pedantic, clippy::nursery)] //not my code, not my problem
 pub mod base64 {
     const CHARSET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
