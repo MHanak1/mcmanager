@@ -3,16 +3,26 @@ listen_address = "0.0.0.0"
 # port of the API server
 listen_port = 3030
 # maximum requests to public endpoints (like login) per n seconds
-# default: 3 requests per 10 seconds
-public_routes_rate_limit = [3, 10]
+# default: 10 requests per 5 seconds
+public_routes_rate_limit = [10, 5]
 # maximum requests to private endpoints (those which requre authentication) per minute
-# default: 25 requests per 5 seconds
-private_routes_rate_limit = [25, 5]
+# default: 50 requests per 5 seconds
+private_routes_rate_limit = [50, 5]
 # whether to require an invite for a user to register
 require_invite_to_register = true
 
 # how to launch and manage minecraft servers. avaliable: internal, remote, kubernetes (not implemented). this should always be "internal" for minimanager
 minecraft_server_type = "internal"
+
+# Info sent to the frontend.
+[info]
+name = "MCManager"
+# The message displayed to users that are signing up or registering. if this is empty a message will not be displayed
+login_message = ""
+# the title of the login message
+login_message_title = "Message"
+# info, warning or none. impacts the way the message is displayed (none is the same as info but without the info icon)
+login_message_type = "info"
 
 [database]
 # database: sqlite or postgres

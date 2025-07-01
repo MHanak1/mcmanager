@@ -2,11 +2,12 @@ use crate::database::types::Id;
 use crate::util;
 use log::debug;
 use once_cell::sync::Lazy;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
 use std::ops::Range;
+use serde_with::serde_as;
 use crate::database::DatabasePool;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -16,6 +17,7 @@ pub struct Config {
     pub public_routes_rate_limit: (u32, u64),
     pub private_routes_rate_limit: (u32, u64),
     pub require_invite_to_register: bool,
+    pub info: FrontendInfo,
     pub database: DatabaseConfig,
     pub minecraft_server_type: ServerType,
     pub remote: RemoteConfig,
@@ -25,11 +27,12 @@ pub struct Config {
     pub velocity: VelocityConfig,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum DatabaseType {
-    Sqlite,
-    Postgres,
+#[derive(Debug, Clone, Deserialize)]
+pub struct FrontendInfo {
+    pub name: String,
+    pub login_message: String,
+    pub login_message_title: String,
+    pub login_message_type: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -37,6 +40,13 @@ pub struct DatabaseConfig {
     pub database_type: DatabaseType,
     pub max_connections: u32,
     pub pg_host: String,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DatabaseType {
+    Sqlite,
+    Postgres,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]

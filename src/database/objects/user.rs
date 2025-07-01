@@ -434,6 +434,7 @@ pub mod session {
     /// `expires`: whether the session should expire after some time specified in the config after creation
     #[derive(Debug, PartialEq, Eq, Clone, Deserialize)]
     pub struct Session {
+        pub id: Id,
         pub user_id: Id,
         pub token: Uuid,
         pub created: DateTime<Utc>,
@@ -459,6 +460,7 @@ pub mod session {
 
         fn columns() -> Vec<Column> {
             vec![
+                Column::new("id", ValueType::Id).unique(),
                 Column::new("user_id", ValueType::Id).references("users(id)"),
                 Column::new("token", ValueType::Token).primary_key().hidden(),
                 Column::new("created", ValueType::Datetime).not_null(),
@@ -469,7 +471,7 @@ pub mod session {
         }
 
         fn id(&self) -> Id {
-            self.user_id
+            self.id
         }
     }
 
@@ -477,10 +479,11 @@ pub mod session {
     impl<'r> FromRow<'r, Row> for Session {
         fn from_row(row: &'r Row) -> Result<Self, Error> {
             Ok(Self {
-                user_id: row.get(0),
-                token: row.get(1),
-                created: row.get(2),
-                expires: row.get(3),
+                id: row.get(0),
+                user_id: row.get(1),
+                token: row.get(2),
+                created: row.get(3),
+                expires: row.get(4),
             })
         }
     }
@@ -488,6 +491,7 @@ pub mod session {
     impl<'a> IntoArguments<'a, sqlx::Sqlite> for Session {
         fn into_arguments(self) -> sqlx::sqlite::SqliteArguments<'a> {
             let mut arguments = sqlx::sqlite::SqliteArguments::default();
+            arguments.add(self.id).expect("Failed to add argument");
             arguments.add(self.user_id).expect("Failed to add argument");
             arguments.add(self.token).expect("Failed to add argument");
             arguments
@@ -502,6 +506,7 @@ pub mod session {
     impl<'a> IntoArguments<'a, sqlx::Postgres> for Session {
         fn into_arguments(self) -> sqlx::postgres::PgArguments {
             let mut arguments = sqlx::postgres::PgArguments::default();
+            arguments.add(self.id).expect("Failed to add argument");
             arguments.add(self.user_id).expect("Failed to add argument");
             arguments.add(self.token).expect("Failed to add argument");
             arguments.add(self.created)
@@ -520,6 +525,7 @@ pub mod session {
         type JsonFrom = JsonFrom;
         fn from_json(data: &Self::JsonFrom, user: &User) -> Self {
             Self {
+                id: Id::new_random(),
                 user_id: user.id,
                 token: Uuid::new_v4(),
                 created: chrono::offset::Utc::now(),
@@ -530,6 +536,7 @@ pub mod session {
 
     #[derive(Serialize)]
     struct JsonTo {
+        id: Id,
         user_id: Id,
         created: DateTime<Utc>,
         expires: bool,
@@ -542,6 +549,7 @@ pub mod session {
             S: Serializer,
         {
             JsonTo {
+                id: self.id,
                 user_id: self.user_id,
                 created: self.created,
                 expires: self.expires,

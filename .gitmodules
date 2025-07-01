@@ -1,0 +1,3 @@
+[submodule "mcmanager-frontend"]
+	path = mcmanager-frontend
+	url = https://github.com/MHanak1/mcmanager-frontend.git

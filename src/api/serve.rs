@@ -17,58 +17,13 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
+use static_dir::static_dir;
 use test_log::test;
 use tokio::sync::Mutex;
-use warp::Filter;
+use warp::{path, Filter};
+use warp::path::FullPath;
 use warp_rate_limit::RateLimitInfo;
 
-#[tokio::main]
-pub async fn main() -> anyhow::Result<()> {
-    tokio::task::spawn(async {
-        let mut interval = tokio::time::interval(Duration::from_millis(1000));
-        loop {
-            interval.tick().await;
-            crate::minecraft::server::util::refresh_servers().await;
-        }
-    });
-
-    tokio::task::spawn(async {
-        info!("starting velocity at {}", CONFIG.velocity.port);
-        let mut velocity_server =
-            InternalVelocityServer::new().expect("failed to create a velocity server");
-        velocity_server
-            .start()
-            .await
-            .expect("failed to start a velocity server");
-
-        let mut interval = tokio::time::interval(Duration::from_millis(1000));
-        loop {
-            interval.tick().await;
-            if let Err(err) = velocity_server.update().await {
-                error!("failed to update velocity server: {err}");
-            }
-        }
-    });
-
-    env_logger::init();
-    let pool = SqlitePoolOptions::new()
-        .max_connections(5)
-        .connect("sqlite://data/database.db")
-        .await?;
-    let database = Database { pool: crate::database::DatabasePool::from(pool) };
-    database
-        .init()
-        .await
-        .expect("failed to initialize database");
-    let config_path = util::dirs::base_dir().join("config.toml");
-    if !config_path.exists() {
-        let mut config_file = std::fs::File::create(config_path)?;
-        config_file.write_all(include_bytes!("../resources/default_config.toml"))?;
-    }
-
-    run(database, config::CONFIG.clone()).await;
-    Ok(())
-}
 
 pub async fn run(database: Database, config: config::Config) {
     util::dirs::init_dirs().expect("Failed to initialize the data directory");
@@ -89,7 +44,6 @@ pub async fn run(database: Database, config: config::Config) {
             public_routes_rate_limit.clone(),
         ))
         .and(warp::path!("api" / "register"))
-        .and(warp::path::end())
         .and(filters::with_db(database.clone()))
         .and(warp::body::content_length_limit(1024 * 16))
         .and(warp::body::json())
@@ -101,37 +55,67 @@ pub async fn run(database: Database, config: config::Config) {
             public_routes_rate_limit.clone(),
         ))
         .and(warp::path!("api" / "login"))
-        .and(warp::path::end())
         .and(filters::with_db(database.clone()))
         .and(warp::body::content_length_limit(1024 * 16))
         .and(warp::body::json())
         .and_then(api::handlers::user_auth);
+
+    let logout = warp::post()
+        .and(warp_rate_limit::with_rate_limit(
+            private_routes_rate_limit.clone(),
+        ))
+        .and(warp::path!("api" / "logout"))
+        .and(filters::with_db(database.clone()))
+        .and(filters::with_bearer_token())
+        .and_then(api::handlers::logout);
 
     let user_info = warp::get()
         .and(warp_rate_limit::with_rate_limit(
             private_routes_rate_limit.clone(),
         ))
         .and(warp::path!("api" / "user"))
-        .and(warp::path::end())
         .and(filters::with_auth(database.clone()))
         .and_then(api::handlers::user_info);
+
+    let server_info = warp::get()
+        .and(warp_rate_limit::with_rate_limit(
+            public_routes_rate_limit.clone(),
+        ))
+        .and(warp::path!("api" / "info"))
+        .and_then(api::handlers::server_info);
 
     let is_taken = warp::get()
         .and(warp_rate_limit::with_rate_limit(
             private_routes_rate_limit.clone(),
         ))
-        .and(warp::path!("api" / "is_taken" / String / String))
-        .and(warp::path::end())
+        .and(warp::path!("api" / "valid" / String / String))
         .and(warp::get())
         .and(filters::with_db(database.clone()))
         .and_then(api::handlers::check_free);
+
+    // a hacky way to serve the frontend.
+    let frontend = static_dir!("mcmanager-frontend/dist")
+        .or(warp::path::full().and_then(move |path: FullPath| async move {
+            let path = path.as_str();
+            if path.starts_with("/api") {
+                return Err(warp::reject());
+            }
+
+            if path.contains(".") {
+                return Err(warp::reject());
+            }
+
+            Ok(warp::reply::html(include_str!("../../mcmanager-frontend/dist/index.html")))
+        }));
 
     let log = warp::log("info");
 
     warp::serve(
         register
             .or(login)
+            .or(logout)
             .or(user_info)
+            .or(server_info)
             .or(is_taken)
             .or(Mod::filters(
                 database.clone(),
@@ -165,6 +149,7 @@ pub async fn run(database: Database, config: config::Config) {
                 database.clone(),
                 private_routes_rate_limit.clone(),
             ))
+            .or(frontend)
             .recover(api::handlers::handle_rejection)
             .with(log),
     )

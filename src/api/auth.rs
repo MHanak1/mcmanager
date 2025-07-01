@@ -5,6 +5,7 @@ use argon2::{PasswordHash, PasswordHasher, PasswordVerifier};
 use log::debug;
 use std::sync::Arc;
 use uuid::Uuid;
+use crate::database::types::Id;
 
 pub async fn try_user_auth(
     username: &str,
@@ -45,6 +46,7 @@ pub async fn try_user_auth(
     }
 
     let new_session = Session {
+        id: Id::new_random(),
         user_id: user.id,
         token: Uuid::new_v4(),
         created: chrono::offset::Utc::now(),

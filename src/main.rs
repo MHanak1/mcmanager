@@ -278,7 +278,7 @@ async fn main() -> Result<()> {
         }
     });
 
-    bin::serve::run(database, CONFIG.clone()).await;
+    mcmanager::api::serve::run(database, CONFIG.clone()).await;
     Ok(())
 }
 

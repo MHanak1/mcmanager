@@ -29,8 +29,6 @@ pub struct World {
     pub name: String,
     /// the subdomain the the server will be under
     pub hostname: String,
-    /// id of the icon stored in the filesystem (data/icons)
-    pub icon_id: Option<Id>,
     /// amount of memory allocated to the server in MiB
     pub allocated_memory: i32,
     /// references [`Version`]
@@ -64,7 +62,6 @@ impl DbObject for World {
                 .references("users(id)"),
             Column::new("name", ValueType::Text).not_null(),
             Column::new("hostname", ValueType::Text).not_null().unique(),
-            Column::new("icon_id", ValueType::Id),
             Column::new("allocated_memory", ValueType::Integer).not_null(),
             Column::new("version_id", ValueType::Id)
                 .not_null()
@@ -91,7 +88,6 @@ impl<'a> IntoArguments<'a, sqlx::Sqlite> for World {
         arguments
             .add(self.hostname)
             .expect("Failed to add argument");
-        arguments.add(self.icon_id).expect("Failed to add argument");
         arguments
             .add(self.allocated_memory)
             .expect("Failed to add argument");
@@ -114,7 +110,6 @@ impl<'a> IntoArguments<'a, sqlx::Postgres> for World {
         arguments
             .add(self.hostname)
             .expect("Failed to add argument");
-        arguments.add(self.icon_id).expect("Failed to add argument");
         arguments
             .add(self.allocated_memory)
             .expect("Failed to add argument");
@@ -168,7 +163,6 @@ where
 pub struct JsonFrom {
     pub name: String,
     pub hostname: String,
-    pub icon_id: Option<Id>,
     pub allocated_memory: Option<u32>,
     pub version_id: Id,
 }
@@ -181,7 +175,6 @@ impl FromJson for World {
             owner_id: user.id,
             name: data.name.clone(),
             hostname: into_valid_hostname(&data.hostname),
-            icon_id: data.icon_id,
             allocated_memory: data
                 .allocated_memory
                 .unwrap_or(crate::config::CONFIG.world_defaults.allocated_memory)
@@ -198,7 +191,6 @@ pub struct JsonUpdate {
     pub name: Option<String>,
     pub hostname: Option<String>,
     #[serde(default, deserialize_with = "deserialize_some")]
-    pub icon_id: Option<Option<Id>>,
     pub allocated_memory: Option<u32>,
     pub version_id: Option<Id>,
     pub enabled: Option<bool>,
@@ -209,7 +201,6 @@ impl UpdateJson for World {
         let mut new = self.clone();
         new.name = data.name.clone().unwrap_or(new.name);
         new.hostname = data.hostname.clone().unwrap_or(new.hostname);
-        new.icon_id = data.icon_id.unwrap_or(new.icon_id);
         new.allocated_memory = data
             .allocated_memory
             .map(|v| v.try_into().unwrap_or(i32::MAX))

@@ -1,16 +1,16 @@
 use crate::api::util::rejections;
 use crate::api::util::rejections::BadRequest;
 use crate::api::{auth, filters};
-use crate::config::CONFIG;
+use crate::config::{CONFIG};
 use crate::database::DatabaseError::SqlxError;
-use crate::database::objects::{DbObject, FromJson, InviteLink, UpdateJson, User, World};
+use crate::database::objects::{DbObject, FromJson, InviteLink, Session, UpdateJson, User, World};
 use crate::database::types::Id;
 pub(crate) use crate::database::{Database, DatabaseError};
 use crate::database::{DatabasePool, QueryBuilder, ValueType, WhereOperand};
 use crate::util::base64::base64_decode;
 use async_trait::async_trait;
 use chrono::DateTime;
-use futures::StreamExt;
+use futures::{StreamExt, TryFutureExt};
 use log::error;
 use serde::{Deserialize, Serialize};
 use sqlx::{Encode, FromRow, IntoArguments, Type};
@@ -18,7 +18,7 @@ use std::io::Read;
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use uuid::Uuid;
+use uuid::{Error, Uuid};
 use warp::http::StatusCode;
 use warp::{Filter, Rejection, Reply, reject};
 use warp_rate_limit::{RateLimitConfig, RateLimitInfo};
@@ -513,6 +513,7 @@ pub(crate) fn handle_database_error(err: DatabaseError) -> warp::Rejection {
         DatabaseError::InternalServerError(error) => {
             reject::custom(rejections::InternalServerError { error })
         }
+        DatabaseError::Conflict => reject::custom(rejections::Conflict),
         DatabaseError::SqlxError(error) => match error {
             sqlx::Error::RowNotFound => reject::custom(rejections::NotFound),
             _ => reject::custom(rejections::InternalServerError {
@@ -551,6 +552,8 @@ pub async fn user_register(
     {
         return Err(warp::reject::custom(rejections::BadRequest));
     }
+    //TODO: do better username and password validation
+
     for char in credentials.username.chars() {
         if !ALLOWED_USERNAME_CHARS.contains(char) {
             return Err(warp::reject::custom(rejections::BadRequest));
@@ -566,7 +569,7 @@ pub async fn user_register(
     for (parameter, value) in query {
         if parameter == "token" {
             token =
-                Some(Uuid::from_str(&value).map_err(|_| reject::custom(rejections::BadRequest))?);
+                Some(Uuid::from_str(&value).map_err(|_| reject::custom(rejections::Unauthorized))?);
             break;
         }
     }
@@ -589,6 +592,10 @@ pub async fn user_register(
 
     if !can_continue {
         return Err(reject::custom(rejections::Unauthorized));
+    }
+
+    if database.get_where::<User, _>("username", &credentials.username, None).await.is_ok() {
+        return Err(reject::custom(rejections::Conflict));
     }
 
     let user = database
@@ -622,21 +629,43 @@ pub async fn user_auth(
             .await
             .map_err(handle_database_error)?
     };
-
     Ok(warp::reply::with_status(
         warp::reply::with_header(
-            warp::reply::json(&TokenReply {
-                token: session.token.as_simple().to_string(),
-            }),
+            warp::reply::with_header(
+                warp::reply::json(&TokenReply {
+                    token: session.token.as_simple().to_string(),
+                }),
+                "Access-Control-Allow-Credentials" ,
+                "true",
+            ),
             "Set-Cookie",
             format!(
-                "sessionToken={}; Path=/api; HttpOnly; Max-Age=1209600",
+                "session-token={}; Path=/api; HttpOnly; Max-Age=1209600; charset=UTF-8",
                 session.token.as_simple().to_string()
             ),
         ),
         StatusCode::CREATED,
     ))
 }
+
+#[allow(clippy::unused_async)]
+pub async fn logout(
+    _rate_limit_info: RateLimitInfo,
+    database: Arc<Database>,
+    token: Uuid,
+) -> Result<impl warp::Reply, warp::Rejection> {
+    let session: Session = database.get_where(
+            "token",
+            token,
+            None
+        ).await.map_err(handle_database_error)?;
+    database.remove(
+        &session,
+        None
+    ).await.map_err(handle_database_error)?;
+    Ok(warp::reply())
+}
+
 
 #[allow(clippy::unused_async)]
 pub async fn user_info(
@@ -646,34 +675,70 @@ pub async fn user_info(
     Ok(warp::reply::json(&user))
 }
 
-pub async fn check_free<
-    T: for<'r> Encode<'r, sqlx::Sqlite>
-        + Type<sqlx::Sqlite>
-        + for<'r> Encode<'r, sqlx::Postgres>
-        + Type<sqlx::Postgres>
-        + Clone
-        + Send
-        + Sync,
->(
+#[allow(clippy::unused_async)]
+pub async fn server_info(
+    _rate_limit_info: RateLimitInfo
+) -> Result<impl warp::Reply, warp::Rejection> {
+    #[derive(Serialize)]
+    struct ServerInfo {
+        name: String,
+        login_message: String,
+        login_message_title: String,
+        login_message_type: String,
+        requires_invite: bool,
+    }
+
+    Ok(warp::reply::json(
+        &ServerInfo {
+            name: CONFIG.info.name.clone(),
+            login_message: CONFIG.info.login_message.clone(),
+            login_message_title: CONFIG.info.login_message_title.clone(),
+            login_message_type: CONFIG.info.login_message_type.clone(),
+            requires_invite: CONFIG.require_invite_to_register,
+        }
+    ))
+}
+
+pub async fn check_free(
     _rate_limit_info: RateLimitInfo,
     field: String,
-    value: T,
+    value: String,
     database: Arc<Database>,
 ) -> Result<impl warp::Reply, warp::Rejection> {
     #[derive(Serialize)]
-    struct Used {
-        taken: bool,
+    struct Valid {
+        valid: bool,
     }
     match field.trim() {
         "username" => match database.get_where::<User, _>("username", value, None).await {
             Ok(user) => Ok(warp::reply::with_status(
-                warp::reply::json(&Used { taken: false }),
+                warp::reply::json(&Valid { valid: false }),
                 StatusCode::OK,
             )),
             Err(err) => Ok(warp::reply::with_status(
-                warp::reply::json(&Used { taken: true }),
+                warp::reply::json(&Valid { valid: true }),
                 StatusCode::OK,
             )),
+        },
+        "invite_link" => {
+            match Uuid::from_str(&value) {
+                Ok(token) => {
+                    match database.get_where::<InviteLink, _>("token", token, None).await {
+                        Ok(_) => Ok(warp::reply::with_status(
+                            warp::reply::json(&Valid { valid: false }),
+                            StatusCode::OK,
+                        )),
+                        Err(_) => Ok(warp::reply::with_status(
+                            warp::reply::json(&Valid { valid: true }),
+                            StatusCode::OK,
+                        )),
+                    }
+                },
+                Err(_) => Ok(warp::reply::with_status(
+                    warp::reply::json(&Valid { valid: false }),
+                    StatusCode::OK,
+                ))
+            }
         },
         "hostname" => {
             match database
@@ -681,11 +746,11 @@ pub async fn check_free<
                 .await
             {
                 Ok(world) => Ok(warp::reply::with_status(
-                    warp::reply::json(&Used { taken: false }),
+                    warp::reply::json(&Valid { valid: false }),
                     StatusCode::OK,
                 )),
                 Err(err) => Ok(warp::reply::with_status(
-                    warp::reply::json(&Used { taken: true }),
+                    warp::reply::json(&Valid { valid: true }),
                     StatusCode::OK,
                 )),
             }

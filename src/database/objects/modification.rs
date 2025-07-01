@@ -21,8 +21,6 @@ pub struct Mod {
     pub name: String,
     /// Mod's description
     pub description: String,
-    /// [`Id`] of the icon stored in the filesystem (data/icons)
-    pub icon_id: Option<Id>,
 }
 
 impl DbObject for Mod {
@@ -53,7 +51,6 @@ impl DbObject for Mod {
                 .references("versions(id)"),
             Column::new("name", ValueType::Text).not_null(),
             Column::new("description", ValueType::Text).not_null(),
-            Column::new("icon_id", ValueType::Id),
         ]
     }
 
@@ -76,7 +73,6 @@ impl<'a> IntoArguments<'a, sqlx::Sqlite> for Mod {
         arguments
             .add(self.description)
             .expect("Failed to add argument");
-        arguments.add(self.icon_id).expect("Failed to add argument");
         arguments
     }
 }
@@ -95,7 +91,6 @@ impl<'a> IntoArguments<'a, sqlx::Postgres> for Mod {
         arguments
             .add(self.description)
             .expect("Failed to add argument");
-        arguments.add(self.icon_id).expect("Failed to add argument");
         arguments
     }
 }
@@ -114,7 +109,6 @@ pub struct JsonFrom {
     pub version_id: Id,
     pub name: String,
     pub description: Option<String>,
-    pub icon_id: Option<Id>,
 }
 
 impl FromJson for Mod {
@@ -126,7 +120,6 @@ impl FromJson for Mod {
             version_id: data.version_id,
             name: data.name.clone(),
             description: data.description.clone().unwrap_or_default(),
-            icon_id: data.icon_id,
             owner_id: user.id,
         }
     }
@@ -137,8 +130,6 @@ pub struct JsonUpdate {
     pub version_id: Option<Id>,
     pub name: Option<String>,
     pub description: Option<String>,
-    #[serde(default, deserialize_with = "deserialize_some")]
-    pub icon_id: Option<Option<Id>>,
 }
 
 impl UpdateJson for Mod {
@@ -148,7 +139,6 @@ impl UpdateJson for Mod {
         new.version_id = data.version_id.unwrap_or(new.version_id);
         new.description = data.description.clone().unwrap_or(new.description);
         new.name = data.name.clone().unwrap_or(new.name);
-        new.icon_id = data.icon_id.unwrap_or(new.icon_id);
         new
     }
 }

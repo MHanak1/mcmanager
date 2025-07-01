@@ -1,15 +1,17 @@
 use crate::api::handlers::{ApiCreate, ApiGet, ApiList, ApiObject, ApiRemove, ApiUpdate};
 use crate::database::objects::{DbObject, FromJson, UpdateJson, User};
 use crate::database::types::{Access, Column, Id};
-use crate::database::{Database, ValueType};
+use crate::database::{Database, DatabaseError, ValueType};
 use crate::minecraft::server::ServerConfigLimit;
 use duplicate::duplicate_item;
 use serde::{Deserialize, Deserializer, Serialize};
 use sqlx::{Arguments, Error, FromRow, IntoArguments, Row};
 use std::collections::HashMap;
 use std::sync::Arc;
+use async_trait::async_trait;
 use warp::{Filter, Rejection, Reply};
-use warp_rate_limit::RateLimitConfig;
+use warp_rate_limit::{RateLimitConfig, RateLimitInfo};
+use crate::config::CONFIG;
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub struct Group {
@@ -319,4 +321,15 @@ impl ApiList for Group {}
 impl ApiGet for Group {}
 impl ApiCreate for Group {}
 impl ApiUpdate for Group {}
-impl ApiRemove for Group {}
+
+#[async_trait]
+impl ApiRemove for Group {
+    async fn before_api_delete(&self, database: Arc<Database>, user: &User) -> Result<(), DatabaseError> {
+        if self.id == CONFIG.user_defaults.group_id {
+            Err(DatabaseError::Conflict)
+        }
+        else {
+            Ok(())
+        }
+    }
+}

@@ -590,6 +590,7 @@ where
 pub enum DatabaseError {
     Unauthorized,
     NotFound,
+    Conflict,
     InternalServerError(String),
     SqlxError(sqlx::Error),
 }
@@ -601,6 +602,7 @@ impl Display for DatabaseError {
             DatabaseError::NotFound => write!(f, "NotFound"),
             DatabaseError::InternalServerError(err) => write!(f, "Internal server error: {err}"),
             DatabaseError::SqlxError(err) => write!(f, "Sqlx Error: {err}"),
+            DatabaseError::Conflict => write!(f, "Conflict"),
         }
     }
 }

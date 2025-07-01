@@ -23,13 +23,13 @@ pub fn with_bearer_token() -> impl Filter<Extract = (Uuid,), Error = Rejection> 
             Err(warp::reject::custom(rejections::InvalidBearerToken))
         }
     })
+        .or(warp::cookie("session-token"))
+        .unify()
 }
 pub fn with_auth(
     database: Arc<Database>,
 ) -> impl Filter<Extract = (User,), Error = Rejection> + Clone {
     with_bearer_token()
-        .or(warp::cookie("sessionToken"))
-        .unify()
         .and_then(move |token: Uuid| {
             let database = database.clone();
             async move {
