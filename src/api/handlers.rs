@@ -723,15 +723,19 @@ pub async fn check_free(
         "invite_link" => {
             match Uuid::from_str(&value) {
                 Ok(token) => {
-                    match database.get_where::<InviteLink, _>("token", token, None).await {
-                        Ok(_) => Ok(warp::reply::with_status(
-                            warp::reply::json(&Valid { valid: false }),
-                            StatusCode::OK,
-                        )),
-                        Err(_) => Ok(warp::reply::with_status(
-                            warp::reply::json(&Valid { valid: true }),
-                            StatusCode::OK,
-                        )),
+                    match database.get_where::<InviteLink, _>("invite_token", token, None).await {
+                        Ok(_) => {
+                            Ok(warp::reply::with_status(
+                                warp::reply::json(&Valid { valid: true }),
+                                StatusCode::OK,
+                            ))
+                        },
+                        Err(err) => {
+                            Ok(warp::reply::with_status(
+                                warp::reply::json(&Valid { valid: false }),
+                                StatusCode::OK,
+                            ))
+                        },
                     }
                 },
                 Err(_) => Ok(warp::reply::with_status(
