@@ -542,11 +542,11 @@ pub async fn user_auth(
     };
     Ok((
         StatusCode::CREATED,
-        //[(header::ACCESS_CONTROL_ALLOW_CREDENTIALS, true)],
-        //[(header::SET_COOKIE, format!(
-        //    "session-token={}; Path=/api; HttpOnly; Max-Age=1209600; charset=UTF-8",
-        //    session.token.as_simple().to_string()
-        //))],
+        [(header::ACCESS_CONTROL_ALLOW_CREDENTIALS, "true")],
+        [(header::SET_COOKIE, format!(
+            "session-token={}; Path=/api; HttpOnly; Max-Age=1209600; charset=UTF-8",
+            session.token.as_simple().to_string()
+        ))],
         axum::Json(json!({"token": session.token.as_simple().to_string()})),
     ))
 }

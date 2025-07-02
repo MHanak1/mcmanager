@@ -126,6 +126,8 @@ pub async fn run(database: Database, config: config::Config) -> Result<(), anyho
         .nest("/invite_links", InviteLink::routes())
         .with_state(database.clone());
 
+    //TODO: include frontend
+
     let router = Router::new()
         .nest("/api", api)
         .route("/", get(|| async { "Hello!!" }))
