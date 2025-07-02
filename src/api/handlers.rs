@@ -1,3 +1,5 @@
+use std::fmt::format;
+use std::fs::File;
 use crate::api::serve::AppState;
 use crate::api::{auth, filters};
 use crate::config::{CONFIG};
@@ -13,19 +15,29 @@ use futures::{StreamExt, TryFutureExt};
 use log::{debug, error};
 use serde::{Deserialize, Serialize};
 use sqlx::{Encode, FromRow, IntoArguments, Type};
-use std::io::Read;
+use std::io::{BufWriter, Cursor, Read, Write};
+use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
-use axum::extract::{Path, State};
+use axum::extract::{FromRequest, Multipart, Path, Request, State};
 use tokio::sync::Mutex;
 use uuid::{Error, Uuid};
-use axum::http::{header, StatusCode};
+use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::IntoResponse;
-use axum::Router;
-use axum::routing::MethodRouter;
+use axum::{Json, Router};
+use axum::body::Bytes;
+use axum::http::header::ToStrError;
+use axum::routing::{get, post, MethodRouter};
+use image::{DynamicImage, ImageFormat, ImageReader, Limits};
+use image::error::UnsupportedErrorKind::Format;
+use image::imageops::FilterType;
 use serde_json::{json, Value};
+use tokio::io::BufReader;
+use tokio::join;
+use tokio_util::io::ReaderStream;
 use crate::api::filters::{BearerToken, UserAuth, WithSession};
 use crate::execute_on_enum;
+use crate::util::dirs::icons_dir;
 
 pub trait ApiObject: DbObject {
     fn routes() -> Router<AppState>;
@@ -413,6 +425,123 @@ where
 
 }
 
+pub trait ApiIcon: ApiObject
+    where
+    Self: Sized + 'static,
+    Self: for<'r> FromRow<'r, sqlx::sqlite::SqliteRow>,
+    Self: for<'r> FromRow<'r, sqlx::postgres::PgRow>,
+    Self: serde::Serialize,
+    Self: Unpin,
+{
+    async fn upload_icon(state: State<AppState>, id: Path<Id>, user: UserAuth, headers: HeaderMap, mut multipart: Multipart) -> Result<impl IntoResponse, StatusCode> {
+        let database = state.0;
+        let id = id.0;
+        let user = user.0;
+
+        //check if the asset exists and the user has access to it
+        let _ = database.get_one::<Self>(id, Some((&user, &user.group(database.clone(), None).await))).await.map_err(|_| StatusCode::NOT_FOUND)?;
+
+        let mut bytes = None;
+
+        while let Some(field) = multipart.next_field().await.unwrap() {
+            let filename = if let Some(filename) = field.file_name() {
+                filename.to_string()
+            } else {
+                continue;
+            };
+
+            let field_bytes = if let Ok(bytes) = field.bytes().await {
+                bytes
+            } else {
+                continue;
+            };
+
+            let extension = filename.split('.').last();
+
+            if let Some(extension ) = extension {
+                let image_format = ImageFormat::from_extension(extension);
+                if let Some(image_format) = image_format {
+                    bytes = Some((field_bytes, image_format));
+                    break;
+                }
+            }
+        }
+
+        let (bytes, image_format) = bytes.ok_or_else(|| StatusCode::BAD_REQUEST)?;
+
+        let is_gif = match image_format {
+            ImageFormat::Jpeg | ImageFormat::Png | ImageFormat::WebP | ImageFormat::Bmp => {
+                false
+            },
+            ImageFormat::Gif => true,
+            _ => {return Err(StatusCode::BAD_REQUEST)},
+        };
+
+
+
+        let gif_path = crate::util::dirs::icons_dir().join(Self::table_name()).join(format!("{}.gif", id));
+        let webp_path = crate::util::dirs::icons_dir().join(Self::table_name()).join(format!("{}.webp", id));
+
+
+        if is_gif {
+            let _ = bytes_to_image(bytes.clone(), image_format)?;
+            let image_file = std::fs::File::create(&gif_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            let mut writer = BufWriter::new(image_file);
+
+            if webp_path.exists() {
+                std::fs::remove_file(&webp_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            }
+
+            // after making sure the file is a valid image write the original, as we don't want to alter a gif
+            writer.write_all(bytes.as_ref()).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+        } else {
+            let image = bytes_to_image(bytes, image_format)?;
+
+            let image = image.resize(256, 256, FilterType::CatmullRom);
+
+            let image_file = std::fs::File::create(&webp_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            let mut writer = BufWriter::new(image_file);
+
+            if gif_path.exists() {
+                std::fs::remove_file(&gif_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            }
+
+            image.write_to(&mut writer, ImageFormat::WebP).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        }
+
+        Ok(StatusCode::OK)
+    }
+
+    async fn get_icon(id: Path<Id>) -> Result<impl IntoResponse, StatusCode> {
+        let mut path = icons_dir().join(Self::table_name());
+        println!("{path:?}");
+        let (path, is_gif) = if path.join(format!("{}.webp", id.to_string())).exists() {
+            (path.join(format!("{}.webp", id.to_string())), false)
+        } else if path.join(format!("{}.gif", id.to_string())).exists() {
+            (path.join(format!("{}.gif", id.to_string())), true)
+        } else {
+            return Err(StatusCode::NOT_FOUND);
+        };
+
+        let file = tokio::fs::File::open(path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR).await?;
+
+        let stream = ReaderStream::new(file);
+        let body = axum::body::Body::from_stream(stream);
+
+        let mime_type = if is_gif {
+            "image/gif"
+        } else {
+            "image/webp"
+        };
+
+        let header = [(header::CONTENT_TYPE, mime_type)];
+
+        Ok((header, body))
+
+    }
+}
+
 pub(crate) fn handle_database_error(err: DatabaseError) -> StatusCode {
     match err {
         DatabaseError::Unauthorized => StatusCode::UNAUTHORIZED,
@@ -597,45 +726,47 @@ pub async fn server_info() -> Result<impl IntoResponse, StatusCode> {
     ))
 }
 
-pub async fn check_free(
-    field: Path<String>,
-    value: Path<String>,
-    database: State<AppState>,
-) -> Result<impl IntoResponse, StatusCode> {
-    let field = field.0;
-    let value = value.0;
-    let database = database.0;
-
-    #[derive(Serialize)]
-    struct Valid {
-        valid: bool,
+pub async fn get_username_valid(username: Path<String>, database: State<AppState>) -> impl IntoResponse {
+    if database.get_where::<User, _>("username", username.0, None).await.is_ok() {
+        Json(json!({"valid": false}))
     }
-    match field.trim() {
-        "username" => match database.get_where::<User, _>("username", value, None).await {
-            Ok(_) => Ok(axum::Json(Valid { valid: false })),
-            Err(_) => Ok(axum::Json(Valid { valid: true }))
-        },
-        "invite_link" => {
-            match Uuid::from_str(&value) {
-                Ok(token) => {
-                    match database.get_where::<InviteLink, _>("invite_token", token, None).await {
-                        Ok(_) => Ok(axum::Json(Valid { valid: true })),
-                        Err(_) => Ok(axum::Json(Valid { valid: false }))
-                    }
-                },
-                Err(_) => Ok(axum::Json(Valid { valid: false }))
-            }
-        },
-        "hostname" => {
-            match database
-                .get_where::<World, _>("hostname", value, None)
-                .await
-            {
-                Ok(_) => Ok(axum::Json(Valid { valid: false })),
-                Err(_) => Ok(axum::Json(Valid { valid: true }))
-            }
-        }
-        _ => Err(StatusCode::METHOD_NOT_ALLOWED),
+    else {
+        Json(json!({"valid": true}))
+    }
+}
+pub async fn get_invite_valid(invite_link: Path<Uuid>, database: State<AppState>) -> impl IntoResponse {
+    if database.get_where::<InviteLink, _>("invite_token", invite_link.0, None).await.is_ok() {
+        Json(json!({"valid": true}))
+    }
+    else {
+        Json(json!({"valid": false}))
     }
 }
 
+// user auth not needed, but unauthenticated users should not access this route
+pub async fn get_hostname_valid(hostname: Path<String>, database: State<AppState>, _: UserAuth) -> impl IntoResponse {
+    if database.get_where::<World, _>("hostname", hostname.0, None).await.is_ok() {
+        Json(json!({"valid": false}))
+    }
+    else {
+        Json(json!({"valid": true}))
+    }
+}
+
+fn bytes_to_image(bytes: Bytes, format: ImageFormat) -> Result<DynamicImage, StatusCode> {
+    let mut reader = ImageReader::new(Cursor::new(bytes.as_ref()));
+
+    let mut limits = Limits::default();
+    limits.max_image_width = Some(1024);
+    limits.max_image_height = Some(1024);
+
+    reader.set_format(format);
+
+    let mut file = std::fs::File::create(PathBuf::from_str("/home/mhanak/uploaded.png").unwrap()).unwrap();
+    file.write_all(bytes.as_ref()).unwrap();
+
+    reader.limits(limits);
+    let image = reader.decode().map_err(|err| {error!("{err}"); StatusCode::BAD_REQUEST})?;
+
+    Ok(image)
+}

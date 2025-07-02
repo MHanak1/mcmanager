@@ -1,5 +1,5 @@
 pub use self::{password::Password, session::Session};
-use crate::api::handlers::{ApiCreate, ApiGet, ApiList, ApiObject, ApiRemove, ApiUpdate};
+use crate::api::handlers::{ApiCreate, ApiGet, ApiIcon, ApiList, ApiObject, ApiRemove, ApiUpdate};
 use crate::config::CONFIG;
 use crate::database;
 use crate::database::objects::{DbObject, FromJson, Group, Mod, UpdateJson, World};
@@ -16,7 +16,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use axum::{Router};
 use axum::extract::State;
-use axum::routing::get;
+use axum::routing::{get, post};
 use crate::api::serve::AppState;
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, FromRow)]
@@ -174,6 +174,7 @@ impl ApiObject for User {
         Router::new()
             .route("/", get(Self::api_list).post(Self::api_create))
             .route("/{id}", get(Self::api_get).put(Self::api_update).delete(Self::api_remove))
+            .route("/{id}/icon", post(Self::upload_icon).put(Self::upload_icon).get(Self::get_icon))
     }
 }
 
@@ -272,6 +273,9 @@ impl ApiRemove for User {
         Ok(())
     }
 }
+
+impl ApiIcon for User {}
+
 impl User {
     pub async fn group(&self, databse: AppState, user: Option<(&User, &Group)>) -> Group {
         databse

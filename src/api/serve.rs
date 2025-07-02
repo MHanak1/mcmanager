@@ -12,12 +12,11 @@ use sqlx::any::AnyPoolOptions;
 use sqlx::sqlite::SqlitePoolOptions;
 use std::io::Write;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
-use axum::extract::{MatchedPath, State};
+use axum::extract::{MatchedPath, Path, State};
 use axum::http::Request;
 use axum::Router;
 use axum::routing::{get, post, MethodRouter};
@@ -25,6 +24,7 @@ use static_dir::static_dir;
 use test_log::test;
 use tokio::sync::Mutex;
 use tracing::{info_span};
+use crate::util::dirs::icons_dir;
 
 pub type AppState = Database;
 
@@ -109,13 +109,18 @@ pub async fn run(database: Database, config: config::Config) -> Result<(), anyho
 
     let log = axum::log("info");
      */
+    let check_free = Router::new()
+        .route("/username/{username}", get(api::handlers::get_username_valid))
+        .route("/invite_link/{invite_link}", get(api::handlers::get_invite_valid))
+        .route("/hostname/{hostname}", get(api::handlers::get_hostname_valid));
+
 
     let api = Router::new()
         .route("/login", post(api::handlers::user_auth))
         .route("/logout", post(api::handlers::logout))
         .route("/user", get(api::handlers::user_info))
         .route("/info", get(api::handlers::server_info))
-        .route("/is_taken", get(api::handlers::check_free))
+        .nest("/valid", check_free)
         .nest("/mods", Mod::routes())
         .nest("/versions", Version::routes())
         .nest("/mod_loaders", ModLoader::routes())

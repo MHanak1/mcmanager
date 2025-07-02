@@ -1,4 +1,4 @@
-use crate::api::handlers::{ApiCreate, ApiGet, ApiList, ApiObject, ApiRemove, ApiUpdate};
+use crate::api::handlers::{ApiCreate, ApiGet, ApiIcon, ApiList, ApiObject, ApiRemove, ApiUpdate};
 use crate::database::objects::{DbObject, FromJson, UpdateJson, User};
 use crate::database::types::{Access, Column, Id};
 use crate::database::{Database, ValueType};
@@ -7,7 +7,7 @@ use sqlx::{Arguments, FromRow, IntoArguments};
 use std::fmt::Debug;
 use std::sync::Arc;
 use axum::{Router};
-use axum::routing::get;
+use axum::routing::{get, post};
 use crate::api::serve::AppState;
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, FromRow)]
@@ -149,6 +149,7 @@ impl ApiObject for Mod {
         Router::new()
             .route("/", get(Self::api_list).post(Self::api_create))
             .route("/{id}", get(Self::api_get).put(Self::api_update).delete(Self::api_remove))
+            .route("/{id}/icon", post(Self::upload_icon).put(Self::upload_icon).get(Self::get_icon))
     }
 }
 
@@ -157,3 +158,4 @@ impl ApiGet for Mod {}
 impl ApiCreate for Mod {}
 impl ApiUpdate for Mod {}
 impl ApiRemove for Mod {}
+impl ApiIcon for Mod {}

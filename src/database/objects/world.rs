@@ -1,6 +1,6 @@
 use crate::api::serve::AppState;
 use crate::api::filters;
-use crate::api::handlers::{ApiCreate, ApiGet, ApiList, ApiObject, ApiRemove, ApiUpdate};
+use crate::api::handlers::{ApiCreate, ApiGet, ApiIcon, ApiList, ApiObject, ApiRemove, ApiUpdate};
 use crate::database::objects::group::Group;
 use crate::database::objects::{DbObject, FromJson, UpdateJson, User, Version};
 use crate::database::types::{Access, Column, Id};
@@ -19,7 +19,7 @@ use axum::http::StatusCode;
 use axum::{Router};
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
-use axum::routing::get;
+use axum::routing::{get, post};
 use crate::api::filters::UserAuth;
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, FromRow)]
@@ -215,12 +215,15 @@ impl UpdateJson for World {
 }
 
 impl ApiObject for World {
+
     fn routes() -> Router<AppState> {
+
         Router::new()
             .route("/", get(Self::api_list).post(Self::api_create))
             .route("/{id}", get(Self::api_get).put(Self::api_update).delete(Self::api_remove))
             .route("/{id}/config", get(Self::get_server_config).put(Self::set_server_config).post(Self::set_server_config))
             .route("/{id}/status", get(Self::world_get_status))
+            .route("/{id}/icon", post(Self::upload_icon).put(Self::upload_icon).get(Self::get_icon))
     }
 }
 
@@ -407,6 +410,8 @@ impl ApiRemove for World {
         }
     }
 }
+
+impl ApiIcon for World {}
 
 impl World {
     pub async fn version(&self, database: AppState, user: Option<(&User, &Group)>) -> Version {

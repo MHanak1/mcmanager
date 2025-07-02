@@ -16,9 +16,9 @@ pub mod dirs {
     pub fn icons_dir() -> PathBuf {
         data_dir().join("icons")
     }
-    pub fn avatars_dir() -> PathBuf {
-        data_dir().join("avatars")
-    }
+    pub fn user_avatars_dir() -> PathBuf {icons_dir().join("users")}
+    pub fn mod_icons_dir() -> PathBuf {icons_dir().join("mods")}
+    pub fn world_icons_dir() -> PathBuf {icons_dir().join("worlds")}
     pub fn velocity_dir() -> PathBuf {
         data_dir().join("velocity")
     }
@@ -28,18 +28,17 @@ pub mod dirs {
     pub fn worlds_dir() -> PathBuf {
         data_dir().join("worlds")
     }
-    pub fn policies_dir() -> PathBuf {
-        data_dir().join("worlds")
-    }
 
     pub fn init_dirs() -> anyhow::Result<()> {
         create_dir_all(data_dir())?;
-        create_dir_all(icons_dir())?;
-        create_dir_all(avatars_dir())?;
+
+        create_dir_all(user_avatars_dir())?;
+        create_dir_all(mod_icons_dir())?;
+        create_dir_all(world_icons_dir())?;
+
         create_dir_all(velocity_dir())?;
         create_dir_all(versions_dir())?;
         create_dir_all(worlds_dir())?;
-        create_dir_all(policies_dir())?;
 
         Ok(())
     }
