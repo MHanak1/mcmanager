@@ -45,6 +45,7 @@ axum = "0.8.4"
 tower-http = { version = "0.6.6", features = ["trace"] }
 tracing-subscriber = "0.3.19"
 tracing = "0.1.41"
+axum-extra = { version = "0.10.1", features = ["cookie"] }
 
 [dev-dependencies]
 pretty_assertions = "1.4.1"
