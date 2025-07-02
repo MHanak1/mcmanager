@@ -6,8 +6,9 @@ use serde::{Deserialize, Serialize};
 use sqlx::{Arguments, FromRow, IntoArguments};
 use std::fmt::Debug;
 use std::sync::Arc;
-use warp::{Filter, Rejection, Reply};
-use warp_rate_limit::RateLimitConfig;
+use axum::Router;
+use axum::routing::get;
+use crate::api::serve::AppState;
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, FromRow)]
 pub struct ModLoader {
@@ -109,24 +110,10 @@ impl UpdateJson for ModLoader {
 }
 
 impl ApiObject for ModLoader {
-    fn filters(
-        database: Arc<Database>,
-        rate_limit_config: RateLimitConfig,
-    ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
-        Self::list_filter(database.clone(), rate_limit_config.clone())
-            .or(Self::get_filter(
-                database.clone(),
-                rate_limit_config.clone(),
-            ))
-            .or(Self::create_filter(
-                database.clone(),
-                rate_limit_config.clone(),
-            ))
-            .or(Self::update_filter(
-                database.clone(),
-                rate_limit_config.clone(),
-            ))
-            .or(Self::remove_filter(database, rate_limit_config.clone()))
+    fn routes() -> Router<AppState> {
+        Router::new()
+            .route("/", get(Self::api_list).post(Self::api_create))
+            .route("/{id}", get(Self::api_get).put(Self::api_update).delete(Self::api_remove))
     }
 }
 

@@ -1,50 +1,69 @@
-use crate::api::util::rejections;
-use crate::database;
 use crate::database::objects::{Session, User};
 use crate::database::{Database, DatabaseError};
-use log::error;
-use std::convert::Infallible;
-use std::sync::Arc;
-use tokio::sync::Mutex;
+use axum::extract::{FromRequest, FromRequestParts, Request};
+use axum::http::request::Parts;
+use futures::{TryFutureExt, TryStreamExt};
+use reqwest::StatusCode;
+use sqlx::encode::IsNull::No;
+use crate::api::serve::AppState;
 use uuid::Uuid;
-use warp::{Filter, Rejection};
+use crate::api::handlers::handle_database_error;
 
-pub fn with_db(
-    db: Arc<Database>,
-) -> impl Filter<Extract = (Arc<Database>,), Error = Infallible> + Clone {
-    warp::any().map(move || db.clone())
-}
+pub struct BearerToken(pub Uuid);
 
-pub fn with_bearer_token() -> impl Filter<Extract = (Uuid,), Error = Rejection> + Clone {
-    warp::header::<String>("Authorization").and_then(|header: String| async move {
-        if header[0..7] == *"Bearer " {
-            Ok(Uuid::parse_str(&header[7..]).map_err(|_| rejections::InvalidBearerToken)?)
-        } else {
-            Err(warp::reject::custom(rejections::InvalidBearerToken))
-        }
-    })
-        .or(warp::cookie("session-token"))
-        .unify()
-}
-pub fn with_auth(
-    database: Arc<Database>,
-) -> impl Filter<Extract = (User,), Error = Rejection> + Clone {
-    with_bearer_token()
-        .and_then(move |token: Uuid| {
-            let database = database.clone();
-            async move {
-                let session = database.get_where::<Session, _>("token", token, None).await;
-                if session.is_err() {
-                    return Err(warp::reject::custom(rejections::Unauthorized));
+impl<S: Sync> FromRequestParts<S> for BearerToken {
+    type Rejection = StatusCode;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection>{
+        let header = parts.headers.get("Authorization");
+        if let Some(header) = header {
+            if let Ok(header) = header.to_str() {
+                if header[0..7] == *"Bearer " {
+                    if let Ok(token) = Uuid::parse_str(&header[7..]) {
+                        return Ok(BearerToken(token));
+                    }
                 }
-                let session = session.unwrap();
-
-                Ok(database
-                    .get_one::<User>(session.user_id, None)
-                    .await
-                    .map_err(|err| {
-                        warp::reject::custom(rejections::InternalServerError::from(err.to_string()))
-                    })?)
             }
-        })
+        }
+
+        let cookies = parts.headers.get_all("Cookie");
+        for cookie in cookies {
+            if let Ok(cokie) = cookie.to_str() {
+                if let Some((name, value)) = cokie.split_once("=") {
+                    if name == "session-token" {
+                        if let Ok(token) = Uuid::parse_str(value) {
+                            return Ok(BearerToken(token));
+                        }
+                    }
+                }
+            }
+        }
+
+        Err(StatusCode::UNAUTHORIZED)
+
+    }
+}
+
+pub struct WithSession(pub Session);
+
+impl FromRequestParts<AppState> for WithSession {
+    type Rejection = StatusCode;
+
+    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
+        let token = BearerToken::from_request_parts(parts, state).await?;
+
+        Ok(Self(state.get_where("token", token.0, None).await.map_err(handle_database_error)?))
+    }
+}
+
+pub struct UserAuth(pub User);
+
+impl FromRequestParts<AppState> for UserAuth {
+    type Rejection = StatusCode;
+
+    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
+        let session = WithSession::from_request_parts(parts, state).await?;
+
+        Ok(Self(state.get_one(session.0.user_id, None).await.map_err(handle_database_error)?))
+    }
 }

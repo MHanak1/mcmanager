@@ -14,8 +14,10 @@ use sqlx::{Arguments, Encode, FromRow, IntoArguments};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use warp::{Filter, Rejection, Reply};
-use warp_rate_limit::RateLimitConfig;
+use axum::{Router};
+use axum::extract::State;
+use axum::routing::get;
+use crate::api::serve::AppState;
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, FromRow)]
 pub struct User {
@@ -23,8 +25,6 @@ pub struct User {
     pub id: Id,
     /// user's unique name
     pub username: String,
-    /// [`Id`] of the avatar stored in the filesystem (data/avatars)
-    pub avatar_id: Option<Id>,
     /// which permission [`Group`] does the user belong to
     pub group_id: Id,
     /// whether the user can access the API
@@ -70,7 +70,6 @@ impl DbObject for User {
         vec![
             Column::new("id", ValueType::Id).primary_key(),
             Column::new("username", ValueType::Text).not_null().unique(),
-            Column::new("avatar_id", ValueType::Id),
             Column::new("group_id", ValueType::Id)
                 .not_null()
                 .references("groups(id)"),
@@ -89,7 +88,6 @@ impl<'a> IntoArguments<'a, sqlx::Sqlite> for User {
         let mut arguments = sqlx::sqlite::SqliteArguments::default();
         arguments.add(self.id).expect("Failed to argument");
         arguments.add(self.username).expect("Failed to argument");
-        arguments.add(self.avatar_id).expect("Failed to argument");
         arguments.add(self.group_id).expect("Failed to argument");
         arguments.add(self.enabled).expect("Failed to argument");
         arguments
@@ -101,7 +99,6 @@ impl<'a> IntoArguments<'a, sqlx::Postgres> for User {
         let mut arguments = sqlx::postgres::PgArguments::default();
         arguments.add(self.id).expect("Failed to argument");
         arguments.add(self.username).expect("Failed to argument");
-        arguments.add(self.avatar_id).expect("Failed to argument");
         arguments.add(self.group_id).expect("Failed to argument");
         arguments.add(self.enabled).expect("Failed to argument");
         arguments
@@ -113,7 +110,6 @@ impl Default for User {
         Self {
             id: Id::default(),
             username: String::new(),
-            avatar_id: None,
             group_id: CONFIG.user_defaults.group_id,
             enabled: true,
         }
@@ -134,7 +130,6 @@ pub struct JsonFrom {
     pub username: String,
     pub password: String,
     #[serde(default, deserialize_with = "deserialize_some")]
-    pub avatar_id: Option<Option<Id>>,
     pub group_id: Option<Id>,
     pub enabled: Option<bool>,
 }
@@ -145,7 +140,6 @@ impl FromJson for User {
         Self {
             id: Id::default(),
             username: data.username.clone(),
-            avatar_id: data.avatar_id.unwrap_or(None),
             group_id: data.group_id.unwrap_or(CONFIG.user_defaults.group_id),
             enabled: data.enabled.unwrap_or(true),
         }
@@ -159,8 +153,6 @@ pub struct JsonUpdate {
     #[serde(default, deserialize_with = "deserialize_some")]
     pub password: Option<String>,
     #[serde(default, deserialize_with = "deserialize_some")]
-    pub avatar_id: Option<Option<Id>>,
-    #[serde(default, deserialize_with = "deserialize_some")]
     pub group_id: Option<Id>,
     #[serde(default, deserialize_with = "deserialize_some")]
     pub enabled: Option<bool>,
@@ -171,7 +163,6 @@ impl UpdateJson for User {
         let mut new = self.clone();
         // TODO: password change
         new.username = data.username.clone().unwrap_or(new.username);
-        new.avatar_id = data.avatar_id.unwrap_or(new.avatar_id);
         new.group_id = data.group_id.unwrap_or(new.group_id);
         new.enabled = data.enabled.unwrap_or(new.enabled);
         new
@@ -179,24 +170,10 @@ impl UpdateJson for User {
 }
 
 impl ApiObject for User {
-    fn filters(
-        database: Arc<Database>,
-        rate_limit_config: RateLimitConfig,
-    ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
-        Self::list_filter(database.clone(), rate_limit_config.clone())
-            .or(Self::get_filter(
-                database.clone(),
-                rate_limit_config.clone(),
-            ))
-            .or(Self::create_filter(
-                database.clone(),
-                rate_limit_config.clone(),
-            ))
-            .or(Self::update_filter(
-                database.clone(),
-                rate_limit_config.clone(),
-            ))
-            .or(Self::remove_filter(database, rate_limit_config.clone()))
+    fn routes() -> Router<AppState> {
+        Router::new()
+            .route("/", get(Self::api_list).post(Self::api_create))
+            .route("/{id}", get(Self::api_get).put(Self::api_update).delete(Self::api_remove))
     }
 }
 
@@ -206,7 +183,7 @@ impl ApiGet for User {}
 impl ApiCreate for User {
     async fn after_api_create(
         &self,
-        database: Arc<Database>,
+        database: AppState,
         json: &mut Self::JsonFrom,
         _user: &User,
     ) -> Result<(), DatabaseError> {
@@ -221,7 +198,7 @@ impl ApiCreate for User {
 impl ApiUpdate for User {
     async fn after_api_update(
         &self,
-        database: Arc<Database>,
+        database: AppState,
         json: &mut Self::JsonUpdate,
         _user: &User,
     ) -> Result<(), DatabaseError> {
@@ -251,7 +228,7 @@ impl ApiUpdate for User {
 impl ApiRemove for User {
     async fn before_api_delete(
         &self,
-        database: Arc<Database>,
+        database: AppState,
         user: &User,
     ) -> Result<(), DatabaseError> {
         info!("removing user {}", self.id);
@@ -296,7 +273,7 @@ impl ApiRemove for User {
     }
 }
 impl User {
-    pub async fn group(&self, databse: Arc<Database>, user: Option<(&User, &Group)>) -> Group {
+    pub async fn group(&self, databse: AppState, user: Option<(&User, &Group)>) -> Group {
         databse
             .get_one(self.group_id, user)
             .await
@@ -421,9 +398,10 @@ pub mod session {
     use sqlx::{Arguments, Error, FromRow, IntoArguments, Row};
     use std::str::FromStr;
     use std::sync::Arc;
+    use axum::Router;
+    use axum::routing::get;
     use uuid::Uuid;
-    use warp::{Filter, Rejection, Reply};
-    use warp_rate_limit::RateLimitConfig;
+    use crate::api::serve::AppState;
 
     /// `user_id`: unique [`Id`] of the user who created the session
     ///
@@ -559,20 +537,10 @@ pub mod session {
     }
 
     impl ApiObject for Session {
-        fn filters(
-            database: Arc<Database>,
-            rate_limit_config: RateLimitConfig,
-        ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
-            Self::list_filter(database.clone(), rate_limit_config.clone())
-                .or(Self::get_filter(
-                    database.clone(),
-                    rate_limit_config.clone(),
-                ))
-                .or(Self::create_filter(
-                    database.clone(),
-                    rate_limit_config.clone(),
-                ))
-                .or(Self::remove_filter(database, rate_limit_config.clone()))
+        fn routes() -> Router<AppState> {
+            Router::new()
+                .route("/", get(Self::api_list).post(Self::api_create))
+                .route("/{id}", get(Self::api_get).delete(Self::api_remove))
         }
     }
 

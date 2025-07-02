@@ -1,3 +1,4 @@
+use crate::api::serve::AppState;
 use crate::database::objects::{DbObject, Password, Session, User};
 use crate::database::{Database, DatabaseError};
 use argon2::password_hash::{Salt, SaltString};
@@ -10,7 +11,7 @@ use crate::database::types::Id;
 pub async fn try_user_auth(
     username: &str,
     password: &str,
-    database: Arc<Database>,
+    database: AppState,
 ) -> Result<Session, DatabaseError> {
     let user: Result<User, _> = database
         .get_where("username", username.to_string(), None)
@@ -66,7 +67,7 @@ fn bollocks_hash() {
     let _ = argon2.hash_password_into(b"RandomPassword", b"RandomSalt", &mut [0u8; 32]);
 }
 
-pub async fn get_user(token: Uuid, database: Arc<Database>) -> Result<User, DatabaseError> {
+pub async fn get_user(token: Uuid, database: AppState) -> Result<User, DatabaseError> {
     /*
     let session = database
         .conn

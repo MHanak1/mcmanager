@@ -1,5 +1,3 @@
-use crate::api::filters::with_bearer_token;
-use crate::api::util::rejections;
 use crate::config::secrets::SECRETS;
 use crate::database::DatabaseError;
 use crate::database::objects::World;
@@ -13,11 +11,12 @@ use log::info;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::str::FromStr;
 use std::{io::Write, thread};
-use warp::http::StatusCode;
-use warp::{Filter, Reply, reject};
+use axum::http::StatusCode;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    Ok(())
+    /*
     env_logger::init();
 
     let config_path = dirs::base_dir().join("config.toml");
@@ -46,8 +45,8 @@ async fn main() -> Result<()> {
 async fn run(config: Config) -> Result<()> {
     info!("Starting minimanager...");
 
-    let list_worlds = warp::path!("api" / "worlds")
-        .and(warp::get())
+    let list_worlds = axum::path!("api" / "worlds")
+        .and(axum::get())
         .and(with_bearer_token())
         .and_then(|token| async move {
             if SECRETS.api_secret == token {
@@ -58,24 +57,24 @@ async fn run(config: Config) -> Result<()> {
         });
 
     /*
-    let get_world = warp::path!("api" / "worlds")
-        .and(warp::get())
+    let get_world = axum::path!("api" / "worlds")
+        .and(axum::get())
         .and(with_bearer_token())
-        .and(warp::body::json())
+        .and(axum::body::json())
         .and_then(|id: String, token: String, world: World| async move {
             println!("hii");
             if SECRETS.api_secret.to_string() == token {
-                warp:: server::get_or_create_server(&world)
+                axum:: server::get_or_create_server(&world)
             } else {
                 Err(reject::custom(rejections::Unauthorized))
             }
         });
      */
 
-    let create_world = warp::path!("api" / "worlds")
-        .and(warp::post().or(warp::put()).unify())
+    let create_world = axum::path!("api" / "worlds")
+        .and(axum::post().or(axum::put()).unify())
         .and(with_bearer_token())
-        .and(warp::body::json())
+        .and(axum::body::json())
         .and_then(|token, world: World| async move {
             if token == SECRETS.api_secret {
                 create_or_update_server(world).await
@@ -84,10 +83,10 @@ async fn run(config: Config) -> Result<()> {
             }
         });
 
-    let remove_world = warp::path!("api" / "worlds" / "remove")
-        .and(warp::post())
+    let remove_world = axum::path!("api" / "worlds" / "remove")
+        .and(axum::post())
         .and(with_bearer_token())
-        .and(warp::body::json())
+        .and(axum::body::json())
         .and_then(|token, world: World| async move {
             if token == SECRETS.api_secret {
                 world_remove(world).await
@@ -96,16 +95,16 @@ async fn run(config: Config) -> Result<()> {
             }
         });
 
-    let world_status = warp::path!("api" / "worlds" / "status")
-        .and(warp::get())
+    let world_status = axum::path!("api" / "worlds" / "status")
+        .and(axum::get())
         .and(with_bearer_token())
-        .and(warp::body::json())
+        .and(axum::body::json())
         .and_then(|token, world: World| async move {
             if SECRETS.api_secret == token {
                 match server::get_or_create_server(&world).await {
-                    Ok(server) => Ok(warp::reply::json(
+                    Ok(server) => Ok(axum::response::json(
                         &server.lock().await.status().await.map_err(|err| {
-                            warp::reject::custom(rejections::InternalServerError::from(err))
+                            axum::reject::custom(rejections::InternalServerError::from(err))
                         })?,
                     )),
                     Err(err) => Err(reject::custom(rejections::InternalServerError::from(err))),
@@ -115,9 +114,9 @@ async fn run(config: Config) -> Result<()> {
             }
         });
 
-    let log = warp::log("info");
+    let log = axum::log("info");
 
-    warp::serve(
+    axum::serve(
         create_world
             .or(remove_world)
             .or(world_status)
@@ -132,18 +131,20 @@ async fn run(config: Config) -> Result<()> {
     .await;
 
     Ok(())
-}
-
-async fn world_list() -> std::result::Result<impl Reply, warp::Rejection> {
-    Ok(warp::reply::json(&server::get_all_worlds().await))
+     */
 }
 
 /*
-fn world_get(id: Id) -> std::result::Result<impl Reply, warp::Rejection> {
+async fn world_list() -> std::result::Result<impl Reply, axum::Rejection> {
+    Ok(axum::response::json(&server::get_all_worlds().await))
+}
+
+/*
+fn world_get(id: Id) -> std::result::Result<impl Reply, axum::Rejection> {
     match server::get_server(id) {
         Some(server) => match server.lock() {
-            Ok(server) => Ok(warp::reply::json(&server.world().map_err(|err| {
-                warp::reject::custom(rejections::InternalServerError::from(err))
+            Ok(server) => Ok(axum::response::json(&server.world().map_err(|err| {
+                axum::reject::custom(rejections::InternalServerError::from(err))
             })?)),
             Err(err) => Err(reject::custom(rejections::InternalServerError::from(err))),
         },
@@ -152,17 +153,17 @@ fn world_get(id: Id) -> std::result::Result<impl Reply, warp::Rejection> {
 }
  */
 
-async fn world_remove(world: World) -> std::result::Result<impl Reply, warp::Rejection> {
+async fn world_remove(world: World) -> std::result::Result<impl Reply, axum::Rejection> {
     let response = match server::get_or_create_server(&world).await {
         Ok(server) => {
             let mut server = server.lock().await;
             server
                 .remove()
                 .await
-                .map_err(|err| warp::reject::custom(rejections::InternalServerError::from(err)))?;
-            Ok(warp::reply())
+                .map_err(|err| axum::reject::custom(rejections::InternalServerError::from(err)))?;
+            Ok(axum::response())
         }
-        Err(err) => Err(warp::reject::custom(rejections::InternalServerError::from(
+        Err(err) => Err(axum::reject::custom(rejections::InternalServerError::from(
             err,
         ))),
     };
@@ -171,24 +172,24 @@ async fn world_remove(world: World) -> std::result::Result<impl Reply, warp::Rej
     response
 }
 
-async fn create_or_update_server(world: World) -> std::result::Result<impl Reply, warp::Rejection> {
+async fn create_or_update_server(world: World) -> std::result::Result<impl Reply, axum::Rejection> {
     let mut server = server::get_or_create_server(&world)
         .await
-        .map_err(|err| warp::reject::custom(rejections::InternalServerError::from(err)))?;
+        .map_err(|err| axum::reject::custom(rejections::InternalServerError::from(err)))?;
     server
         .lock()
         .await
         .update_world(world.clone())
         .await
-        .map_err(|err| warp::reject::custom(rejections::InternalServerError::from(err)))?;
-    Ok(warp::reply::with_status(
-        warp::reply::json(&world),
+        .map_err(|err| axum::reject::custom(rejections::InternalServerError::from(err)))?;
+    Ok(axum::response::with_status(
+        axum::response::json(&world),
         StatusCode::OK,
     ))
 }
 /*
 
-fn create_or_update_server(world: World) -> std::result::Result<impl Reply, warp::Rejection> {
+fn create_or_update_server(world: World) -> std::result::Result<impl Reply, axum::Rejection> {
     let server = match server::get_server(world.id) {
         Some(server) => match server
             .lock()
@@ -208,12 +209,12 @@ fn create_or_update_server(world: World) -> std::result::Result<impl Reply, warp
             })?);
 
             server::add_server(server).map_err(|err| {
-                warp::reject::custom(rejections::InternalServerError::from(err.to_string()))
+                axum::reject::custom(rejections::InternalServerError::from(err.to_string()))
             })?;
 
             match server::get_server(world.id) {
                 Some(server) => server,
-                None => Err(warp::reject::custom(rejections::InternalServerError::from(
+                None => Err(axum::reject::custom(rejections::InternalServerError::from(
                     String::from("can't find the created server"),
                 )))?,
             }
@@ -223,8 +224,10 @@ fn create_or_update_server(world: World) -> std::result::Result<impl Reply, warp
     let server = server.lock().expect("failed to lock server");
 
     println!("Created server {:?}", server.world());
-    Ok(warp::reply::json(&server.world().map_err(|err| {
-        warp::reject::custom(rejections::InternalServerError::from(err))
+    Ok(axum::response::json(&server.world().map_err(|err| {
+        axum::reject::custom(rejections::InternalServerError::from(err))
     })?))
 }
+ */
+
  */

@@ -17,147 +17,143 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
+use axum::extract::{MatchedPath, State};
+use axum::http::Request;
+use axum::Router;
+use axum::routing::{get, post, MethodRouter};
 use static_dir::static_dir;
 use test_log::test;
 use tokio::sync::Mutex;
-use warp::{path, Filter};
-use warp::path::FullPath;
-use warp_rate_limit::RateLimitInfo;
+use tracing::{info_span};
 
+pub type AppState = Database;
 
-pub async fn run(database: Database, config: config::Config) {
+pub async fn run(database: Database, config: config::Config) -> Result<(), anyhow::Error> {
     util::dirs::init_dirs().expect("Failed to initialize the data directory");
-
-    let database = Arc::new(database);
 
     let limit = config.public_routes_rate_limit;
 
-    let public_routes_rate_limit =
-        warp_rate_limit::RateLimitConfig::max_per_window(limit.0, limit.1);
+    //TODO: Re-add Rate Limits
 
     let limit = config.private_routes_rate_limit;
-    let private_routes_rate_limit =
-        warp_rate_limit::RateLimitConfig::max_per_window(limit.0, limit.1);
+    /*
 
-    let register = warp::post()
-        .and(warp_rate_limit::with_rate_limit(
+    let register = axum::post()
+        .and(axum_rate_limit::with_rate_limit(
             public_routes_rate_limit.clone(),
         ))
-        .and(warp::path!("api" / "register"))
+        .and(axum::path!("api" / "register"))
         .and(filters::with_db(database.clone()))
-        .and(warp::body::content_length_limit(1024 * 16))
-        .and(warp::body::json())
-        .and(warp::query::<Vec<(String, String)>>())
+        .and(axum::body::content_length_limit(1024 * 16))
+        .and(axum::body::json())
+        .and(axum::query::<Vec<(String, String)>>())
         .and_then(api::handlers::user_register);
 
-    let login = warp::post()
-        .and(warp_rate_limit::with_rate_limit(
+    let login = axum::post()
+        .and(axum_rate_limit::with_rate_limit(
             public_routes_rate_limit.clone(),
         ))
-        .and(warp::path!("api" / "login"))
+        .and(axum::path!("api" / "login"))
         .and(filters::with_db(database.clone()))
-        .and(warp::body::content_length_limit(1024 * 16))
-        .and(warp::body::json())
+        .and(axum::body::content_length_limit(1024 * 16))
+        .and(axum::body::json())
         .and_then(api::handlers::user_auth);
 
-    let logout = warp::post()
-        .and(warp_rate_limit::with_rate_limit(
+    let logout = axum::post()
+        .and(axum_rate_limit::with_rate_limit(
             private_routes_rate_limit.clone(),
         ))
-        .and(warp::path!("api" / "logout"))
+        .and(axum::path!("api" / "logout"))
         .and(filters::with_db(database.clone()))
         .and(filters::with_bearer_token())
         .and_then(api::handlers::logout);
 
-    let user_info = warp::get()
-        .and(warp_rate_limit::with_rate_limit(
+    let user_info = axum::get()
+        .and(axum_rate_limit::with_rate_limit(
             private_routes_rate_limit.clone(),
         ))
-        .and(warp::path!("api" / "user"))
+        .and(axum::path!("api" / "user"))
         .and(filters::with_auth(database.clone()))
         .and_then(api::handlers::user_info);
 
-    let server_info = warp::get()
-        .and(warp_rate_limit::with_rate_limit(
+    let server_info = axum::get()
+        .and(axum_rate_limit::with_rate_limit(
             public_routes_rate_limit.clone(),
         ))
-        .and(warp::path!("api" / "info"))
+        .and(axum::path!("api" / "info"))
         .and_then(api::handlers::server_info);
 
-    let is_taken = warp::get()
-        .and(warp_rate_limit::with_rate_limit(
+    let is_taken = axum::get()
+        .and(axum_rate_limit::with_rate_limit(
             private_routes_rate_limit.clone(),
         ))
-        .and(warp::path!("api" / "valid" / String / String))
-        .and(warp::get())
+        .and(axum::path!("api" / "valid" / String / String))
+        .and(axum::get())
         .and(filters::with_db(database.clone()))
         .and_then(api::handlers::check_free);
 
     // a hacky way to serve the frontend.
     let frontend = static_dir!("mcmanager-frontend/dist")
-        .or(warp::path::full().and_then(move |path: FullPath| async move {
+        .or(axum::path::full().and_then(move |path: FullPath| async move {
             let path = path.as_str();
             if path.starts_with("/api") {
-                return Err(warp::reject());
+                return Err(axum::reject());
             }
 
             if path.contains(".") {
-                return Err(warp::reject());
+                return Err(axum::reject());
             }
 
-            Ok(warp::reply::html(include_str!("../../mcmanager-frontend/dist/index.html")))
+            Ok(axum::response::html(include_str!("../../mcmanager-frontend/dist/index.html")))
         }));
 
-    let log = warp::log("info");
+    let log = axum::log("info");
+     */
 
-    warp::serve(
-        register
-            .or(login)
-            .or(logout)
-            .or(user_info)
-            .or(server_info)
-            .or(is_taken)
-            .or(Mod::filters(
-                database.clone(),
-                private_routes_rate_limit.clone(),
-            ))
-            .or(Version::filters(
-                database.clone(),
-                private_routes_rate_limit.clone(),
-            ))
-            .or(ModLoader::filters(
-                database.clone(),
-                private_routes_rate_limit.clone(),
-            ))
-            .or(World::filters(
-                database.clone(),
-                private_routes_rate_limit.clone(),
-            ))
-            .or(Group::filters(
-                database.clone(),
-                private_routes_rate_limit.clone(),
-            ))
-            .or(User::filters(
-                database.clone(),
-                private_routes_rate_limit.clone(),
-            ))
-            .or(Session::filters(
-                database.clone(),
-                private_routes_rate_limit.clone(),
-            ))
-            .or(InviteLink::filters(
-                database.clone(),
-                private_routes_rate_limit.clone(),
-            ))
-            .or(frontend)
-            .recover(api::handlers::handle_rejection)
-            .with(log),
-    )
-    .run(SocketAddr::new(
-        IpAddr::V4(Ipv4Addr::from_str(&config.listen_address).expect("invalid listen_address")),
-        config.listen_port as u16,
-    ))
-    .await;
+    let api = Router::new()
+        .route("/login", post(api::handlers::user_auth))
+        .route("/logout", post(api::handlers::logout))
+        .route("/user", get(api::handlers::user_info))
+        .route("/info", get(api::handlers::server_info))
+        .route("/is_taken", get(api::handlers::check_free))
+        .nest("/mods", Mod::routes())
+        .nest("/versions", Version::routes())
+        .nest("/mod_loaders", ModLoader::routes())
+        .nest("/worlds", World::routes())
+        .nest("/groups", Group::routes())
+        .nest("/users", User::routes())
+        .nest("/sessions", Session::routes())
+        .nest("/invite_links", InviteLink::routes())
+        .with_state(database.clone());
+
+    let router = Router::new()
+        .nest("/api", api)
+        .route("/", get(|| async { "Hello!!" }))
+        .layer(tower_http::trace::TraceLayer::new_for_http()
+           .make_span_with(|request: &Request<_>| {
+               // Log the matched route's path (with placeholders not filled in).
+               // Use request.uri() or OriginalUri if you want the real path.
+               let matched_path = request
+                   .extensions()
+                   .get::<MatchedPath>()
+                   .map(MatchedPath::as_str);
+
+               info_span!(
+                "http_request",
+                method = ?request.method(),
+                matched_path,
+                some_other_field = tracing::field::Empty,
+            )
+           })
+        );
+
+
+    let listener = tokio::net::TcpListener::bind(&config.listen_address).await?;
+
+
+    axum::serve(listener, router).await?;
+
+    Ok(())
 }
 
 #[test]
@@ -174,7 +170,7 @@ fn user_creation_and_removal() -> anyhow::Result<()> {
     use serde::Deserialize;
     use serde_with::serde_derive::Serialize;
     use std::thread;
-    use warp::body::BodyDeserializeError;
+    use axum::body::BodyDeserializeError;
 
     let conn = rusqlite::Connection::open_in_memory().expect("Can't open database connection");
 

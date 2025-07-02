@@ -10,7 +10,6 @@ use std::fmt::Debug;
 use std::result;
 use std::sync::{Arc, LazyLock};
 use tokio::sync::Mutex;
-use warp::hyper::body::HttpBody;
 
 pub type ServerMutex = Arc<Mutex<Box<dyn MinecraftServer>>>;
 static SERVERS: LazyLock<Mutex<HashMap<Id, ServerMutex>>> =

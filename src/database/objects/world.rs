@@ -1,6 +1,6 @@
+use crate::api::serve::AppState;
 use crate::api::filters;
 use crate::api::handlers::{ApiCreate, ApiGet, ApiList, ApiObject, ApiRemove, ApiUpdate};
-use crate::api::util::rejections;
 use crate::database::objects::group::Group;
 use crate::database::objects::{DbObject, FromJson, UpdateJson, User, Version};
 use crate::database::types::{Access, Column, Id};
@@ -8,16 +8,19 @@ use crate::database::{Database, DatabaseError, ValueType};
 use crate::minecraft::server;
 use crate::minecraft::server::{MinecraftServerStatus, ServerConfigLimit};
 use async_trait::async_trait;
-use log::{debug, info};
+use log::{debug, error, info};
 use serde::{Deserialize, Deserializer, Serialize};
 use sqlx::{Any, Arguments, Encode, FromRow, IntoArguments};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::task::id;
-use warp::http::StatusCode;
-use warp::{Filter, Rejection, Reply, reject};
-use warp_rate_limit::{RateLimitConfig, RateLimitInfo};
+use axum::http::StatusCode;
+use axum::{Router};
+use axum::extract::{Path, State};
+use axum::response::IntoResponse;
+use axum::routing::get;
+use crate::api::filters::UserAuth;
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, FromRow)]
 pub struct World {
@@ -212,39 +215,12 @@ impl UpdateJson for World {
 }
 
 impl ApiObject for World {
-    fn filters(
-        db_mutex: Arc<Database>,
-        rate_limit_config: RateLimitConfig,
-    ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
-        Self::list_filter(db_mutex.clone(), rate_limit_config.clone())
-            .or(Self::status_filter(
-                db_mutex.clone(),
-                rate_limit_config.clone(),
-            ))
-            .or(Self::get_config_filter(
-                db_mutex.clone(),
-                rate_limit_config.clone(),
-            ))
-            .or(Self::set_config_filter(
-                db_mutex.clone(),
-                rate_limit_config.clone(),
-            ))
-            .or(Self::get_filter(
-                db_mutex.clone(),
-                rate_limit_config.clone(),
-            ))
-            .or(Self::create_filter(
-                db_mutex.clone(),
-                rate_limit_config.clone(),
-            ))
-            .or(Self::update_filter(
-                db_mutex.clone(),
-                rate_limit_config.clone(),
-            ))
-            .or(Self::remove_filter(
-                db_mutex.clone(),
-                rate_limit_config.clone(),
-            ))
+    fn routes() -> Router<AppState> {
+        Router::new()
+            .route("/", get(Self::api_list).post(Self::api_create))
+            .route("/{id}", get(Self::api_get).put(Self::api_update).delete(Self::api_remove))
+            .route("/{id}/config", get(Self::get_server_config).put(Self::set_server_config).post(Self::set_server_config))
+            .route("/{id}/status", get(Self::world_get_status))
     }
 }
 
@@ -254,7 +230,7 @@ impl ApiGet for World {}
 impl ApiCreate for World {
     //TODO: this needs a rewrite, too much repeated code
     async fn before_api_create(
-        database: Arc<Database>,
+        database: AppState,
         json: &mut Self::JsonFrom,
         user: &User,
     ) -> Result<(), DatabaseError> {
@@ -284,10 +260,6 @@ impl ApiCreate for World {
         //enforce memory limit
         if let Some(memory_limit) = group.total_memory_limit {
             if let Some(allocated_memory) = json.allocated_memory {
-                let user_worlds: Vec<World> = database
-                    .get_all_where("owner_id", user.id, Some((&user, &group)))
-                    .await?;
-
                 let mut total_memory = 0;
 
                 for world in &user_worlds {
@@ -312,7 +284,7 @@ impl ApiCreate for World {
     }
     async fn after_api_create(
         &self,
-        _database: Arc<Database>,
+        _database: AppState,
         _json: &mut Self::JsonFrom,
         _user: &User,
     ) -> Result<(), DatabaseError> {
@@ -325,7 +297,7 @@ impl ApiUpdate for World {
     //TODO: this needs a rewrite, too much repeated code
     async fn before_api_update(
         &self,
-        database: Arc<Database>,
+        database: AppState,
         json: &mut Self::JsonUpdate,
         user: &User,
     ) -> Result<(), DatabaseError> {
@@ -401,7 +373,7 @@ impl ApiUpdate for World {
     }
     async fn after_api_update(
         &self,
-        _database: Arc<Database>,
+        _database: AppState,
         _json: &mut Self::JsonUpdate,
         _user: &User,
     ) -> Result<(), DatabaseError> {
@@ -420,7 +392,7 @@ impl ApiUpdate for World {
 impl ApiRemove for World {
     async fn before_api_delete(
         &self,
-        database: Arc<Database>,
+        database: AppState,
         user: &User,
     ) -> Result<(), DatabaseError> {
         info!("removing world {}", self.id);
@@ -437,7 +409,7 @@ impl ApiRemove for World {
 }
 
 impl World {
-    pub async fn version(&self, database: Arc<Database>, user: Option<(&User, &Group)>) -> Version {
+    pub async fn version(&self, database: AppState, user: Option<(&User, &Group)>) -> Version {
         database
             .get_one(self.version_id, user)
             .await
@@ -446,7 +418,7 @@ impl World {
                 self.version_id
             ))
     }
-    pub async fn owner(&self, database: Arc<Database>, user: Option<(&User, &Group)>) -> User {
+    pub async fn owner(&self, database: AppState, user: Option<(&User, &Group)>) -> User {
         database
             .get_one(self.owner_id, user)
             .await
@@ -454,12 +426,14 @@ impl World {
     }
     #[allow(clippy::needless_pass_by_value)]
     async fn world_get_status(
-        _rate_limit_info: RateLimitInfo,
-        id: String,
-        db_mutex: Arc<Database>,
-        user: User,
-    ) -> Result<impl warp::Reply, warp::Rejection> {
-        let id = Id::from_string(&id).map_err(|_| reject::custom(rejections::NotFound))?;
+        id: Path<Id>,
+        db_mutex: State<AppState>,
+        user: UserAuth,
+    ) -> Result<impl IntoResponse, axum::http::StatusCode> {
+        let id = id.0;
+        let db_mutex = db_mutex.0;
+        let user = user.0;
+
         {
             let group = user.group(db_mutex.clone(), None).await;
             db_mutex
@@ -473,7 +447,7 @@ impl World {
             Some(server) => server.lock().await.status().await,
             None => Ok(MinecraftServerStatus::Exited(0)),
         }
-        .map_err(|err| warp::reject::custom(rejections::InternalServerError::from(err)))?;
+        .map_err(|err| {error!("{err}"); StatusCode::INTERNAL_SERVER_ERROR})?;
 
         #[derive(Serialize)]
         struct Status {
@@ -492,36 +466,19 @@ impl World {
             },
         };
 
-        Ok(warp::reply::with_status(
-            warp::reply::json(&status),
-            StatusCode::OK,
-        ))
-    }
-
-    pub fn status_filter(
-        db_mutex: Arc<Database>,
-        rate_limit_config: RateLimitConfig,
-    ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
-        warp::path("api")
-            .and(warp_rate_limit::with_rate_limit(rate_limit_config))
-            .and(warp::path(Self::table_name()))
-            .and(warp::path::param::<String>())
-            .and(warp::path("status"))
-            .and(warp::path::end())
-            .and(warp::get())
-            .and(filters::with_db(db_mutex.clone()))
-            .and(filters::with_auth(db_mutex))
-            .and_then(Self::world_get_status)
+        Ok(axum::Json(status))
     }
 
     #[allow(clippy::needless_pass_by_value)]
     async fn get_server_config(
-        _rate_limit_info: RateLimitInfo,
-        id: String,
-        database: Arc<Database>,
-        user: User,
-    ) -> Result<impl warp::Reply, warp::Rejection> {
-        let id = Id::from_string(&id).map_err(|_| reject::custom(rejections::NotFound))?;
+        id: Path<Id>,
+        database: State<AppState>,
+        user: UserAuth,
+    ) -> Result<impl IntoResponse, axum::http::StatusCode> {
+        let id = id.0;
+        let database = database.0;
+        let user = user.0;
+
         let group = user.group(database.clone(), None).await;
 
         let world = {
@@ -533,14 +490,14 @@ impl World {
 
         let server = server::get_or_create_server(&world)
             .await
-            .map_err(|err| warp::reject::custom(rejections::InternalServerError::from(err)))?;
+            .map_err(|err| {error!("{err}"); StatusCode::INTERNAL_SERVER_ERROR})?;
 
         let server = server.lock().await;
 
         let mut config = server
             .config()
             .await
-            .map_err(|err| warp::reject::custom(rejections::InternalServerError::from(err)))?;
+            .map_err(|err| {error!("{err}"); StatusCode::INTERNAL_SERVER_ERROR})?;
         if group.config_whitelist.is_empty() {
             for key in group.config_blacklist {
                 config.remove(&key);
@@ -555,37 +512,21 @@ impl World {
             config = new_config
         }
 
-        Ok(warp::reply::with_status(
-            warp::reply::json(&config),
-            StatusCode::OK,
-        ))
-    }
-
-    pub fn get_config_filter(
-        db_mutex: Arc<Database>,
-        rate_limit_config: RateLimitConfig,
-    ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
-        warp::path("api")
-            .and(warp_rate_limit::with_rate_limit(rate_limit_config))
-            .and(warp::path(Self::table_name()))
-            .and(warp::path::param::<String>())
-            .and(warp::path("config"))
-            .and(warp::path::end())
-            .and(warp::get())
-            .and(filters::with_db(db_mutex.clone()))
-            .and(filters::with_auth(db_mutex))
-            .and_then(Self::get_server_config)
+        Ok(axum::Json(config))
     }
 
     #[allow(clippy::needless_pass_by_value)]
     async fn set_server_config(
-        _rate_limit_info: RateLimitInfo,
-        id: String,
-        database: Arc<Database>,
-        user: User,
-        new_config: HashMap<String, String>,
-    ) -> Result<impl warp::Reply, warp::Rejection> {
-        let id = Id::from_string(&id).map_err(|_| reject::custom(rejections::NotFound))?;
+        id: Path<Id>,
+        database: State<AppState>,
+        user: UserAuth,
+        new_config: axum::extract::Json<HashMap<String, String>>,
+    ) -> Result<impl IntoResponse, axum::http::StatusCode> {
+        let id = id.0;
+        let database = database.0;
+        let user = user.0;
+        let new_config = new_config.0;
+
         let group = user.group(database.clone(), None).await;
 
         let world = {
@@ -597,14 +538,14 @@ impl World {
 
         let server = server::get_or_create_server(&world)
             .await
-            .map_err(|err| warp::reject::custom(rejections::InternalServerError::from(err)))?;
+            .map_err(|err| {error!("{err}"); StatusCode::INTERNAL_SERVER_ERROR})?;
 
         let mut server = server.lock().await;
 
         let mut config = server
             .config()
             .await
-            .map_err(|err| warp::reject::custom(rejections::InternalServerError::from(err)))?;
+            .map_err(|err| {error!("{err}"); StatusCode::INTERNAL_SERVER_ERROR})?;
         if group.config_whitelist.is_empty() {
             for key in &group.config_blacklist {
                 config.remove(key.as_str());
@@ -662,27 +603,8 @@ impl World {
         server
             .set_config(config.clone())
             .await
-            .map_err(|err| warp::reject::custom(rejections::InternalServerError::from(err)))?;
+            .map_err(|err| {error!("{err}"); StatusCode::INTERNAL_SERVER_ERROR})?;
 
-        Ok(warp::reply::with_status(
-            warp::reply::json(&config),
-            StatusCode::OK,
-        ))
-    }
-    pub fn set_config_filter(
-        database: Arc<Database>,
-        rate_limit_config: RateLimitConfig,
-    ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
-        warp::path("api")
-            .and(warp_rate_limit::with_rate_limit(rate_limit_config))
-            .and(warp::path(Self::table_name()))
-            .and(warp::path::param::<String>())
-            .and(warp::path("config"))
-            .and(warp::path::end())
-            .and(warp::put())
-            .and(filters::with_db(database.clone()))
-            .and(filters::with_auth(database))
-            .and(warp::filters::body::json())
-            .and_then(Self::set_server_config)
+        Ok(axum::Json(config))
     }
 }

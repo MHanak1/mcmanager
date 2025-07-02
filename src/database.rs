@@ -8,13 +8,12 @@ use serde::{Deserialize, Deserializer};
 use sqlx::{Database as SqlxDatabase, Encode, FromRow, IntoArguments, Pool, Postgres, Type};
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
-use warp::reject::Reject;
 
 pub mod objects;
 pub mod types;
 
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Database {
     //pub conn: rusqlite::Connection,
     pub pool: DatabasePool,
@@ -288,7 +287,7 @@ impl Database {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum DatabasePool {
     Postgres(Pool<sqlx::Postgres>),
     Sqlite(Pool<sqlx::sqlite::Sqlite>),
@@ -464,7 +463,7 @@ where
             T::columns()
                 .iter()
                 .enumerate()
-                .map(|(id, column)| { format!("{} = {}", column.name, DB::db_type().nth_parameter(id + 1)) })
+                .map(|(n, column)| { format!("{} = {}", column.name, DB::db_type().nth_parameter(n)) })
                 .collect::<Vec<String>>()
                 .join(", "),
         );
@@ -608,7 +607,6 @@ impl Display for DatabaseError {
 }
 
 impl Error for DatabaseError {}
-impl Reject for DatabaseError {}
 
 impl From<sqlx::Error> for DatabaseError {
     fn from(error: sqlx::Error) -> Self {

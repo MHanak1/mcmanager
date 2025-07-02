@@ -18,7 +18,6 @@ use std::fs::File;
 use std::io::{Read, Write};
 use std::path::Path;
 use std::time::Duration;
-use warp::fs::file;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -201,7 +200,6 @@ async fn main() -> Result<()> {
                     User {
                         id: Default::default(),
                         username: String::from(username.trim()),
-                        avatar_id: None,
                         group_id: admin_group.id,
                         enabled: true,
                     },

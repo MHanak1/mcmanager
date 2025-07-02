@@ -1,3 +1,4 @@
+use crate::api::serve::AppState;
 use crate::api::handlers::{ApiCreate, ApiGet, ApiList, ApiObject, ApiRemove, ApiUpdate};
 use crate::database::objects::{DbObject, FromJson, UpdateJson, User};
 use crate::database::types::{Access, Column, Id};
@@ -9,8 +10,9 @@ use sqlx::{Arguments, Error, FromRow, IntoArguments, Row};
 use std::collections::HashMap;
 use std::sync::Arc;
 use async_trait::async_trait;
-use warp::{Filter, Rejection, Reply};
-use warp_rate_limit::{RateLimitConfig, RateLimitInfo};
+use axum::{Router};
+use axum::extract::State;
+use axum::routing::{get, MethodRouter};
 use crate::config::CONFIG;
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
@@ -190,24 +192,10 @@ impl<'a> IntoArguments<'a, sqlx::Postgres> for Group {
 }
 
 impl ApiObject for Group {
-    fn filters(
-        database: Arc<Database>,
-        rate_limit_config: RateLimitConfig,
-    ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
-        Self::list_filter(database.clone(), rate_limit_config.clone())
-            .or(Self::get_filter(
-                database.clone(),
-                rate_limit_config.clone(),
-            ))
-            .or(Self::create_filter(
-                database.clone(),
-                rate_limit_config.clone(),
-            ))
-            .or(Self::update_filter(
-                database.clone(),
-                rate_limit_config.clone(),
-            ))
-            .or(Self::remove_filter(database, rate_limit_config.clone()))
+    fn routes() -> Router<AppState> {
+        Router::new()
+            .route("/", get(Self::api_list).post(Self::api_create))
+            .route("/{id}", get(Self::api_get).put(Self::api_update).delete(Self::api_remove))
     }
 }
 
@@ -324,7 +312,7 @@ impl ApiUpdate for Group {}
 
 #[async_trait]
 impl ApiRemove for Group {
-    async fn before_api_delete(&self, database: Arc<Database>, user: &User) -> Result<(), DatabaseError> {
+    async fn before_api_delete(&self, database: AppState, user: &User) -> Result<(), DatabaseError> {
         if self.id == CONFIG.user_defaults.group_id {
             Err(DatabaseError::Conflict)
         }

@@ -1,5 +1,4 @@
-use crate::api::util::rejections;
-use crate::api::util::rejections::BadRequest;
+use crate::api::serve::AppState;
 use crate::api::{auth, filters};
 use crate::config::{CONFIG};
 use crate::database::DatabaseError::SqlxError;
@@ -11,24 +10,25 @@ use crate::util::base64::base64_decode;
 use async_trait::async_trait;
 use chrono::DateTime;
 use futures::{StreamExt, TryFutureExt};
-use log::error;
+use log::{debug, error};
 use serde::{Deserialize, Serialize};
 use sqlx::{Encode, FromRow, IntoArguments, Type};
 use std::io::Read;
 use std::str::FromStr;
 use std::sync::Arc;
+use axum::extract::{Path, State};
 use tokio::sync::Mutex;
 use uuid::{Error, Uuid};
-use warp::http::StatusCode;
-use warp::{Filter, Rejection, Reply, reject};
-use warp_rate_limit::{RateLimitConfig, RateLimitInfo};
+use axum::http::{header, StatusCode};
+use axum::response::IntoResponse;
+use axum::Router;
+use axum::routing::MethodRouter;
+use serde_json::{json, Value};
+use crate::api::filters::{BearerToken, UserAuth, WithSession};
 use crate::execute_on_enum;
 
 pub trait ApiObject: DbObject {
-    fn filters(
-        database: Arc<Database>,
-        rate_limit_config: RateLimitConfig,
-    ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone;
+    fn routes() -> Router<AppState>;
 }
 
 #[async_trait]
@@ -42,11 +42,13 @@ where
 {
     //in theory the user filter should be done within the sql query, but for the sake of simplicity we do that when collecting the results
     async fn api_list(
-        _rate_limit_info: RateLimitInfo,
-        database: Arc<Database>,
-        user: User,
-        filters: Vec<(String, String)>,
-    ) -> Result<impl warp::Reply, warp::Rejection> {
+        database: State<AppState>,
+        user: UserAuth,
+        filters: axum::extract::Query<Vec<(String, String)>>,
+    ) -> Result<axum::Json<Vec<Self>>, StatusCode> {
+        let database = database.0;
+        let user = user.0;
+        let filters = filters.0;
         let group = user.group(database.clone(), None).await;
         let objects: Vec<Self> = {
             execute_on_enum!(&database.pool; (DatabasePool::Postgres, DatabasePool::Sqlite) |pool| {
@@ -169,26 +171,7 @@ where
                     .map_err(handle_database_error)?
             })
         };
-        Ok(warp::reply::with_status(
-            warp::reply::json(&objects),
-            StatusCode::OK,
-        ))
-    }
-
-    fn list_filter(
-        database: Arc<Database>,
-        rate_limit_config: RateLimitConfig,
-    ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone + Send + Sync
-    {
-        warp::path("api")
-            .and(warp_rate_limit::with_rate_limit(rate_limit_config))
-            .and(warp::path(Self::table_name()))
-            .and(warp::path::end())
-            .and(warp::get())
-            .and(filters::with_db(database.clone()))
-            .and(filters::with_auth(database))
-            .and(warp::query::<Vec<(String, String)>>())
-            .and_then(Self::api_list)
+        Ok(axum::Json(objects))
     }
 }
 #[async_trait]
@@ -201,40 +184,19 @@ where
     Self: Unpin,
 {
     async fn api_get(
-        _rate_limit_info: RateLimitInfo,
-        id: String,
-        database: Arc<Database>,
-        user: User,
-    ) -> Result<impl warp::Reply, warp::Rejection> {
-        let id = Id::from_string(&id).map_err(|_| reject::custom(rejections::NotFound))?;
-        let group = user.group(database.clone(), None).await;
+        id: Path<Id>,
+        database: State<AppState>,
+        user: UserAuth,
+    ) -> Result<axum::Json<Self>, StatusCode> {
+        let group = user.0.group(database.0.clone(), None).await;
         let object = {
             database
-                .get_one::<Self>(id, Some((&user, &group)))
+                .get_one::<Self>(id.0, Some((&user.0, &group)))
                 .await
                 .map_err(handle_database_error)?
         };
 
-        Ok(warp::reply::with_status(
-            warp::reply::json(&object),
-            StatusCode::OK,
-        ))
-    }
-
-    fn get_filter(
-        database: Arc<Database>,
-        rate_limit_config: RateLimitConfig,
-    ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone + Send + Sync
-    {
-        warp::path("api")
-            .and(warp_rate_limit::with_rate_limit(rate_limit_config))
-            .and(warp::path(Self::table_name()))
-            .and(warp::path::param::<String>())
-            .and(warp::path::end())
-            .and(warp::get())
-            .and(filters::with_db(database.clone()))
-            .and(filters::with_auth(database))
-            .and_then(Self::api_get)
+        Ok(axum::Json(object))
     }
 }
 
@@ -248,19 +210,21 @@ where
     Self: for<'a> IntoArguments<'a, sqlx::Postgres>,
 {
     async fn api_create(
-        _rate_limit_info: RateLimitInfo,
-        database: Arc<Database>,
-        user: User,
-        data: Self::JsonFrom,
-    ) -> Result<impl warp::Reply, warp::Rejection> {
-        let mut data = data;
+        database: State<AppState>,
+        user: UserAuth,
+        data: axum::extract::Json<Self::JsonFrom>,
+    ) -> Result<axum::Json<Self>, StatusCode> {
+        let database = database.0;
+        let user = user.0;
+        let mut data = data.0;
         let group = user.group(database.clone(), None).await;
         //in theory this is redundant, as database::insert checks it as well, but better safe than sorry
         if !Self::can_create(&user, &group) {
-            return Err(reject::custom(rejections::Unauthorized));
+            return Err(StatusCode::UNAUTHORIZED);
         }
 
         let object = {
+            debug!("running before create for /{}", Self::table_name());
             Self::before_api_create(database.clone(), &mut data, &user)
                 .await
                 .map_err(handle_database_error)?;
@@ -270,6 +234,7 @@ where
                 .await
                 .map_err(handle_database_error)?;
 
+            debug!("running after create for /{}/{}", Self::table_name(), object.id());
             object
                 .after_api_create(database, &mut data, &user)
                 .await
@@ -277,20 +242,13 @@ where
             object
         };
 
-        Ok(warp::reply::with_status(
-            warp::reply::with_header(
-                warp::reply::json(&object),
-                warp::http::header::LOCATION,
-                format!("api/{}/{}", Self::table_name(), object.id()),
-            ),
-            StatusCode::CREATED,
-        ))
+        Ok(axum::Json(object))
     }
 
     #[allow(unused)]
     /// runs before the database entry creation
     async fn before_api_create(
-        database: Arc<Database>,
+        database: AppState,
         json: &mut Self::JsonFrom,
         user: &User,
     ) -> Result<(), DatabaseError> {
@@ -302,28 +260,11 @@ where
     /// this returns a [`Result`], but there is no mechanism to undo the entry creation. if this fails it should probably cause the program to panic
     async fn after_api_create(
         &self,
-        database: Arc<Database>,
+        database: AppState,
         json: &mut Self::JsonFrom,
         user: &User,
     ) -> Result<(), DatabaseError> {
         Ok(())
-    }
-
-    fn create_filter(
-        database: Arc<Database>,
-        rate_limit_config: RateLimitConfig,
-    ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone + Send + Sync
-    {
-        warp::path("api")
-            .and(warp_rate_limit::with_rate_limit(rate_limit_config))
-            .and(warp::path(Self::table_name()))
-            .and(warp::path::end())
-            .and(warp::post())
-            .and(warp::body::content_length_limit(1024 * 32))
-            .and(filters::with_db(database.clone()))
-            .and(filters::with_auth(database))
-            .and(warp::body::json())
-            .and_then(Self::api_create)
     }
 }
 
@@ -340,16 +281,16 @@ where
     Self: Clone,
 {
     async fn api_update(
-        _rate_limit_info: RateLimitInfo,
-        id: String,
-        database: Arc<Database>,
-        user: User,
-        data: Self::JsonUpdate,
-    ) -> Result<impl warp::Reply, warp::Rejection> {
-        let mut data = data;
+        id: Path<Id>,
+        database: State<AppState>,
+        user: UserAuth,
+        data: axum::Json<Self::JsonUpdate>,
+    ) -> Result<axum::Json<Self>, StatusCode> {
+        let id = id.0;
+        let database = database.0;
+        let user = user.0;
+        let mut data =  data.0;
         let object = {
-            let id =
-                Id::from_string(&id).map_err(|_| warp::reject::custom(rejections::NotFound))?;
             let group = user.group(database.clone(), None).await;
 
             let object = database
@@ -357,6 +298,7 @@ where
                 .await
                 .map_err(handle_database_error)?;
 
+            debug!("running before update for /{}/{}", Self::table_name(), object.id());
             object
                 .before_api_update(database.clone(), &mut data, &user)
                 .await
@@ -369,6 +311,7 @@ where
                 .await
                 .map_err(handle_database_error)?;
 
+            debug!("running after update for /{}/{}", Self::table_name(), object.id());
             object
                 .after_api_update(database, &mut data, &user)
                 .await
@@ -376,16 +319,13 @@ where
             object
         };
 
-        Ok(warp::reply::with_status(
-            warp::reply::json(&object),
-            StatusCode::OK,
-        ))
+        Ok(axum::Json(object))
     }
     #[allow(unused)]
     /// runs before the database entry update
     async fn before_api_update(
         &self,
-        database: Arc<Database>,
+        database: AppState,
         json: &mut Self::JsonUpdate,
         user: &User,
     ) -> Result<(), DatabaseError> {
@@ -397,29 +337,11 @@ where
     /// this returns a [`Result`], but there is no mechanism to undo the entry update. if this fails it should probably cause the program to panic
     async fn after_api_update(
         &self,
-        database: Arc<Database>,
+        database: AppState,
         json: &mut Self::JsonUpdate,
         user: &User,
     ) -> Result<(), DatabaseError> {
         Ok(())
-    }
-
-    fn update_filter(
-        database: Arc<Database>,
-        rate_limit_config: RateLimitConfig,
-    ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone + Send + Sync
-    {
-        warp::path("api")
-            .and(warp_rate_limit::with_rate_limit(rate_limit_config))
-            .and(warp::path(Self::table_name()))
-            .and(warp::path::param::<String>())
-            .and(warp::path::end())
-            .and(warp::put())
-            .and(warp::body::content_length_limit(1024 * 32))
-            .and(filters::with_db(database.clone()))
-            .and(filters::with_auth(database))
-            .and(warp::body::json())
-            .and_then(Self::api_update)
     }
 }
 
@@ -433,12 +355,13 @@ where
     Self: Unpin,
 {
     async fn api_remove(
-        _rate_limit_info: RateLimitInfo,
-        id: String,
-        database: Arc<Database>,
-        user: User,
-    ) -> Result<impl warp::Reply, warp::Rejection> {
-        let id = Id::from_string(&id).map_err(|_| reject::custom(rejections::NotFound))?;
+        id: Path<Id>,
+        database: State<AppState>,
+        user: UserAuth,
+    ) -> Result<StatusCode, StatusCode> {
+        let id = id.0;
+        let database = database.0;
+        let user = user.0;
         let group = user.group(database.clone(), None).await;
 
         let object = database
@@ -446,6 +369,7 @@ where
             .await
             .map_err(handle_database_error)?;
 
+        debug!("running before delete for /{}/{}", Self::table_name(), object.id());
         object
             .before_api_delete(database.clone(), &user)
             .await
@@ -456,22 +380,21 @@ where
             .await
             .map_err(handle_database_error)?;
 
+        debug!("running after delete for /{}/{}", Self::table_name(), object.id());
         object
             .after_api_delete(database.clone(), &user)
             .await
             .map_err(handle_database_error)?;
 
-        Ok(warp::reply::with_status(
-            warp::reply::json(&""),
-            StatusCode::NO_CONTENT,
-        ))
+
+        Ok(StatusCode::NO_CONTENT)
     }
 
     #[allow(unused)]
     /// runs before the database entry deletion
     async fn before_api_delete(
         &self,
-        database: Arc<Database>,
+        database: AppState,
         user: &User,
     ) -> Result<(), DatabaseError> {
         Ok(())
@@ -482,43 +405,29 @@ where
     /// this returns a [`Result`], but there is no mechanism to undo the entry deletion. if this fails it should probably cause the program to panic
     async fn after_api_delete(
         &self,
-        database: Arc<Database>,
+        database: AppState,
         user: &User,
     ) -> Result<(), DatabaseError> {
         Ok(())
     }
 
-    fn remove_filter(
-        database: Arc<Database>,
-        rate_limit_config: RateLimitConfig,
-    ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone + Send + Sync
-    {
-        warp::path("api")
-            .and(warp_rate_limit::with_rate_limit(rate_limit_config))
-            .and(warp::path(Self::table_name()))
-            .and(warp::path::param::<String>())
-            .and(warp::path::end())
-            .and(warp::delete())
-            .and(filters::with_db(database.clone()))
-            .and(filters::with_auth(database))
-            .and_then(Self::api_remove)
-    }
 }
 
-pub(crate) fn handle_database_error(err: DatabaseError) -> warp::Rejection {
-    error!("{err}");
+pub(crate) fn handle_database_error(err: DatabaseError) -> StatusCode {
     match err {
-        DatabaseError::Unauthorized => reject::custom(rejections::Unauthorized),
-        DatabaseError::NotFound => reject::custom(rejections::NotFound),
-        DatabaseError::InternalServerError(error) => {
-            reject::custom(rejections::InternalServerError { error })
+        DatabaseError::Unauthorized => StatusCode::UNAUTHORIZED,
+        DatabaseError::NotFound => StatusCode::NOT_FOUND,
+        DatabaseError::InternalServerError(err) => {
+            error!("{err}");
+            StatusCode::INTERNAL_SERVER_ERROR
         }
-        DatabaseError::Conflict => reject::custom(rejections::Conflict),
-        DatabaseError::SqlxError(error) => match error {
-            sqlx::Error::RowNotFound => reject::custom(rejections::NotFound),
-            _ => reject::custom(rejections::InternalServerError {
-                error: error.to_string(),
-            }),
+        DatabaseError::Conflict => StatusCode::CONFLICT,
+        DatabaseError::SqlxError(err) => match err {
+            sqlx::Error::RowNotFound => StatusCode::NOT_FOUND,
+            _ =>  {
+                error!("{err}");
+                StatusCode::INTERNAL_SERVER_ERROR
+            },
         },
     }
 }
@@ -535,11 +444,13 @@ pub struct Login {
 }
 
 pub async fn user_register(
-    _rate_limit_info: RateLimitInfo,
-    database: Arc<Database>,
-    credentials: Login,
-    query: Vec<(String, String)>,
-) -> Result<impl warp::Reply, warp::Rejection> {
+    database: State<AppState>,
+    credentials: axum::extract::Json<Login>,
+    query: axum::extract::Query<Vec<(String, String)>>,
+) -> Result<axum::Json<User>, StatusCode> {
+    let database = database.0;
+    let credentials = credentials.0;
+    let query = query.0;
     //arbitrary values but who cares (foreshadowing)
     const ALLOWED_USERNAME_CHARS: &str =
         "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ012345789-_";
@@ -550,18 +461,18 @@ pub async fn user_register(
         || credentials.username.len() > 32
         || credentials.password.len() > 256
     {
-        return Err(warp::reject::custom(rejections::BadRequest));
+        return Err(StatusCode::BAD_REQUEST);
     }
     //TODO: do better username and password validation
 
     for char in credentials.username.chars() {
         if !ALLOWED_USERNAME_CHARS.contains(char) {
-            return Err(warp::reject::custom(rejections::BadRequest));
+            return Err(StatusCode::BAD_REQUEST);
         }
     }
     for char in credentials.password.chars() {
         if !ALLOWED_PASSWORD_CHARS.contains(char) {
-            return Err(warp::reject::custom(rejections::BadRequest));
+            return Err(StatusCode::BAD_REQUEST);
         }
     }
 
@@ -569,7 +480,7 @@ pub async fn user_register(
     for (parameter, value) in query {
         if parameter == "token" {
             token =
-                Some(Uuid::from_str(&value).map_err(|_| reject::custom(rejections::Unauthorized))?);
+                Uuid::from_str(&value).ok();
             break;
         }
     }
@@ -591,37 +502,37 @@ pub async fn user_register(
     }
 
     if !can_continue {
-        return Err(reject::custom(rejections::Unauthorized));
+        return Err(StatusCode::UNAUTHORIZED);
     }
 
     if database.get_where::<User, _>("username", &credentials.username, None).await.is_ok() {
-        return Err(reject::custom(rejections::Conflict));
+        return Err(StatusCode::CONFLICT);
     }
 
     let user = database
         .create_user(&credentials.username, &credentials.password)
         .await
-        .map_err(|err| warp::reject::custom(rejections::InternalServerError::from(err)))?;
+        .map_err(|err| {error!("{err}"); StatusCode::INTERNAL_SERVER_ERROR})?;
     if let Some(invite) = invite {
         database
             .remove(&invite, None)
             .await
-            .map_err(|err| warp::reject::custom(rejections::InternalServerError::from(err)))?;
+            .map_err(|err| {error!("{err}"); StatusCode::INTERNAL_SERVER_ERROR})?;
     }
 
-    Ok(warp::reply::with_status(
-        warp::reply::json(&user),
-        StatusCode::CREATED,
-    ))
+
+    Ok(axum::Json(user))
 }
 
 //this in theory could be transformed into ApiCreate implementation, but it would require a fair amount of changes, and for now it's not causing any problems
 #[allow(clippy::unused_async)]
 pub async fn user_auth(
-    _rate_limit_info: RateLimitInfo,
-    database: Arc<Database>,
-    credentials: Login,
-) -> Result<impl warp::Reply, warp::Rejection> {
+    database: State<AppState>,
+    credentials: axum::extract::Json<Login>,
+) -> Result<impl IntoResponse, StatusCode> {
+    let database = database.0;
+    let credentials = credentials.0;
+
     let session = {
         let database = database;
 
@@ -629,56 +540,43 @@ pub async fn user_auth(
             .await
             .map_err(handle_database_error)?
     };
-    Ok(warp::reply::with_status(
-        warp::reply::with_header(
-            warp::reply::with_header(
-                warp::reply::json(&TokenReply {
-                    token: session.token.as_simple().to_string(),
-                }),
-                "Access-Control-Allow-Credentials" ,
-                "true",
-            ),
-            "Set-Cookie",
-            format!(
-                "session-token={}; Path=/api; HttpOnly; Max-Age=1209600; charset=UTF-8",
-                session.token.as_simple().to_string()
-            ),
-        ),
+    Ok((
         StatusCode::CREATED,
+        //[(header::ACCESS_CONTROL_ALLOW_CREDENTIALS, true)],
+        //[(header::SET_COOKIE, format!(
+        //    "session-token={}; Path=/api; HttpOnly; Max-Age=1209600; charset=UTF-8",
+        //    session.token.as_simple().to_string()
+        //))],
+        axum::Json(json!({"token": session.token.as_simple().to_string()})),
     ))
 }
 
 #[allow(clippy::unused_async)]
 pub async fn logout(
-    _rate_limit_info: RateLimitInfo,
-    database: Arc<Database>,
-    token: Uuid,
-) -> Result<impl warp::Reply, warp::Rejection> {
-    let session: Session = database.get_where(
-            "token",
-            token,
-            None
-        ).await.map_err(handle_database_error)?;
+    database: State<AppState>,
+    session: WithSession
+) -> Result<StatusCode, StatusCode> {
+    let database = database.0;
+    let session = session.0;
+
     database.remove(
         &session,
         None
     ).await.map_err(handle_database_error)?;
-    Ok(warp::reply())
+
+    Ok(StatusCode::OK)
 }
 
 
 #[allow(clippy::unused_async)]
 pub async fn user_info(
-    _rate_limit_info: RateLimitInfo,
-    user: User,
-) -> Result<impl warp::Reply, warp::Rejection> {
-    Ok(warp::reply::json(&user))
+    user: UserAuth,
+) -> Result<axum::Json<User>, StatusCode> {
+    Ok(axum::Json(user.0))
 }
 
 #[allow(clippy::unused_async)]
-pub async fn server_info(
-    _rate_limit_info: RateLimitInfo
-) -> Result<impl warp::Reply, warp::Rejection> {
+pub async fn server_info() -> Result<impl IntoResponse, StatusCode> {
     #[derive(Serialize)]
     struct ServerInfo {
         name: String,
@@ -688,8 +586,8 @@ pub async fn server_info(
         requires_invite: bool,
     }
 
-    Ok(warp::reply::json(
-        &ServerInfo {
+    Ok(axum::Json(
+        ServerInfo {
             name: CONFIG.info.name.clone(),
             login_message: CONFIG.info.login_message.clone(),
             login_message_title: CONFIG.info.login_message_title.clone(),
@@ -700,48 +598,32 @@ pub async fn server_info(
 }
 
 pub async fn check_free(
-    _rate_limit_info: RateLimitInfo,
-    field: String,
-    value: String,
-    database: Arc<Database>,
-) -> Result<impl warp::Reply, warp::Rejection> {
+    field: Path<String>,
+    value: Path<String>,
+    database: State<AppState>,
+) -> Result<impl IntoResponse, StatusCode> {
+    let field = field.0;
+    let value = value.0;
+    let database = database.0;
+
     #[derive(Serialize)]
     struct Valid {
         valid: bool,
     }
     match field.trim() {
         "username" => match database.get_where::<User, _>("username", value, None).await {
-            Ok(user) => Ok(warp::reply::with_status(
-                warp::reply::json(&Valid { valid: false }),
-                StatusCode::OK,
-            )),
-            Err(err) => Ok(warp::reply::with_status(
-                warp::reply::json(&Valid { valid: true }),
-                StatusCode::OK,
-            )),
+            Ok(_) => Ok(axum::Json(Valid { valid: false })),
+            Err(_) => Ok(axum::Json(Valid { valid: true }))
         },
         "invite_link" => {
             match Uuid::from_str(&value) {
                 Ok(token) => {
                     match database.get_where::<InviteLink, _>("invite_token", token, None).await {
-                        Ok(_) => {
-                            Ok(warp::reply::with_status(
-                                warp::reply::json(&Valid { valid: true }),
-                                StatusCode::OK,
-                            ))
-                        },
-                        Err(err) => {
-                            Ok(warp::reply::with_status(
-                                warp::reply::json(&Valid { valid: false }),
-                                StatusCode::OK,
-                            ))
-                        },
+                        Ok(_) => Ok(axum::Json(Valid { valid: true })),
+                        Err(_) => Ok(axum::Json(Valid { valid: false }))
                     }
                 },
-                Err(_) => Ok(warp::reply::with_status(
-                    warp::reply::json(&Valid { valid: false }),
-                    StatusCode::OK,
-                ))
+                Err(_) => Ok(axum::Json(Valid { valid: false }))
             }
         },
         "hostname" => {
@@ -749,101 +631,11 @@ pub async fn check_free(
                 .get_where::<World, _>("hostname", value, None)
                 .await
             {
-                Ok(world) => Ok(warp::reply::with_status(
-                    warp::reply::json(&Valid { valid: false }),
-                    StatusCode::OK,
-                )),
-                Err(err) => Ok(warp::reply::with_status(
-                    warp::reply::json(&Valid { valid: true }),
-                    StatusCode::OK,
-                )),
+                Ok(_) => Ok(axum::Json(Valid { valid: false })),
+                Err(_) => Ok(axum::Json(Valid { valid: true }))
             }
         }
-        _ => Err(warp::reject::custom(rejections::MethodNotAllowed)),
+        _ => Err(StatusCode::METHOD_NOT_ALLOWED),
     }
 }
 
-#[allow(clippy::unused_async)]
-pub async fn handle_rejection(
-    rejection: warp::Rejection,
-) -> Result<impl warp::Reply, std::convert::Infallible> {
-    let code;
-    let message;
-
-    #[derive(Serialize)]
-    struct ErrorMessage {
-        code: u16,
-        message: String,
-    }
-
-    if rejection.find::<rejections::NotFound>().is_some() {
-        code = StatusCode::NOT_FOUND;
-        message = "not found";
-    } else if let Some(error) = rejection.find::<rejections::InternalServerError>() {
-        error!("{}", error.error);
-        code = StatusCode::INTERNAL_SERVER_ERROR;
-        message = "internal server error";
-    } else if rejection.find::<rejections::InvalidBearerToken>().is_some() {
-        code = StatusCode::UNAUTHORIZED;
-        message = "invalid brearer token";
-    } else if rejection.find::<rejections::Unauthorized>().is_some() {
-        code = StatusCode::UNAUTHORIZED;
-        message = "unauthorized";
-    } else if rejection.find::<rejections::BadRequest>().is_some() {
-        code = StatusCode::BAD_REQUEST;
-        message = "bad request";
-    } else if rejection.find::<rejections::NotImplemented>().is_some() {
-        code = StatusCode::NOT_IMPLEMENTED;
-        message = "not implemented";
-    } else if rejection.find::<rejections::Conflict>().is_some() {
-        code = StatusCode::CONFLICT;
-        message = "conflict";
-    } else if rejection.find::<warp::reject::InvalidQuery>().is_some() {
-        code = StatusCode::BAD_REQUEST;
-        message = "invalid query";
-    } else if rejection.find::<warp::reject::InvalidHeader>().is_some() {
-        code = StatusCode::BAD_REQUEST;
-        message = "invalid header";
-    } else if rejection.find::<warp::reject::LengthRequired>().is_some() {
-        code = StatusCode::LENGTH_REQUIRED;
-        message = "length required";
-    } else if rejection.find::<warp::reject::PayloadTooLarge>().is_some() {
-        code = StatusCode::PAYLOAD_TOO_LARGE;
-        message = "payload too large";
-    } else if rejection
-        .find::<warp::reject::UnsupportedMediaType>()
-        .is_some()
-    {
-        code = StatusCode::UNSUPPORTED_MEDIA_TYPE;
-        message = "unsupported media type";
-    } else if let Some(rejection) = rejection.find::<warp_rate_limit::RateLimitRejection>() {
-        let info = warp_rate_limit::get_rate_limit_info(rejection);
-
-        let mut response = warp::reply::with_status(
-            warp::reply::json(&ErrorMessage {
-                code: StatusCode::TOO_MANY_REQUESTS.as_u16(),
-                message: "too many requests".to_string(),
-            }),
-            StatusCode::TOO_MANY_REQUESTS,
-        )
-        .into_response();
-
-        let _ = warp_rate_limit::add_rate_limit_headers(response.headers_mut(), &info);
-
-        return Ok(response);
-    } else if rejection.find::<warp::reject::MethodNotAllowed>().is_some() {
-        code = StatusCode::METHOD_NOT_ALLOWED;
-        message = "method not allowed";
-    } else {
-        error!("unhandled rejection: {rejection:?}");
-        code = StatusCode::INTERNAL_SERVER_ERROR;
-        message = "unhandled rejection";
-    }
-
-    let json = warp::reply::json(&ErrorMessage {
-        code: code.as_u16(),
-        message: message.into(),
-    });
-
-    Ok(warp::reply::with_status(json, code).into_response())
-}
