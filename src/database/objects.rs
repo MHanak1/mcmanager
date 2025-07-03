@@ -34,7 +34,7 @@ pub trait DbObject: Send + Sync {
     /// # Panics
     ///
     /// see [`Access::can_access`]
-    fn can_view(&self, user: &User, group: &Group) -> bool {
+    fn viewable_by(&self, user: &User, group: &Group) -> bool {
         Self::view_access().can_access::<Self>(Some(self), user, group)
     }
     /// whether a user can update this object using the API

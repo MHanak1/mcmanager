@@ -335,7 +335,7 @@ impl<'de> Deserialize<'de> for Id {
 
 impl Hash for Id {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.hash(state);
+        self.as_i64().hash(state);
     }
 }
 

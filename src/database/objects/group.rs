@@ -1,5 +1,5 @@
 use crate::api::serve::AppState;
-use crate::api::handlers::{ApiCreate, ApiGet, ApiList, ApiObject, ApiRemove, ApiUpdate};
+use crate::api::handlers::{handle_database_error, ApiCreate, ApiGet, ApiList, ApiObject, ApiRemove, ApiUpdate};
 use crate::database::objects::{DbObject, FromJson, UpdateJson, User};
 use crate::database::types::{Access, Column, Id};
 use crate::database::{Database, DatabaseError, ValueType};
@@ -11,8 +11,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use async_trait::async_trait;
 use axum::{Router};
-use axum::extract::State;
+use axum::extract::{Path, State};
+use axum::http::StatusCode;
 use axum::routing::{get, MethodRouter};
+use crate::api::filters::UserAuth;
 use crate::config::CONFIG;
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
@@ -306,7 +308,24 @@ impl UpdateJson for Group {
 }
 
 impl ApiList for Group {}
-impl ApiGet for Group {}
+#[async_trait]
+impl ApiGet for Group {
+    async fn api_get(
+        id: Path<Id>,
+        database: State<AppState>,
+        user: UserAuth,
+    ) -> Result<axum::Json<Self>, StatusCode> {
+        let group = user.0.group(database.0.clone(), None).await;
+        let object = {
+            database
+                .get_group(id.0, Some((&user.0, &group)))
+                .await
+                .map_err(handle_database_error)?
+        };
+
+        Ok(axum::Json(object))
+    }
+}
 impl ApiCreate for Group {}
 impl ApiUpdate for Group {}
 

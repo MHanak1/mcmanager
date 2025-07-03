@@ -52,7 +52,7 @@ impl FromRequestParts<AppState> for WithSession {
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
         let token = BearerToken::from_request_parts(parts, state).await?;
 
-        match state.get_where::<Session, _>("token", token.0, None).await.map_err(handle_database_error) {
+        match state.get_session(token.0, None).await.map_err(handle_database_error) {
             Ok(session) => {
                 debug!("found session: {}", session.id);
                 Ok(Self(session))
@@ -73,7 +73,7 @@ impl FromRequestParts<AppState> for UserAuth {
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
         let session = WithSession::from_request_parts(parts, state).await?;
 
-        match state.get_one::<User>(session.0.user_id, None).await.map_err(handle_database_error) {
+        match state.get_user(session.0.user_id, None).await.map_err(handle_database_error) {
             Ok(user) => {
                 debug!("found user: {}", user.id);
                 Ok(Self(user))

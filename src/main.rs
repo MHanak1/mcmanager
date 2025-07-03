@@ -61,9 +61,7 @@ async fn main() -> Result<()> {
         .await?;
      */
 
-    let database = Database {
-        pool,
-    };
+    let database = Database::new(pool);
     database.init().await.expect("Failed to init database");
 
     let second_launch = database.get_all::<User>(None).await?.is_empty();

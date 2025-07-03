@@ -1,5 +1,5 @@
 pub use self::{password::Password, session::Session};
-use crate::api::handlers::{ApiCreate, ApiGet, ApiIcon, ApiList, ApiObject, ApiRemove, ApiUpdate};
+use crate::api::handlers::{handle_database_error, ApiCreate, ApiGet, ApiIcon, ApiList, ApiObject, ApiRemove, ApiUpdate};
 use crate::config::CONFIG;
 use crate::database;
 use crate::database::objects::{DbObject, FromJson, Group, Mod, UpdateJson, World};
@@ -15,8 +15,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use axum::{Router};
-use axum::extract::State;
+use axum::extract::{Path, State};
+use axum::http::StatusCode;
 use axum::routing::{get, post};
+use crate::api::filters::UserAuth;
 use crate::api::serve::AppState;
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, FromRow)]
@@ -179,7 +181,25 @@ impl ApiObject for User {
 }
 
 impl ApiList for User {}
-impl ApiGet for User {}
+#[async_trait]
+impl ApiGet for User {
+    async fn api_get(
+        id: Path<Id>,
+        database: State<AppState>,
+        user: UserAuth,
+    ) -> Result<axum::Json<Self>, StatusCode> {
+        let group = user.0.group(database.0.clone(), None).await;
+        let object = {
+            database
+                .get_user(id.0, Some((&user.0, &group)))
+                .await
+                .map_err(handle_database_error)?
+        };
+
+        Ok(axum::Json(object))
+    }
+
+}
 #[async_trait]
 impl ApiCreate for User {
     async fn after_api_create(
@@ -279,7 +299,7 @@ impl ApiIcon for User {}
 impl User {
     pub async fn group(&self, databse: AppState, user: Option<(&User, &Group)>) -> Group {
         databse
-            .get_one(self.group_id, user)
+            .get_group(self.group_id, user)
             .await
             .expect(&format!("couldn't find group with id {}", self.group_id))
     }
@@ -392,7 +412,7 @@ pub mod password {
 }
 
 pub mod session {
-    use crate::api::handlers::{ApiCreate, ApiGet, ApiList, ApiObject, ApiRemove};
+    use crate::api::handlers::{handle_database_error, ApiCreate, ApiGet, ApiList, ApiObject, ApiRemove};
     use crate::database::objects::{DbObject, FromJson, User};
     use crate::database::types::{Access, Column, Id};
     use crate::database::{Database, ValueType};
@@ -402,9 +422,13 @@ pub mod session {
     use sqlx::{Arguments, Error, FromRow, IntoArguments, Row};
     use std::str::FromStr;
     use std::sync::Arc;
+    use async_trait::async_trait;
+    use axum::extract::{Path, State};
+    use axum::http::StatusCode;
     use axum::Router;
     use axum::routing::get;
     use uuid::Uuid;
+    use crate::api::filters::UserAuth;
     use crate::api::serve::AppState;
 
     /// `user_id`: unique [`Id`] of the user who created the session

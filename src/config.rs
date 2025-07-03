@@ -37,6 +37,7 @@ pub struct FrontendInfo {
 #[derive(Debug, Clone, Deserialize)]
 pub struct DatabaseConfig {
     pub database_type: DatabaseType,
+    pub cache_time_to_live: u64,
     pub max_connections: u32,
     pub pg_host: String,
 }

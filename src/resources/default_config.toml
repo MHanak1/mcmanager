@@ -27,6 +27,8 @@ login_message_type = "info"
 database_type = "sqlite"
 # max concurrent connections
 max_connections = 5
+# how long to cache users, groups and sessions (in seconds)
+cache_time_to_live = 30
 # PostgreSQL database host. includes username, password, hostname, port and database name
 pg_host = "postgres://mcmanager:PASSWORD@localhost:5432/mcmanager"
 

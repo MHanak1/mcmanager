@@ -425,7 +425,7 @@ impl World {
     }
     pub async fn owner(&self, database: AppState, user: Option<(&User, &Group)>) -> User {
         database
-            .get_one(self.owner_id, user)
+            .get_user(self.owner_id, user)
             .await
             .expect(&format!("couldn't find user with id {}", self.owner_id))
     }

@@ -79,7 +79,7 @@ pub async fn get_user(token: Uuid, database: AppState) -> Result<User, DatabaseE
         .map_err(DatabaseError::SqlxError)?;
      */
 
-    let session: Session = database.get_where("token", token, None).await?;
+    let session: Session = database.get_session(token, None).await?;
 
-    Ok(database.get_one::<User>(session.user_id, None).await?)
+    Ok(database.get_user(session.user_id, None).await?)
 }

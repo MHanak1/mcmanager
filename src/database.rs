@@ -8,6 +8,10 @@ use serde::{Deserialize, Deserializer};
 use sqlx::{Database as SqlxDatabase, Encode, FromRow, IntoArguments, Pool, Postgres, Type};
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
+use std::time::Duration;
+use log::debug;
+use moka::future::Cache;
+use uuid::Uuid;
 
 pub mod objects;
 pub mod types;
@@ -17,7 +21,11 @@ pub mod types;
 pub struct Database {
     //pub conn: rusqlite::Connection,
     pub pool: DatabasePool,
+    pub user_cache: Cache<Id, User>,
+    pub session_cache: Cache<Uuid, Session>,
+    pub group_cache: Cache<Id, Group>,
 }
+
 
 pub enum DatabaseType {
     Sqlite,
@@ -26,6 +34,34 @@ pub enum DatabaseType {
 
 #[allow(dead_code)]
 impl Database {
+    pub fn new(pool: DatabasePool) -> Self{
+        /*
+        let user_cache = Cache::builder()
+            .time_to_live(Duration::from_secs(crate::config::CONFIG.database.cache_time_to_live))
+            .max_capacity(1000)
+            .build();
+        let session_cache = Cache::builder()
+            .time_to_live(Duration::from_secs(crate::config::CONFIG.database.cache_time_to_live))
+            .max_capacity(1000)
+            .build();
+        let group_cache = Cache::builder()
+            .time_to_live(Duration::from_secs(crate::config::CONFIG.database.cache_time_to_live))
+            .max_capacity(1000)
+            .build();
+         */
+
+        let user_cache = Cache::new(1000);
+        let session_cache = Cache::new(1000);
+        let group_cache = Cache::new(1000);
+
+        Self {
+            pool,
+            user_cache,
+            session_cache,
+            group_cache,
+        }
+    }
+
     #[rustfmt::skip]
     pub async fn init(&self) -> sqlx::Result<()> {
 
@@ -179,6 +215,106 @@ impl Database {
                 .await
                 .map_err(DatabaseError::from)
         })
+    }
+
+    pub async fn get_user(
+        &self,
+        id: Id,
+        user: Option<(&User, &Group)>,
+    ) -> Result<User, DatabaseError> {
+        let db_user = if let Some(cached_user) = self.user_cache.get(&id).await {
+            cached_user
+        } else {
+            let db_user: User = execute_on_enum!(&self.pool; (DatabasePool::Postgres, DatabasePool::Sqlite) |pool| {
+                let mut query = QueryBuilder::select::<User>();
+                query.where_id::<User>(id);
+                //no user filter in query, it will be done later so it always lands in cache
+                query
+                    .query_builder
+                    .build_query_as()
+                    .fetch_one(pool)
+                    .await
+                    .map_err(DatabaseError::from)
+            })?;
+
+            self.user_cache.insert(id, db_user.clone()).await;
+            db_user
+        };
+
+        if let Some((user, group)) = user {
+            if !db_user.viewable_by(user, group) {
+                return Err(DatabaseError::NotFound);
+            }
+        }
+
+        Ok(db_user)
+    }
+
+    pub async fn get_group(
+        &self,
+        id: Id,
+        user: Option<(&User, &Group)>,
+    ) -> Result<Group, DatabaseError> {
+        let db_user = if let Some(cached_session) = self.group_cache.get(&id).await {
+            cached_session
+        } else {
+            let group: Group = execute_on_enum!(&self.pool; (DatabasePool::Postgres, DatabasePool::Sqlite) |pool| {
+                let mut query = QueryBuilder::select::<Group>();
+                query.where_id::<Group>(id);
+                //no user filter in query, it will be done later so it always lands in cache
+                query
+                    .query_builder
+                    .build_query_as()
+                    .fetch_one(pool)
+                    .await
+                    .map_err(DatabaseError::from)
+            })?;
+
+            self.group_cache.insert(id, group.clone()).await;
+            group
+        };
+
+        if let Some((user, group)) = user {
+            if !db_user.viewable_by(user, group) {
+                return Err(DatabaseError::NotFound);
+            }
+        }
+
+        Ok(db_user)
+    }
+
+    pub async fn get_session(
+        &self,
+        token: Uuid,
+        user: Option<(&User, &Group)>,
+    ) -> Result<Session, DatabaseError> {
+        let db_user = if let Some(cached_session) = self.session_cache.get(&token).await {
+            cached_session
+        } else {
+            let session: Session = execute_on_enum!(&self.pool; (DatabasePool::Postgres, DatabasePool::Sqlite) |pool| {
+                let mut query = QueryBuilder::select::<Session>();
+                query.where_("token", token);
+                //no user filter in query, it will be done later so it always lands in cache
+                query
+                    .query_builder
+                    .build_query_as()
+                    .fetch_one(pool)
+                    .await
+                    .map_err(DatabaseError::from)
+            })?;
+
+            self.session_cache.insert(token, session.clone()).await;
+
+            session
+        };
+
+        if let Some((user, group)) = user {
+            if !db_user.viewable_by(user, group) {
+                return Err(DatabaseError::NotFound);
+            }
+        }
+
+        Ok(db_user)
     }
 
     pub async fn get_where<
