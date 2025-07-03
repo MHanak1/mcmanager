@@ -1,7 +1,10 @@
 use crate::api::handlers::{ApiCreate, ApiGet, ApiList, ApiObject, ApiRemove};
+use crate::api::serve::AppState;
 use crate::database::objects::{DbObject, FromJson, User};
 use crate::database::types::{Access, Column, Id};
 use crate::database::{Database, ValueType};
+use axum::Router;
+use axum::routing::get;
 use chrono::{DateTime, Utc};
 use duplicate::duplicate_item;
 use serde::{Deserialize, Serialize};
@@ -9,10 +12,7 @@ use sqlx::{Arguments, FromRow, IntoArguments, Row};
 use std::fmt::Debug;
 use std::str::FromStr;
 use std::sync::Arc;
-use axum::Router;
-use axum::routing::get;
 use uuid::Uuid;
-use crate::api::serve::AppState;
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub struct InviteLink {
@@ -89,9 +89,7 @@ impl<'a> IntoArguments<'a, sqlx::Sqlite> for InviteLink {
         arguments
             .add(self.creator_id)
             .expect("Failed to add argument");
-        arguments
-            .add(self.created)
-            .expect("Failed to add argument");
+        arguments.add(self.created).expect("Failed to add argument");
         arguments
     }
 }
@@ -106,9 +104,7 @@ impl<'a> IntoArguments<'a, sqlx::Postgres> for InviteLink {
         arguments
             .add(self.creator_id)
             .expect("Failed to add argument");
-        arguments
-            .add(self.created)
-            .expect("Failed to add argument");
+        arguments.add(self.created).expect("Failed to add argument");
         arguments
     }
 }

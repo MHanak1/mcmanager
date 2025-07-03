@@ -4,18 +4,18 @@ use crate::database::objects::{
 };
 use crate::database::types::Id;
 use crate::execute_on_enum;
+use log::debug;
+use moka::future::Cache;
 use serde::{Deserialize, Deserializer};
 use sqlx::{Database as SqlxDatabase, Encode, FromRow, IntoArguments, Pool, Postgres, Type};
+use std::any::Any;
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 use std::time::Duration;
-use log::debug;
-use moka::future::Cache;
 use uuid::Uuid;
 
 pub mod objects;
 pub mod types;
-
 
 #[derive(Debug, Clone)]
 pub struct Database {
@@ -26,7 +26,6 @@ pub struct Database {
     pub group_cache: Cache<Id, Group>,
 }
 
-
 pub enum DatabaseType {
     Sqlite,
     Postgres,
@@ -34,25 +33,25 @@ pub enum DatabaseType {
 
 #[allow(dead_code)]
 impl Database {
-    pub fn new(pool: DatabasePool) -> Self{
-        /*
+    pub fn new(pool: DatabasePool) -> Self {
         let user_cache = Cache::builder()
-            .time_to_live(Duration::from_secs(crate::config::CONFIG.database.cache_time_to_live))
+            .time_to_live(Duration::from_secs(
+                crate::config::CONFIG.database.cache_time_to_live,
+            ))
             .max_capacity(1000)
             .build();
         let session_cache = Cache::builder()
-            .time_to_live(Duration::from_secs(crate::config::CONFIG.database.cache_time_to_live))
+            .time_to_live(Duration::from_secs(
+                crate::config::CONFIG.database.cache_time_to_live,
+            ))
             .max_capacity(1000)
             .build();
         let group_cache = Cache::builder()
-            .time_to_live(Duration::from_secs(crate::config::CONFIG.database.cache_time_to_live))
+            .time_to_live(Duration::from_secs(
+                crate::config::CONFIG.database.cache_time_to_live,
+            ))
             .max_capacity(1000)
             .build();
-         */
-
-        let user_cache = Cache::new(1000);
-        let session_cache = Cache::new(1000);
-        let group_cache = Cache::new(1000);
 
         Self {
             pool,
@@ -91,6 +90,7 @@ impl Database {
         T: DbObject
             + for<'a> IntoArguments<'a, sqlx::Sqlite>
             + for<'a> IntoArguments<'a, sqlx::Postgres>
+            + Any
             + Clone,
     >(
         &self,
@@ -115,6 +115,25 @@ impl Database {
         });
         value.after_create(self).await?;
 
+        match (value as &dyn Any).downcast_ref::<User>() {
+            Some(user) => {
+                self.user_cache.insert(user.id, user.clone()).await;
+            }
+            None => {}
+        }
+        match (value as &dyn Any).downcast_ref::<Group>() {
+            Some(group) => {
+                self.group_cache.insert(group.id, group.clone()).await;
+            }
+            None => {}
+        }
+        match (value as &dyn Any).downcast_ref::<Session>() {
+            Some(session) => {
+                self.session_cache.insert(session.token, session.clone()).await;
+            }
+            None => {}
+        }
+
         Ok(())
     }
 
@@ -122,6 +141,7 @@ impl Database {
         T: DbObject
             + for<'a> IntoArguments<'a, sqlx::Sqlite>
             + for<'a> IntoArguments<'a, sqlx::Postgres>
+            + Any
             + Clone,
     >(
         &self,
@@ -151,6 +171,25 @@ impl Database {
                 .map_err(DatabaseError::from)?;
         });
 
+        match (value as &dyn Any).downcast_ref::<User>() {
+            Some(user) => {
+                self.user_cache.insert(user.id, user.clone()).await;
+            }
+            None => {}
+        }
+        match (value as &dyn Any).downcast_ref::<Group>() {
+            Some(group) => {
+                self.group_cache.insert(group.id, group.clone()).await;
+            }
+            None => {}
+        }
+        match (value as &dyn Any).downcast_ref::<Session>() {
+            Some(session) => {
+                self.session_cache.insert(session.token, session.clone()).await;
+            }
+            None => {}
+        }
+
         value.after_update(self).await?;
         Ok(())
     }
@@ -159,6 +198,7 @@ impl Database {
         T: DbObject
             + for<'r> FromRow<'r, sqlx::sqlite::SqliteRow>
             + for<'r> FromRow<'r, sqlx::postgres::PgRow>
+            + Any
             + Unpin,
     >(
         &self,
@@ -171,6 +211,25 @@ impl Database {
             }
         }
         value.before_delete(self).await?;
+
+        match (value as &dyn Any).downcast_ref::<User>() {
+            Some(user) => {
+                self.user_cache.remove(&user.id).await;
+            }
+            None => {}
+        }
+        match (value as &dyn Any).downcast_ref::<Group>() {
+            Some(group) => {
+                self.group_cache.remove(&group.id).await;
+            }
+            None => {}
+        }
+        match (value as &dyn Any).downcast_ref::<Session>() {
+            Some(session) => {
+                self.session_cache.remove(&session.token).await;
+            }
+            None => {}
+        }
 
         execute_on_enum!(&self.pool; (DatabasePool::Postgres, DatabasePool::Sqlite) |pool| {
             let mut query = QueryBuilder::delete::<T>();
@@ -301,7 +360,7 @@ impl Database {
                     .fetch_one(pool)
                     .await
                     .map_err(DatabaseError::from)
-            })?;
+            }).expect("aaaa");
 
             self.session_cache.insert(token, session.clone()).await;
 
@@ -439,7 +498,6 @@ impl From<Pool<sqlx::sqlite::Sqlite>> for DatabasePool {
     fn from(pool: Pool<sqlx::sqlite::Sqlite>) -> Self {
         Self::Sqlite(pool)
     }
-
 }
 
 pub struct QueryBuilder<'a, T: sqlx::Database> {
@@ -599,7 +657,9 @@ where
             T::columns()
                 .iter()
                 .enumerate()
-                .map(|(n, column)| { format!("{} = {}", column.name, DB::db_type().nth_parameter(n)) })
+                .map(|(n, column)| {
+                    format!("{} = {}", column.name, DB::db_type().nth_parameter(n))
+                })
                 .collect::<Vec<String>>()
                 .join(", "),
         );

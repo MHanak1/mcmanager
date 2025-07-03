@@ -1,6 +1,7 @@
-use crate::api::serve::AppState;
 use crate::api::filters;
+use crate::api::filters::UserAuth;
 use crate::api::handlers::{ApiCreate, ApiGet, ApiIcon, ApiList, ApiObject, ApiRemove, ApiUpdate};
+use crate::api::serve::AppState;
 use crate::database::objects::group::Group;
 use crate::database::objects::{DbObject, FromJson, UpdateJson, User, Version};
 use crate::database::types::{Access, Column, Id};
@@ -8,6 +9,11 @@ use crate::database::{Database, DatabaseError, ValueType};
 use crate::minecraft::server;
 use crate::minecraft::server::{MinecraftServerStatus, ServerConfigLimit};
 use async_trait::async_trait;
+use axum::Router;
+use axum::extract::{Path, State};
+use axum::http::StatusCode;
+use axum::response::IntoResponse;
+use axum::routing::{get, post};
 use log::{debug, error, info};
 use serde::{Deserialize, Deserializer, Serialize};
 use sqlx::{Any, Arguments, Encode, FromRow, IntoArguments};
@@ -15,12 +21,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::task::id;
-use axum::http::StatusCode;
-use axum::{Router};
-use axum::extract::{Path, State};
-use axum::response::IntoResponse;
-use axum::routing::{get, post};
-use crate::api::filters::UserAuth;
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, FromRow)]
 pub struct World {
@@ -215,15 +215,28 @@ impl UpdateJson for World {
 }
 
 impl ApiObject for World {
-
     fn routes() -> Router<AppState> {
-
         Router::new()
             .route("/", get(Self::api_list).post(Self::api_create))
-            .route("/{id}", get(Self::api_get).put(Self::api_update).delete(Self::api_remove))
-            .route("/{id}/config", get(Self::get_server_config).put(Self::set_server_config).post(Self::set_server_config))
+            .route(
+                "/{id}",
+                get(Self::api_get)
+                    .put(Self::api_update)
+                    .delete(Self::api_remove),
+            )
+            .route(
+                "/{id}/config",
+                get(Self::get_server_config)
+                    .put(Self::set_server_config)
+                    .post(Self::set_server_config),
+            )
             .route("/{id}/status", get(Self::world_get_status))
-            .route("/{id}/icon", post(Self::upload_icon).put(Self::upload_icon).get(Self::get_icon))
+            .route(
+                "/{id}/icon",
+                post(Self::upload_icon)
+                    .put(Self::upload_icon)
+                    .get(Self::get_icon),
+            )
     }
 }
 
@@ -425,7 +438,7 @@ impl World {
     }
     pub async fn owner(&self, database: AppState, user: Option<(&User, &Group)>) -> User {
         database
-            .get_user(self.owner_id, user)
+            .get_one::<User>(self.owner_id, user)
             .await
             .expect(&format!("couldn't find user with id {}", self.owner_id))
     }
@@ -452,7 +465,10 @@ impl World {
             Some(server) => server.lock().await.status().await,
             None => Ok(MinecraftServerStatus::Exited(0)),
         }
-        .map_err(|err| {error!("{err}"); StatusCode::INTERNAL_SERVER_ERROR})?;
+        .map_err(|err| {
+            error!("{err}");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
 
         #[derive(Serialize)]
         struct Status {
@@ -493,16 +509,17 @@ impl World {
                 .map_err(crate::api::handlers::handle_database_error)?
         };
 
-        let server = server::get_or_create_server(&world)
-            .await
-            .map_err(|err| {error!("{err}"); StatusCode::INTERNAL_SERVER_ERROR})?;
+        let server = server::get_or_create_server(&world).await.map_err(|err| {
+            error!("{err}");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
 
         let server = server.lock().await;
 
-        let mut config = server
-            .config()
-            .await
-            .map_err(|err| {error!("{err}"); StatusCode::INTERNAL_SERVER_ERROR})?;
+        let mut config = server.config().await.map_err(|err| {
+            error!("{err}");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
         if group.config_whitelist.is_empty() {
             for key in group.config_blacklist {
                 config.remove(&key);
@@ -541,16 +558,17 @@ impl World {
                 .map_err(crate::api::handlers::handle_database_error)?
         };
 
-        let server = server::get_or_create_server(&world)
-            .await
-            .map_err(|err| {error!("{err}"); StatusCode::INTERNAL_SERVER_ERROR})?;
+        let server = server::get_or_create_server(&world).await.map_err(|err| {
+            error!("{err}");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
 
         let mut server = server.lock().await;
 
-        let mut config = server
-            .config()
-            .await
-            .map_err(|err| {error!("{err}"); StatusCode::INTERNAL_SERVER_ERROR})?;
+        let mut config = server.config().await.map_err(|err| {
+            error!("{err}");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
         if group.config_whitelist.is_empty() {
             for key in &group.config_blacklist {
                 config.remove(key.as_str());
@@ -605,10 +623,10 @@ impl World {
             }
         }
 
-        server
-            .set_config(config.clone())
-            .await
-            .map_err(|err| {error!("{err}"); StatusCode::INTERNAL_SERVER_ERROR})?;
+        server.set_config(config.clone()).await.map_err(|err| {
+            error!("{err}");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
 
         Ok(axum::Json(config))
     }

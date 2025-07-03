@@ -1,12 +1,12 @@
 use crate::api::serve::AppState;
 use crate::database::objects::{DbObject, Password, Session, User};
+use crate::database::types::Id;
 use crate::database::{Database, DatabaseError};
 use argon2::password_hash::{Salt, SaltString};
 use argon2::{PasswordHash, PasswordHasher, PasswordVerifier};
 use log::debug;
 use std::sync::Arc;
 use uuid::Uuid;
-use crate::database::types::Id;
 
 pub async fn try_user_auth(
     username: &str,

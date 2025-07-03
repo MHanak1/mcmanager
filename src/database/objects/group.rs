@@ -1,21 +1,23 @@
+use crate::api::filters::UserAuth;
+use crate::api::handlers::{
+    ApiCreate, ApiGet, ApiList, ApiObject, ApiRemove, ApiUpdate, handle_database_error,
+};
 use crate::api::serve::AppState;
-use crate::api::handlers::{handle_database_error, ApiCreate, ApiGet, ApiList, ApiObject, ApiRemove, ApiUpdate};
+use crate::config::CONFIG;
 use crate::database::objects::{DbObject, FromJson, UpdateJson, User};
 use crate::database::types::{Access, Column, Id};
 use crate::database::{Database, DatabaseError, ValueType};
 use crate::minecraft::server::ServerConfigLimit;
+use async_trait::async_trait;
+use axum::Router;
+use axum::extract::{Path, State};
+use axum::http::StatusCode;
+use axum::routing::{MethodRouter, get};
 use duplicate::duplicate_item;
 use serde::{Deserialize, Deserializer, Serialize};
 use sqlx::{Arguments, Error, FromRow, IntoArguments, Row};
 use std::collections::HashMap;
 use std::sync::Arc;
-use async_trait::async_trait;
-use axum::{Router};
-use axum::extract::{Path, State};
-use axum::http::StatusCode;
-use axum::routing::{get, MethodRouter};
-use crate::api::filters::UserAuth;
-use crate::config::CONFIG;
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub struct Group {
@@ -221,10 +223,16 @@ impl FromJson for Group {
         Self {
             id: Id::default(),
             name: data.name.clone(),
-            total_memory_limit: data.total_memory_limit.map(|v| v.try_into().unwrap_or(i32::MAX)),
-            per_world_memory_limit: data.per_world_memory_limit.map(|v| v.try_into().unwrap_or(i32::MAX)),
+            total_memory_limit: data
+                .total_memory_limit
+                .map(|v| v.try_into().unwrap_or(i32::MAX)),
+            per_world_memory_limit: data
+                .per_world_memory_limit
+                .map(|v| v.try_into().unwrap_or(i32::MAX)),
             world_limit: data.world_limit.map(|v| v.try_into().unwrap_or(i32::MAX)),
-            active_world_limit: data.active_world_limit.map(|v| v.try_into().unwrap_or(i32::MAX)),
+            active_world_limit: data
+                .active_world_limit
+                .map(|v| v.try_into().unwrap_or(i32::MAX)),
             storage_limit: data.storage_limit.map(|v| v.try_into().unwrap_or(i32::MAX)),
             config_blacklist: data.config_blacklist.clone().unwrap_or_default(),
             config_whitelist: data.config_whitelist.clone().unwrap_or_default(),
@@ -331,11 +339,14 @@ impl ApiUpdate for Group {}
 
 #[async_trait]
 impl ApiRemove for Group {
-    async fn before_api_delete(&self, database: AppState, user: &User) -> Result<(), DatabaseError> {
+    async fn before_api_delete(
+        &self,
+        database: AppState,
+        user: &User,
+    ) -> Result<(), DatabaseError> {
         if self.id == CONFIG.user_defaults.group_id {
             Err(DatabaseError::Conflict)
-        }
-        else {
+        } else {
             Ok(())
         }
     }

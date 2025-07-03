@@ -1,7 +1,7 @@
 use anyhow::{Result, bail};
 use futures::{SinkExt, TryFutureExt};
 use log::{error, info};
-use mcmanager::config::{DatabaseType, CONFIG};
+use mcmanager::config::{CONFIG, DatabaseType};
 use mcmanager::database::objects::{Group, User, World};
 use mcmanager::database::types::Id;
 use mcmanager::database::{Database, DatabasePool, objects};
@@ -31,27 +31,27 @@ async fn main() -> Result<()> {
         config_file.write_all(include_bytes!("resources/default_config.toml"))?;
         println!("Config file written to {}", config_path.to_string_lossy());
         println!("You can now edit the values in the config file and restart this executable.");
-        return Ok(())
+        return Ok(());
     }
 
     let pool: DatabasePool = match CONFIG.database.database_type {
         DatabaseType::Sqlite => {
-            let options = SqlitePoolOptions::new()
-                .max_connections(CONFIG.database.max_connections);
+            let options = SqlitePoolOptions::new().max_connections(CONFIG.database.max_connections);
 
-            options.connect_with(
-                SqliteConnectOptions::new()
-                    .filename(util::dirs::data_dir().join("database.db"))
-                    .create_if_missing(true)
-            ).await?.into()
-        }
-        DatabaseType::Postgres => {
-            PgPoolOptions::new()
-                .max_connections(CONFIG.database.max_connections)
-                .connect(CONFIG.database.pg_host.as_str())
+            options
+                .connect_with(
+                    SqliteConnectOptions::new()
+                        .filename(util::dirs::data_dir().join("database.db"))
+                        .create_if_missing(true),
+                )
                 .await?
                 .into()
         }
+        DatabaseType::Postgres => PgPoolOptions::new()
+            .max_connections(CONFIG.database.max_connections)
+            .connect(CONFIG.database.pg_host.as_str())
+            .await?
+            .into(),
     };
 
     /*
@@ -242,10 +242,8 @@ async fn main() -> Result<()> {
                 }
             }
         }
-        println!(
-            "MCManager set up successfully. You can now restart this executable."
-        );
-        return Ok(())
+        println!("MCManager set up successfully. You can now restart this executable.");
+        return Ok(());
     }
 
     tokio::task::spawn(async {

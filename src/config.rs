@@ -1,14 +1,14 @@
+use crate::database::DatabasePool;
 use crate::database::types::Id;
 use crate::util;
 use log::debug;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
+use serde_with::serde_as;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
 use std::ops::Range;
-use serde_with::serde_as;
-use crate::database::DatabasePool;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
@@ -105,7 +105,6 @@ pub static CONFIG: Lazy<Config> = Lazy::new(|| {
                 .as_str(),
         ));
     }
-
 
     config_builder
         .build()

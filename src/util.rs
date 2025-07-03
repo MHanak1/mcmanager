@@ -16,9 +16,15 @@ pub mod dirs {
     pub fn icons_dir() -> PathBuf {
         data_dir().join("icons")
     }
-    pub fn user_avatars_dir() -> PathBuf {icons_dir().join("users")}
-    pub fn mod_icons_dir() -> PathBuf {icons_dir().join("mods")}
-    pub fn world_icons_dir() -> PathBuf {icons_dir().join("worlds")}
+    pub fn user_avatars_dir() -> PathBuf {
+        icons_dir().join("users")
+    }
+    pub fn mod_icons_dir() -> PathBuf {
+        icons_dir().join("mods")
+    }
+    pub fn world_icons_dir() -> PathBuf {
+        icons_dir().join("worlds")
+    }
     pub fn velocity_dir() -> PathBuf {
         data_dir().join("velocity")
     }

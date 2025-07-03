@@ -152,7 +152,10 @@ impl VelocityServer for InternalVelocityServer {
     async fn update(&mut self) -> anyhow::Result<()> {
         if let Some(mut process) = self.process.take() {
             if let Some(exit_code) = process.poll() {
-                error!("Velocity process exited with code {:?}. Restarting it.", exit_code);
+                error!(
+                    "Velocity process exited with code {:?}. Restarting it.",
+                    exit_code
+                );
                 self.start().await?;
             } else {
                 self.process = Some(process);

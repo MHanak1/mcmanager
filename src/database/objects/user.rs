@@ -1,5 +1,9 @@
 pub use self::{password::Password, session::Session};
-use crate::api::handlers::{handle_database_error, ApiCreate, ApiGet, ApiIcon, ApiList, ApiObject, ApiRemove, ApiUpdate};
+use crate::api::filters::UserAuth;
+use crate::api::handlers::{
+    ApiCreate, ApiGet, ApiIcon, ApiList, ApiObject, ApiRemove, ApiUpdate, handle_database_error,
+};
+use crate::api::serve::AppState;
 use crate::config::CONFIG;
 use crate::database;
 use crate::database::objects::{DbObject, FromJson, Group, Mod, UpdateJson, World};
@@ -7,6 +11,10 @@ use crate::database::types::{Access, Column, Id};
 use crate::database::{Database, DatabaseError, ValueType};
 use crate::minecraft::server::ServerConfigLimit;
 use async_trait::async_trait;
+use axum::Router;
+use axum::extract::{Path, State};
+use axum::http::StatusCode;
+use axum::routing::{get, post};
 use futures::future;
 use log::{error, info, warn};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -14,12 +22,6 @@ use sqlx::{Arguments, Encode, FromRow, IntoArguments};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use axum::{Router};
-use axum::extract::{Path, State};
-use axum::http::StatusCode;
-use axum::routing::{get, post};
-use crate::api::filters::UserAuth;
-use crate::api::serve::AppState;
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, FromRow)]
 pub struct User {
@@ -412,24 +414,26 @@ pub mod password {
 }
 
 pub mod session {
-    use crate::api::handlers::{handle_database_error, ApiCreate, ApiGet, ApiList, ApiObject, ApiRemove};
+    use crate::api::filters::UserAuth;
+    use crate::api::handlers::{
+        ApiCreate, ApiGet, ApiList, ApiObject, ApiRemove, handle_database_error,
+    };
+    use crate::api::serve::AppState;
     use crate::database::objects::{DbObject, FromJson, User};
     use crate::database::types::{Access, Column, Id};
     use crate::database::{Database, ValueType};
+    use async_trait::async_trait;
+    use axum::Router;
+    use axum::extract::{Path, State};
+    use axum::http::StatusCode;
+    use axum::routing::get;
     use chrono::{DateTime, Utc};
     use duplicate::duplicate_item;
     use serde::{Deserialize, Serialize, Serializer};
     use sqlx::{Arguments, Error, FromRow, IntoArguments, Row};
     use std::str::FromStr;
     use std::sync::Arc;
-    use async_trait::async_trait;
-    use axum::extract::{Path, State};
-    use axum::http::StatusCode;
-    use axum::Router;
-    use axum::routing::get;
     use uuid::Uuid;
-    use crate::api::filters::UserAuth;
-    use crate::api::serve::AppState;
 
     /// `user_id`: unique [`Id`] of the user who created the session
     ///
@@ -468,7 +472,9 @@ pub mod session {
             vec![
                 Column::new("id", ValueType::Id).unique(),
                 Column::new("user_id", ValueType::Id).references("users(id)"),
-                Column::new("token", ValueType::Token).primary_key().hidden(),
+                Column::new("token", ValueType::Token)
+                    .primary_key()
+                    .hidden(),
                 Column::new("created", ValueType::Datetime).not_null(),
                 Column::new("expires", ValueType::Boolean)
                     .not_null()
@@ -515,8 +521,7 @@ pub mod session {
             arguments.add(self.id).expect("Failed to add argument");
             arguments.add(self.user_id).expect("Failed to add argument");
             arguments.add(self.token).expect("Failed to add argument");
-            arguments.add(self.created)
-                .expect("Failed to add argument");
+            arguments.add(self.created).expect("Failed to add argument");
             arguments.add(self.expires).expect("Failed to add argument");
             arguments
         }

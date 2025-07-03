@@ -2,29 +2,29 @@ use crate::api::filters;
 use crate::api::handlers::ApiObject;
 use crate::config;
 use crate::config::CONFIG;
+use crate::database::Database;
 use crate::database::objects::{Group, InviteLink, Mod, ModLoader, Session, User, Version, World};
-use crate::database::{Database};
 use crate::minecraft::velocity::{InternalVelocityServer, VelocityServer};
+use crate::util::dirs::icons_dir;
 use crate::{api, util};
+use axum::Router;
+use axum::extract::{MatchedPath, Path, State};
+use axum::http::Request;
+use axum::routing::{MethodRouter, get, post};
 use log::{error, info};
 use sqlx::Encode;
 use sqlx::any::AnyPoolOptions;
 use sqlx::sqlite::SqlitePoolOptions;
+use static_dir::static_dir;
 use std::io::Write;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
-use axum::extract::{MatchedPath, Path, State};
-use axum::http::Request;
-use axum::Router;
-use axum::routing::{get, post, MethodRouter};
-use static_dir::static_dir;
 use test_log::test;
 use tokio::sync::Mutex;
-use tracing::{info_span};
-use crate::util::dirs::icons_dir;
+use tracing::info_span;
 
 pub type AppState = Database;
 
@@ -110,10 +110,18 @@ pub async fn run(database: Database, config: config::Config) -> Result<(), anyho
     let log = axum::log("info");
      */
     let check_free = Router::new()
-        .route("/username/{username}", get(api::handlers::get_username_valid))
-        .route("/invite_link/{invite_link}", get(api::handlers::get_invite_valid))
-        .route("/hostname/{hostname}", get(api::handlers::get_hostname_valid));
-
+        .route(
+            "/username/{username}",
+            get(api::handlers::get_username_valid),
+        )
+        .route(
+            "/invite_link/{invite_link}",
+            get(api::handlers::get_invite_valid),
+        )
+        .route(
+            "/hostname/{hostname}",
+            get(api::handlers::get_hostname_valid),
+        );
 
     let api = Router::new()
         .route("/login", post(api::handlers::user_auth))
@@ -136,29 +144,28 @@ pub async fn run(database: Database, config: config::Config) -> Result<(), anyho
     let router = Router::new()
         .nest("/api", api)
         .route("/", get(|| async { "Hello!!" }))
-        .layer(tower_http::trace::TraceLayer::new_for_http()
-           .make_span_with(|request: &Request<_>| {
-               // Log the matched route's path (with placeholders not filled in).
-               // Use request.uri() or OriginalUri if you want the real path.
-               let matched_path = request
-                   .extensions()
-                   .get::<MatchedPath>()
-                   .map(MatchedPath::as_str);
+        .layer(
+            tower_http::trace::TraceLayer::new_for_http().make_span_with(|request: &Request<_>| {
+                // Log the matched route's path (with placeholders not filled in).
+                // Use request.uri() or OriginalUri if you want the real path.
+                let matched_path = request
+                    .extensions()
+                    .get::<MatchedPath>()
+                    .map(MatchedPath::as_str);
 
-               info_span!(
-                "http_request",
-                method = ?request.method(),
-                matched_path,
-                some_other_field = tracing::field::Empty,
-            )
-           })
+                info_span!(
+                    "http_request",
+                    method = ?request.method(),
+                    matched_path,
+                    some_other_field = tracing::field::Empty,
+                )
+            }),
         );
 
     let addr = format!("{}:{}", config.listen_address, config.listen_port);
 
     info!("listening on {}", addr);
     let listener = tokio::net::TcpListener::bind(addr).await?;
-
 
     axum::serve(listener, router).await?;
 
@@ -173,13 +180,13 @@ fn user_creation_and_removal() -> anyhow::Result<()> {
     use crate::config;
     use crate::config::CONFIG;
     use crate::database::types::Id;
+    use axum::body::BodyDeserializeError;
     use log::info;
     use pretty_assertions::assert_eq;
     use reqwest::header;
     use serde::Deserialize;
     use serde_with::serde_derive::Serialize;
     use std::thread;
-    use axum::body::BodyDeserializeError;
 
     let conn = rusqlite::Connection::open_in_memory().expect("Can't open database connection");
 

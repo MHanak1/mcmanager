@@ -1,43 +1,43 @@
-use std::fmt::format;
-use std::fs::File;
+use crate::api::filters::{BearerToken, UserAuth, WithSession};
 use crate::api::serve::AppState;
 use crate::api::{auth, filters};
-use crate::config::{CONFIG};
+use crate::config::CONFIG;
 use crate::database::DatabaseError::SqlxError;
 use crate::database::objects::{DbObject, FromJson, InviteLink, Session, UpdateJson, User, World};
 use crate::database::types::Id;
 pub(crate) use crate::database::{Database, DatabaseError};
 use crate::database::{DatabasePool, QueryBuilder, ValueType, WhereOperand};
+use crate::execute_on_enum;
 use crate::util::base64::base64_decode;
+use crate::util::dirs::icons_dir;
 use async_trait::async_trait;
+use axum::body::Bytes;
+use axum::extract::{FromRequest, Multipart, Path, Request, State};
+use axum::http::header::ToStrError;
+use axum::http::{HeaderMap, StatusCode, header};
+use axum::response::IntoResponse;
+use axum::routing::{MethodRouter, get, post};
+use axum::{Json, Router};
 use chrono::DateTime;
 use futures::{StreamExt, TryFutureExt};
+use image::error::UnsupportedErrorKind::Format;
+use image::imageops::FilterType;
+use image::{DynamicImage, ImageFormat, ImageReader, Limits};
 use log::{debug, error};
 use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 use sqlx::{Encode, FromRow, IntoArguments, Type};
+use std::fmt::format;
+use std::fs::File;
 use std::io::{BufWriter, Cursor, Read, Write};
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
-use axum::extract::{FromRequest, Multipart, Path, Request, State};
-use tokio::sync::Mutex;
-use uuid::{Error, Uuid};
-use axum::http::{header, HeaderMap, StatusCode};
-use axum::response::IntoResponse;
-use axum::{Json, Router};
-use axum::body::Bytes;
-use axum::http::header::ToStrError;
-use axum::routing::{get, post, MethodRouter};
-use image::{DynamicImage, ImageFormat, ImageReader, Limits};
-use image::error::UnsupportedErrorKind::Format;
-use image::imageops::FilterType;
-use serde_json::{json, Value};
 use tokio::io::BufReader;
 use tokio::join;
+use tokio::sync::Mutex;
 use tokio_util::io::ReaderStream;
-use crate::api::filters::{BearerToken, UserAuth, WithSession};
-use crate::execute_on_enum;
-use crate::util::dirs::icons_dir;
+use uuid::{Error, Uuid};
 
 pub trait ApiObject: DbObject {
     fn routes() -> Router<AppState>;
@@ -246,7 +246,11 @@ where
                 .await
                 .map_err(handle_database_error)?;
 
-            debug!("running after create for /{}/{}", Self::table_name(), object.id());
+            debug!(
+                "running after create for /{}/{}",
+                Self::table_name(),
+                object.id()
+            );
             object
                 .after_api_create(database, &mut data, &user)
                 .await
@@ -301,7 +305,7 @@ where
         let id = id.0;
         let database = database.0;
         let user = user.0;
-        let mut data =  data.0;
+        let mut data = data.0;
         let object = {
             let group = user.group(database.clone(), None).await;
 
@@ -310,7 +314,11 @@ where
                 .await
                 .map_err(handle_database_error)?;
 
-            debug!("running before update for /{}/{}", Self::table_name(), object.id());
+            debug!(
+                "running before update for /{}/{}",
+                Self::table_name(),
+                object.id()
+            );
             object
                 .before_api_update(database.clone(), &mut data, &user)
                 .await
@@ -323,7 +331,11 @@ where
                 .await
                 .map_err(handle_database_error)?;
 
-            debug!("running after update for /{}/{}", Self::table_name(), object.id());
+            debug!(
+                "running after update for /{}/{}",
+                Self::table_name(),
+                object.id()
+            );
             object
                 .after_api_update(database, &mut data, &user)
                 .await
@@ -381,7 +393,11 @@ where
             .await
             .map_err(handle_database_error)?;
 
-        debug!("running before delete for /{}/{}", Self::table_name(), object.id());
+        debug!(
+            "running before delete for /{}/{}",
+            Self::table_name(),
+            object.id()
+        );
         object
             .before_api_delete(database.clone(), &user)
             .await
@@ -392,12 +408,15 @@ where
             .await
             .map_err(handle_database_error)?;
 
-        debug!("running after delete for /{}/{}", Self::table_name(), object.id());
+        debug!(
+            "running after delete for /{}/{}",
+            Self::table_name(),
+            object.id()
+        );
         object
             .after_api_delete(database.clone(), &user)
             .await
             .map_err(handle_database_error)?;
-
 
         Ok(StatusCode::NO_CONTENT)
     }
@@ -415,31 +434,35 @@ where
     /// runs after the database entry deletion
     ///
     /// this returns a [`Result`], but there is no mechanism to undo the entry deletion. if this fails it should probably cause the program to panic
-    async fn after_api_delete(
-        &self,
-        database: AppState,
-        user: &User,
-    ) -> Result<(), DatabaseError> {
+    async fn after_api_delete(&self, database: AppState, user: &User) -> Result<(), DatabaseError> {
         Ok(())
     }
-
 }
 
 pub trait ApiIcon: ApiObject
-    where
+where
     Self: Sized + 'static,
     Self: for<'r> FromRow<'r, sqlx::sqlite::SqliteRow>,
     Self: for<'r> FromRow<'r, sqlx::postgres::PgRow>,
     Self: serde::Serialize,
     Self: Unpin,
 {
-    async fn upload_icon(state: State<AppState>, id: Path<Id>, user: UserAuth, headers: HeaderMap, mut multipart: Multipart) -> Result<impl IntoResponse, StatusCode> {
+    async fn upload_icon(
+        state: State<AppState>,
+        id: Path<Id>,
+        user: UserAuth,
+        headers: HeaderMap,
+        mut multipart: Multipart,
+    ) -> Result<impl IntoResponse, StatusCode> {
         let database = state.0;
         let id = id.0;
         let user = user.0;
 
         //check if the asset exists and the user has access to it
-        let _ = database.get_one::<Self>(id, Some((&user, &user.group(database.clone(), None).await))).await.map_err(|_| StatusCode::NOT_FOUND)?;
+        let _ = database
+            .get_one::<Self>(id, Some((&user, &user.group(database.clone(), None).await)))
+            .await
+            .map_err(|_| StatusCode::NOT_FOUND)?;
 
         let mut bytes = None;
 
@@ -458,7 +481,7 @@ pub trait ApiIcon: ApiObject
 
             let extension = filename.split('.').last();
 
-            if let Some(extension ) = extension {
+            if let Some(extension) = extension {
                 let image_format = ImageFormat::from_extension(extension);
                 if let Some(image_format) = image_format {
                     bytes = Some((field_bytes, image_format));
@@ -470,22 +493,22 @@ pub trait ApiIcon: ApiObject
         let (bytes, image_format) = bytes.ok_or_else(|| StatusCode::BAD_REQUEST)?;
 
         let is_gif = match image_format {
-            ImageFormat::Jpeg | ImageFormat::Png | ImageFormat::WebP | ImageFormat::Bmp => {
-                false
-            },
+            ImageFormat::Jpeg | ImageFormat::Png | ImageFormat::WebP | ImageFormat::Bmp => false,
             ImageFormat::Gif => true,
-            _ => {return Err(StatusCode::BAD_REQUEST)},
+            _ => return Err(StatusCode::BAD_REQUEST),
         };
 
-
-
-        let gif_path = crate::util::dirs::icons_dir().join(Self::table_name()).join(format!("{}.gif", id));
-        let webp_path = crate::util::dirs::icons_dir().join(Self::table_name()).join(format!("{}.webp", id));
-
+        let gif_path = crate::util::dirs::icons_dir()
+            .join(Self::table_name())
+            .join(format!("{}.gif", id));
+        let webp_path = crate::util::dirs::icons_dir()
+            .join(Self::table_name())
+            .join(format!("{}.webp", id));
 
         if is_gif {
             let _ = bytes_to_image(bytes.clone(), image_format)?;
-            let image_file = std::fs::File::create(&gif_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            let image_file =
+                std::fs::File::create(&gif_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             let mut writer = BufWriter::new(image_file);
 
             if webp_path.exists() {
@@ -493,21 +516,25 @@ pub trait ApiIcon: ApiObject
             }
 
             // after making sure the file is a valid image write the original, as we don't want to alter a gif
-            writer.write_all(bytes.as_ref()).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
+            writer
+                .write_all(bytes.as_ref())
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         } else {
             let image = bytes_to_image(bytes, image_format)?;
 
             let image = image.resize(256, 256, FilterType::CatmullRom);
 
-            let image_file = std::fs::File::create(&webp_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            let image_file =
+                std::fs::File::create(&webp_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             let mut writer = BufWriter::new(image_file);
 
             if gif_path.exists() {
                 std::fs::remove_file(&gif_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             }
 
-            image.write_to(&mut writer, ImageFormat::WebP).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            image
+                .write_to(&mut writer, ImageFormat::WebP)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         }
 
         Ok(StatusCode::OK)
@@ -524,21 +551,18 @@ pub trait ApiIcon: ApiObject
             return Err(StatusCode::NOT_FOUND);
         };
 
-        let file = tokio::fs::File::open(path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR).await?;
+        let file = tokio::fs::File::open(path)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+            .await?;
 
         let stream = ReaderStream::new(file);
         let body = axum::body::Body::from_stream(stream);
 
-        let mime_type = if is_gif {
-            "image/gif"
-        } else {
-            "image/webp"
-        };
+        let mime_type = if is_gif { "image/gif" } else { "image/webp" };
 
         let header = [(header::CONTENT_TYPE, mime_type)];
 
         Ok((header, body))
-
     }
 }
 
@@ -553,10 +577,10 @@ pub(crate) fn handle_database_error(err: DatabaseError) -> StatusCode {
         DatabaseError::Conflict => StatusCode::CONFLICT,
         DatabaseError::SqlxError(err) => match err {
             sqlx::Error::RowNotFound => StatusCode::NOT_FOUND,
-            _ =>  {
+            _ => {
                 error!("{err}");
                 StatusCode::INTERNAL_SERVER_ERROR
-            },
+            }
         },
     }
 }
@@ -608,8 +632,7 @@ pub async fn user_register(
     let mut token = None;
     for (parameter, value) in query {
         if parameter == "token" {
-            token =
-                Uuid::from_str(&value).ok();
+            token = Uuid::from_str(&value).ok();
             break;
         }
     }
@@ -634,21 +657,27 @@ pub async fn user_register(
         return Err(StatusCode::UNAUTHORIZED);
     }
 
-    if database.get_where::<User, _>("username", &credentials.username, None).await.is_ok() {
+    if database
+        .get_where::<User, _>("username", &credentials.username, None)
+        .await
+        .is_ok()
+    {
         return Err(StatusCode::CONFLICT);
     }
 
     let user = database
         .create_user(&credentials.username, &credentials.password)
         .await
-        .map_err(|err| {error!("{err}"); StatusCode::INTERNAL_SERVER_ERROR})?;
+        .map_err(|err| {
+            error!("{err}");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
     if let Some(invite) = invite {
-        database
-            .remove(&invite, None)
-            .await
-            .map_err(|err| {error!("{err}"); StatusCode::INTERNAL_SERVER_ERROR})?;
+        database.remove(&invite, None).await.map_err(|err| {
+            error!("{err}");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
     }
-
 
     Ok(axum::Json(user))
 }
@@ -672,10 +701,13 @@ pub async fn user_auth(
     Ok((
         StatusCode::CREATED,
         [(header::ACCESS_CONTROL_ALLOW_CREDENTIALS, "true")],
-        [(header::SET_COOKIE, format!(
-            "session-token={}; Path=/api; HttpOnly; Max-Age=1209600; charset=UTF-8",
-            session.token.as_simple().to_string()
-        ))],
+        [(
+            header::SET_COOKIE,
+            format!(
+                "session-token={}; Path=/api; HttpOnly; Max-Age=1209600; charset=UTF-8",
+                session.token.as_simple().to_string()
+            ),
+        )],
         axum::Json(json!({"token": session.token.as_simple().to_string()})),
     ))
 }
@@ -683,24 +715,21 @@ pub async fn user_auth(
 #[allow(clippy::unused_async)]
 pub async fn logout(
     database: State<AppState>,
-    session: WithSession
+    session: WithSession,
 ) -> Result<StatusCode, StatusCode> {
     let database = database.0;
     let session = session.0;
 
-    database.remove(
-        &session,
-        None
-    ).await.map_err(handle_database_error)?;
+    database
+        .remove(&session, None)
+        .await
+        .map_err(handle_database_error)?;
 
     Ok(StatusCode::OK)
 }
 
-
 #[allow(clippy::unused_async)]
-pub async fn user_info(
-    user: UserAuth,
-) -> Result<axum::Json<User>, StatusCode> {
+pub async fn user_info(user: UserAuth) -> Result<axum::Json<User>, StatusCode> {
     Ok(axum::Json(user.0))
 }
 
@@ -715,40 +744,57 @@ pub async fn server_info() -> Result<impl IntoResponse, StatusCode> {
         requires_invite: bool,
     }
 
-    Ok(axum::Json(
-        ServerInfo {
-            name: CONFIG.info.name.clone(),
-            login_message: CONFIG.info.login_message.clone(),
-            login_message_title: CONFIG.info.login_message_title.clone(),
-            login_message_type: CONFIG.info.login_message_type.clone(),
-            requires_invite: CONFIG.require_invite_to_register,
-        }
-    ))
+    Ok(axum::Json(ServerInfo {
+        name: CONFIG.info.name.clone(),
+        login_message: CONFIG.info.login_message.clone(),
+        login_message_title: CONFIG.info.login_message_title.clone(),
+        login_message_type: CONFIG.info.login_message_type.clone(),
+        requires_invite: CONFIG.require_invite_to_register,
+    }))
 }
 
-pub async fn get_username_valid(username: Path<String>, database: State<AppState>) -> impl IntoResponse {
-    if database.get_where::<User, _>("username", username.0, None).await.is_ok() {
+pub async fn get_username_valid(
+    username: Path<String>,
+    database: State<AppState>,
+) -> impl IntoResponse {
+    if database
+        .get_where::<User, _>("username", username.0, None)
+        .await
+        .is_ok()
+    {
         Json(json!({"valid": false}))
-    }
-    else {
+    } else {
         Json(json!({"valid": true}))
     }
 }
-pub async fn get_invite_valid(invite_link: Path<Uuid>, database: State<AppState>) -> impl IntoResponse {
-    if database.get_where::<InviteLink, _>("invite_token", invite_link.0, None).await.is_ok() {
+pub async fn get_invite_valid(
+    invite_link: Path<Uuid>,
+    database: State<AppState>,
+) -> impl IntoResponse {
+    if database
+        .get_where::<InviteLink, _>("invite_token", invite_link.0, None)
+        .await
+        .is_ok()
+    {
         Json(json!({"valid": true}))
-    }
-    else {
+    } else {
         Json(json!({"valid": false}))
     }
 }
 
 // user auth not needed, but unauthenticated users should not access this route
-pub async fn get_hostname_valid(hostname: Path<String>, database: State<AppState>, _: UserAuth) -> impl IntoResponse {
-    if database.get_where::<World, _>("hostname", hostname.0, None).await.is_ok() {
+pub async fn get_hostname_valid(
+    hostname: Path<String>,
+    database: State<AppState>,
+    _: UserAuth,
+) -> impl IntoResponse {
+    if database
+        .get_where::<World, _>("hostname", hostname.0, None)
+        .await
+        .is_ok()
+    {
         Json(json!({"valid": false}))
-    }
-    else {
+    } else {
         Json(json!({"valid": true}))
     }
 }
@@ -762,11 +808,15 @@ fn bytes_to_image(bytes: Bytes, format: ImageFormat) -> Result<DynamicImage, Sta
 
     reader.set_format(format);
 
-    let mut file = std::fs::File::create(PathBuf::from_str("/home/mhanak/uploaded.png").unwrap()).unwrap();
+    let mut file =
+        std::fs::File::create(PathBuf::from_str("/home/mhanak/uploaded.png").unwrap()).unwrap();
     file.write_all(bytes.as_ref()).unwrap();
 
     reader.limits(limits);
-    let image = reader.decode().map_err(|err| {error!("{err}"); StatusCode::BAD_REQUEST})?;
+    let image = reader.decode().map_err(|err| {
+        error!("{err}");
+        StatusCode::BAD_REQUEST
+    })?;
 
     Ok(image)
 }

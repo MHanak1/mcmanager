@@ -1,3 +1,4 @@
+use crate::database::DatabaseType;
 pub(crate) use crate::database::ValueType;
 use crate::database::objects::{DbObject, Group, User};
 use crate::util;
@@ -11,7 +12,6 @@ use std::fmt::{Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::str::FromStr;
 use test_log::test;
-use crate::database::DatabaseType;
 
 pub(crate) const ID_MAX_VALUE: i64 = 281_474_976_710_655;
 
@@ -511,11 +511,11 @@ impl ValueType {
             ValueType::Token => match db_type {
                 DatabaseType::Postgres => "UUID".to_string(),
                 DatabaseType::Sqlite => "TEXT".to_string(),
-            }
+            },
             ValueType::Datetime => match db_type {
                 DatabaseType::Postgres => "TIMESTAMPTZ".to_string(),
                 DatabaseType::Sqlite => "DATETIME".to_string(),
-            }
+            },
         }
     }
 }

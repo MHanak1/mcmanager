@@ -1,14 +1,14 @@
 use crate::api::handlers::{ApiCreate, ApiGet, ApiIcon, ApiList, ApiObject, ApiRemove, ApiUpdate};
+use crate::api::serve::AppState;
 use crate::database::objects::{DbObject, FromJson, UpdateJson, User};
 use crate::database::types::{Access, Column, Id};
 use crate::database::{Database, ValueType};
+use axum::Router;
+use axum::routing::{get, post};
 use serde::{Deserialize, Deserializer, Serialize};
 use sqlx::{Arguments, FromRow, IntoArguments};
 use std::fmt::Debug;
 use std::sync::Arc;
-use axum::{Router};
-use axum::routing::{get, post};
-use crate::api::serve::AppState;
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, FromRow)]
 pub struct Mod {
@@ -148,8 +148,18 @@ impl ApiObject for Mod {
     fn routes() -> Router<AppState> {
         Router::new()
             .route("/", get(Self::api_list).post(Self::api_create))
-            .route("/{id}", get(Self::api_get).put(Self::api_update).delete(Self::api_remove))
-            .route("/{id}/icon", post(Self::upload_icon).put(Self::upload_icon).get(Self::get_icon))
+            .route(
+                "/{id}",
+                get(Self::api_get)
+                    .put(Self::api_update)
+                    .delete(Self::api_remove),
+            )
+            .route(
+                "/{id}/icon",
+                post(Self::upload_icon)
+                    .put(Self::upload_icon)
+                    .get(Self::get_icon),
+            )
     }
 }
 
