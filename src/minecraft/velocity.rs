@@ -150,6 +150,17 @@ impl VelocityServer for InternalVelocityServer {
         Ok(())
     }
     async fn update(&mut self) -> anyhow::Result<()> {
+        if let Some(mut process) = self.process.take() {
+            if let Some(exit_code) = process.poll() {
+                error!("Velocity process exited with code {:?}. Restarting it.", exit_code);
+                self.start().await?;
+            } else {
+                self.process = Some(process);
+            }
+        } else {
+            self.start().await?;
+        }
+
         let mut hosts = vec![];
         for server in server::get_all_servers().await {
             let server = server.lock().await;

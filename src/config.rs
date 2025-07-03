@@ -13,6 +13,7 @@ use crate::database::DatabasePool;
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     pub listen_address: String,
+    pub listen_port: u16,
     pub public_routes_rate_limit: (u32, u64),
     pub private_routes_rate_limit: (u32, u64),
     pub require_invite_to_register: bool,

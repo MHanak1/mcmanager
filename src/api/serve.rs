@@ -154,8 +154,10 @@ pub async fn run(database: Database, config: config::Config) -> Result<(), anyho
            })
         );
 
+    let addr = format!("{}:{}", config.listen_address, config.listen_port);
 
-    let listener = tokio::net::TcpListener::bind(&config.listen_address).await?;
+    info!("listening on {}", addr);
+    let listener = tokio::net::TcpListener::bind(addr).await?;
 
 
     axum::serve(listener, router).await?;
