@@ -16,7 +16,7 @@ impl<S: Sync + std::marker::Send> FromRequestParts<S> for BearerToken {
     type Rejection = StatusCode;
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
-        let header = parts.headers.get("Authentication");
+        let header = parts.headers.get("Authorization");
         if let Some(header) = header {
             if let Ok(header) = header.to_str() {
                 if header[0..7] == *"Bearer " {
@@ -31,7 +31,6 @@ impl<S: Sync + std::marker::Send> FromRequestParts<S> for BearerToken {
         if let Ok(cookies) = axum_extra::extract::CookieJar::from_request_parts(parts, state).await
         {
             if let Some(cookie) = cookies.get("session-token") {
-                println!("found session token in cookie: {}", cookie.value());
                 if let Ok(token) = Uuid::parse_str(cookie.value()) {
                     debug!("found session token in cookie: {}", token);
                     return Ok(BearerToken(token));

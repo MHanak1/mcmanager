@@ -542,7 +542,6 @@ where
 
     async fn get_icon(id: Path<Id>) -> Result<impl IntoResponse, StatusCode> {
         let mut path = icons_dir().join(Self::table_name());
-        println!("{path:?}");
         let (path, is_gif) = if path.join(format!("{}.webp", id.to_string())).exists() {
             (path.join(format!("{}.webp", id.to_string())), false)
         } else if path.join(format!("{}.gif", id.to_string())).exists() {
@@ -742,6 +741,13 @@ pub async fn server_info() -> Result<impl IntoResponse, StatusCode> {
         login_message_title: String,
         login_message_type: String,
         requires_invite: bool,
+        world: WorldInfo,
+    }
+    #[derive(Serialize)]
+    struct WorldInfo {
+        min_memory: u32,
+        default_memory: u32,
+        hostname: String,
     }
 
     Ok(axum::Json(ServerInfo {
@@ -750,6 +756,11 @@ pub async fn server_info() -> Result<impl IntoResponse, StatusCode> {
         login_message_title: CONFIG.info.login_message_title.clone(),
         login_message_type: CONFIG.info.login_message_type.clone(),
         requires_invite: CONFIG.require_invite_to_register,
+        world: WorldInfo {
+            min_memory: CONFIG.world.minimum_memory,
+            default_memory: CONFIG.world_defaults.allocated_memory,
+            hostname: CONFIG.velocity.hostname.clone(),
+        },
     }))
 }
 

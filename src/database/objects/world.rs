@@ -21,6 +21,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::task::id;
+use crate::config::CONFIG;
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, FromRow)]
 pub struct World {
@@ -274,8 +275,12 @@ impl ApiCreate for World {
         }
 
         //enforce memory limit
-        if let Some(memory_limit) = group.total_memory_limit {
-            if let Some(allocated_memory) = json.allocated_memory {
+        if let Some(mut allocated_memory) = json.allocated_memory {
+            if allocated_memory < CONFIG.world.minimum_memory {
+                json.allocated_memory = Some(CONFIG.world.minimum_memory);
+                allocated_memory = CONFIG.world.minimum_memory
+            }
+            if let Some(memory_limit) = group.total_memory_limit {
                 let mut total_memory = 0;
 
                 for world in &user_worlds {
@@ -359,8 +364,12 @@ impl ApiUpdate for World {
         }
 
         //enforce memory limit
-        if let Some(memory_limit) = group.total_memory_limit {
-            if let Some(allocated_memory) = json.allocated_memory {
+        if let Some(mut allocated_memory) = json.allocated_memory {
+            if allocated_memory < CONFIG.world.minimum_memory {
+                json.allocated_memory = Some(CONFIG.world.minimum_memory);
+                allocated_memory = CONFIG.world.minimum_memory
+            }
+            if let Some(memory_limit) = group.total_memory_limit {
                 if allocated_memory != self.allocated_memory as u32 {
                     let mut total_memory = 0;
 

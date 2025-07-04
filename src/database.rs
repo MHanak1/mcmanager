@@ -360,7 +360,7 @@ impl Database {
                     .fetch_one(pool)
                     .await
                     .map_err(DatabaseError::from)
-            }).expect("aaaa");
+            })?;
 
             self.session_cache.insert(token, session.clone()).await;
 

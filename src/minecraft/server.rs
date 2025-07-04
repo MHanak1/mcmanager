@@ -327,6 +327,10 @@ pub mod internal {
             let command = command.replace("%jar%", jar_path.display().to_string().as_str());
             let command = command.replace(
                 "%max_mem%",
+                &format!("-Xms{}m", CONFIG.world.minimum_memory),
+            );
+            let command = command.replace(
+                "%max_mem%",
                 &format!("-Xmx{}m", self.world.allocated_memory),
             );
             //println!("{command}");
@@ -585,7 +589,6 @@ pub mod external {
 
     impl MinimanagerServer {
         pub fn new(host: String, world: World) -> Self {
-            println!("{host}");
             Self {
                 hostname: world.hostname.clone(),
                 host,

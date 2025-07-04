@@ -53,7 +53,9 @@ port_range = [24000, 25000]
 # what command should be used to launch the minecraft server.
 # you can also use this to run the servers in something like firejail
 # to somewhat improve the security of local servers.
-java_launch_command = "java -jar -Xms512m %max_mem% %jar% -nogui"
+java_launch_command = "java -jar %min_mem% %max_mem% %jar% -nogui"
+# Minimum allocatable memory to a server. also the JVM starting memory
+minimum_memory = 512
 
 [user_defaults]
 #default user group
