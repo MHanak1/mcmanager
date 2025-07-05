@@ -79,6 +79,10 @@ impl DbObject for World {
     fn id(&self) -> Id {
         self.id
     }
+
+    fn owner_id(&self) -> Option<Id> {
+        Some(self.owner_id)
+    }
 }
 
 impl<'a> IntoArguments<'a, sqlx::Sqlite> for World {

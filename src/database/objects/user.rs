@@ -85,6 +85,10 @@ impl DbObject for User {
     fn id(&self) -> Id {
         self.id
     }
+
+    fn owner_id(&self) -> Option<Id> {
+        Some(self.id)
+    }
 }
 
 impl<'a> IntoArguments<'a, sqlx::Sqlite> for User {
@@ -373,6 +377,10 @@ pub mod password {
         fn id(&self) -> Id {
             self.user_id
         }
+
+        fn owner_id(&self) -> Option<Id> {
+            Some(self.user_id)
+        }
     }
 
     impl<'a> IntoArguments<'a, sqlx::Sqlite> for Password {
@@ -484,6 +492,10 @@ pub mod session {
 
         fn id(&self) -> Id {
             self.id
+        }
+
+        fn owner_id(&self) -> Option<Id> {
+            Some(self.user_id)
         }
     }
 

@@ -65,6 +65,10 @@ impl DbObject for InviteLink {
     fn id(&self) -> Id {
         self.id
     }
+
+    fn owner_id(&self) -> Option<Id> {
+        Some(self.creator_id)
+    }
 }
 
 #[duplicate_item(Row; [sqlx::sqlite::SqliteRow]; [sqlx::postgres::PgRow])]

@@ -1,3 +1,4 @@
+use std::fmt::Debug;
 use crate::database::types::{Access, Column, Id};
 use crate::database::{Database, DatabaseError, DatabaseType};
 use serde::de::DeserializeOwned;
@@ -22,7 +23,7 @@ pub use self::{
 /// An object that is meant to be stored in a database
 /// the object must have a unique Id, by default in the first column
 #[allow(dead_code)]
-pub trait DbObject: Send + Sync {
+pub trait DbObject: Send + Sync + Debug {
     /// [`Access`] level dictating which users can create the object using th api.
     fn view_access() -> Access;
     /// [`Access`] level for updating and removing of the object.

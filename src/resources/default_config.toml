@@ -43,7 +43,7 @@ host = "http://localhost:3031"
 port = 25565
 # what is the velocity executable called. it should be placed in the data/velocity directory. for now you will have download it yourself.
 executable_name = "velocity.jar"
-hostname = "example.net" # under what domain is the server running on. the servers will be avaliable at server_name.example.net
+hostname = "example.net" # under what domain is the server running on. the servers will be avaliable at server_name.example.net. THIS MUST BE SET CORRECTLY. OTHERWISE VELOCITY WILL NOT PROXY REQUESTS
 
 [world]
 # how long should mcmanager wait for the server to gracefully shut down before killing it
