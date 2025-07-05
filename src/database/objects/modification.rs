@@ -151,13 +151,13 @@ impl ApiObject for Mod {
             .route(
                 "/{id}",
                 get(Self::api_get)
-                    .put(Self::api_update)
+                    .patch(Self::api_update)
                     .delete(Self::api_remove),
             )
             .route(
                 "/{id}/icon",
                 post(Self::upload_icon)
-                    .put(Self::upload_icon)
+                    .patch(Self::upload_icon)
                     .get(Self::get_icon),
             )
     }

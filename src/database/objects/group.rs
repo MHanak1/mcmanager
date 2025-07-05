@@ -199,7 +199,7 @@ impl ApiObject for Group {
     fn routes() -> Router<AppState> {
         Router::new()
             .route("/", get(Self::api_list).post(Self::api_create))
-            .route("/{id}", get(Self::api_get).put(Self::api_update).delete(Self::api_remove))
+            .route("/{id}", get(Self::api_get).patch(Self::api_update).delete(Self::api_remove))
     }
 }
 

@@ -222,20 +222,20 @@ impl ApiObject for World {
             .route(
                 "/{id}",
                 get(Self::api_get)
-                    .put(Self::api_update)
+                    .patch(Self::api_update)
                     .delete(Self::api_remove),
             )
             .route(
                 "/{id}/config",
                 get(Self::get_server_config)
-                    .put(Self::set_server_config)
+                    .patch(Self::set_server_config)
                     .post(Self::set_server_config),
             )
             .route("/{id}/status", get(Self::world_get_status))
             .route(
                 "/{id}/icon",
                 post(Self::upload_icon)
-                    .put(Self::upload_icon)
+                    .patch(Self::upload_icon)
                     .get(Self::get_icon),
             )
     }
@@ -274,31 +274,20 @@ impl ApiCreate for World {
             json.hostname += &rand::random_range(0..100000).to_string();
         }
 
+        json.allocated_memory = Some(json.allocated_memory.unwrap_or(CONFIG.world_defaults.allocated_memory));
+
         //enforce memory limit
         if let Some(mut allocated_memory) = json.allocated_memory {
             if allocated_memory < CONFIG.world.minimum_memory {
-                json.allocated_memory = Some(CONFIG.world.minimum_memory);
-                allocated_memory = CONFIG.world.minimum_memory
+                return Err(DatabaseError::Unauthorized)
             }
-            if let Some(memory_limit) = group.total_memory_limit {
-                let mut total_memory = 0;
-
-                for world in &user_worlds {
-                    total_memory += world.allocated_memory;
-                }
-                let remaining_memory = memory_limit as i32 - total_memory as i32;
-                if remaining_memory < 0 {
-                    return Err(DatabaseError::Unauthorized);
-                }
-
-                if (allocated_memory as i32) > remaining_memory {
-                    debug!(
-                        "changing memory amount for server created by {}. requested is {}, max available is {}",
-                        user.id, memory_limit, remaining_memory
-                    );
-                    json.allocated_memory = Some(remaining_memory.try_into().unwrap_or_default());
+            if let Some(group_mem_limit) = group.per_world_memory_limit {
+                if allocated_memory as u64 > group_mem_limit as u64 {
+                    return Err(DatabaseError::Unauthorized)
                 }
             }
+
+            //do not enforce total memory limit, as the world will not be enabled yet
         }
 
         Ok(())
@@ -363,32 +352,33 @@ impl ApiUpdate for World {
             }
         }
 
+        json.allocated_memory = Some(json.allocated_memory.unwrap_or(self.allocated_memory as u32));
+        let allocated_memory = json.allocated_memory.unwrap();
+        let enabled = json.enabled.unwrap_or(self.enabled);
+
         //enforce memory limit
-        if let Some(mut allocated_memory) = json.allocated_memory {
+        if enabled {
             if allocated_memory < CONFIG.world.minimum_memory {
-                json.allocated_memory = Some(CONFIG.world.minimum_memory);
-                allocated_memory = CONFIG.world.minimum_memory
+                return Err(DatabaseError::Unauthorized)
             }
+            if let Some(group_mem_limit) = group.per_world_memory_limit {
+                if allocated_memory as u64 > group_mem_limit as u64 {
+                    return Err(DatabaseError::Unauthorized)
+                }
+            }
+
             if let Some(memory_limit) = group.total_memory_limit {
                 if allocated_memory != self.allocated_memory as u32 {
-                    let mut total_memory = 0;
+                    let mut total_memory = allocated_memory as i32;
 
                     for world in &user_worlds {
-                        if world.id != self.id {
+                        if world.id != self.id  && world.enabled {
                             total_memory += world.allocated_memory;
                         }
                     }
-                    let remaining_memory = memory_limit as i32 - total_memory as i32;
-                    if remaining_memory < 0 {
-                        return Err(DatabaseError::Unauthorized);
-                    }
 
-                    if (allocated_memory as i32) > remaining_memory {
-                        debug!(
-                            "changing memory amount for server {} created by {}. requested is {}, max available is {}",
-                            self.id, user.id, memory_limit, remaining_memory
-                        );
-                        json.allocated_memory = Some(remaining_memory.try_into().unwrap());
+                    if total_memory > memory_limit {
+                        return Err(DatabaseError::Unauthorized)
                     }
                 }
             }

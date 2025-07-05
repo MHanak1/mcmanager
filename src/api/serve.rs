@@ -36,79 +36,8 @@ pub async fn run(database: Database, config: config::Config) -> Result<(), anyho
     //TODO: Re-add Rate Limits
 
     let limit = config.private_routes_rate_limit;
-    /*
 
-    let register = axum::post()
-        .and(axum_rate_limit::with_rate_limit(
-            public_routes_rate_limit.clone(),
-        ))
-        .and(axum::path!("api" / "register"))
-        .and(filters::with_db(database.clone()))
-        .and(axum::body::content_length_limit(1024 * 16))
-        .and(axum::body::json())
-        .and(axum::query::<Vec<(String, String)>>())
-        .and_then(api::handlers::user_register);
 
-    let login = axum::post()
-        .and(axum_rate_limit::with_rate_limit(
-            public_routes_rate_limit.clone(),
-        ))
-        .and(axum::path!("api" / "login"))
-        .and(filters::with_db(database.clone()))
-        .and(axum::body::content_length_limit(1024 * 16))
-        .and(axum::body::json())
-        .and_then(api::handlers::user_auth);
-
-    let logout = axum::post()
-        .and(axum_rate_limit::with_rate_limit(
-            private_routes_rate_limit.clone(),
-        ))
-        .and(axum::path!("api" / "logout"))
-        .and(filters::with_db(database.clone()))
-        .and(filters::with_bearer_token())
-        .and_then(api::handlers::logout);
-
-    let user_info = axum::get()
-        .and(axum_rate_limit::with_rate_limit(
-            private_routes_rate_limit.clone(),
-        ))
-        .and(axum::path!("api" / "user"))
-        .and(filters::with_auth(database.clone()))
-        .and_then(api::handlers::user_info);
-
-    let server_info = axum::get()
-        .and(axum_rate_limit::with_rate_limit(
-            public_routes_rate_limit.clone(),
-        ))
-        .and(axum::path!("api" / "info"))
-        .and_then(api::handlers::server_info);
-
-    let is_taken = axum::get()
-        .and(axum_rate_limit::with_rate_limit(
-            private_routes_rate_limit.clone(),
-        ))
-        .and(axum::path!("api" / "valid" / String / String))
-        .and(axum::get())
-        .and(filters::with_db(database.clone()))
-        .and_then(api::handlers::check_free);
-
-    // a hacky way to serve the frontend.
-    let frontend = static_dir!("mcmanager-frontend/dist")
-        .or(axum::path::full().and_then(move |path: FullPath| async move {
-            let path = path.as_str();
-            if path.starts_with("/api") {
-                return Err(axum::reject());
-            }
-
-            if path.contains(".") {
-                return Err(axum::reject());
-            }
-
-            Ok(axum::response::html(include_str!("../../mcmanager-frontend/dist/index.html")))
-        }));
-
-    let log = axum::log("info");
-     */
     let check_free = Router::new()
         .route(
             "/username/{username}",
@@ -126,8 +55,10 @@ pub async fn run(database: Database, config: config::Config) -> Result<(), anyho
     let api = Router::new()
         .route("/login", post(api::handlers::user_auth))
         .route("/logout", post(api::handlers::logout))
+        .route("/register", post(api::handlers::user_register))
         .route("/user", get(api::handlers::user_info))
         .route("/info", get(api::handlers::server_info))
+
         .nest("/valid", check_free)
         .nest("/mods", Mod::routes())
         .nest("/versions", Version::routes())
@@ -143,7 +74,6 @@ pub async fn run(database: Database, config: config::Config) -> Result<(), anyho
 
     let router = Router::new()
         .nest("/api", api)
-        .route("/", get(|| async { "Hello!!" }))
         .layer(
             tower_http::trace::TraceLayer::new_for_http().make_span_with(|request: &Request<_>| {
                 // Log the matched route's path (with placeholders not filled in).
@@ -403,7 +333,7 @@ fn user_creation_and_removal() -> anyhow::Result<()> {
     info!("enabling User5");
     let created: User = serde_json::from_str(
         &client
-            .put(format!("{url}/users/{}", created.id))
+            .patch(format!("{url}/users/{}", created.id))
             .header(header::AUTHORIZATION, format!("Bearer {token}"))
             .body("{\"enabled\": true}")
             .send()?
@@ -425,7 +355,7 @@ fn user_creation_and_removal() -> anyhow::Result<()> {
     info!("updating User5 username");
     let created: User = serde_json::from_str(
         &client
-            .put(format!("{url}/users/{}", created.id))
+            .patch(format!("{url}/users/{}", created.id))
             .header(header::AUTHORIZATION, format!("Bearer {token}"))
             .body("{\"username\": \"User4New\"}")
             .send()?
@@ -443,7 +373,7 @@ fn user_creation_and_removal() -> anyhow::Result<()> {
     info!("updating User5 password");
     let created: User = serde_json::from_str(
         &client
-            .put(format!("{url}/users/{}", created.id))
+            .patch(format!("{url}/users/{}", created.id))
             .header(header::AUTHORIZATION, format!("Bearer {token}"))
             .body("{\"password\": \"Password4New\"}")
             .send()?

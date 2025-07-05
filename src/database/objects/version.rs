@@ -123,7 +123,7 @@ impl ApiObject for Version {
             .route(
                 "/{id}",
                 get(Self::api_get)
-                    .put(Self::api_update)
+                    .patch(Self::api_update)
                     .delete(Self::api_remove),
             )
     }

@@ -177,8 +177,8 @@ impl ApiObject for User {
     fn routes() -> Router<AppState> {
         Router::new()
             .route("/", get(Self::api_list).post(Self::api_create))
-            .route("/{id}", get(Self::api_get).put(Self::api_update).delete(Self::api_remove))
-            .route("/{id}/icon", post(Self::upload_icon).put(Self::upload_icon).get(Self::get_icon))
+            .route("/{id}", get(Self::api_get).patch(Self::api_update).delete(Self::api_remove))
+            .route("/{id}/icon", post(Self::upload_icon).patch(Self::upload_icon).get(Self::get_icon))
     }
 }
 

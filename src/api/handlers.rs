@@ -230,7 +230,7 @@ where
         let user = user.0;
         let mut data = data.0;
         let group = user.group(database.clone(), None).await;
-        //in theory this is redundant, as database::insert checks it as well, but better safe than sorry
+
         if !Self::can_create(&user, &group) {
             return Err(StatusCode::UNAUTHORIZED);
         }
@@ -595,14 +595,19 @@ pub struct Login {
     pub password: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct RegisterQuery {
+    token: Option<String>,
+}
+
 pub async fn user_register(
     database: State<AppState>,
+    query: axum::extract::Query<RegisterQuery>,
     credentials: axum::extract::Json<Login>,
-    query: axum::extract::Query<Vec<(String, String)>>,
-) -> Result<axum::Json<User>, StatusCode> {
+) -> Result<impl IntoResponse, StatusCode> {
     let database = database.0;
     let credentials = credentials.0;
-    let query = query.0;
+    let token = query.0.token;
     //arbitrary values but who cares (foreshadowing)
     const ALLOWED_USERNAME_CHARS: &str =
         "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ012345789-_";
@@ -625,14 +630,6 @@ pub async fn user_register(
     for char in credentials.password.chars() {
         if !ALLOWED_PASSWORD_CHARS.contains(char) {
             return Err(StatusCode::BAD_REQUEST);
-        }
-    }
-
-    let mut token = None;
-    for (parameter, value) in query {
-        if parameter == "token" {
-            token = Uuid::from_str(&value).ok();
-            break;
         }
     }
 
