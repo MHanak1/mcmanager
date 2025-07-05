@@ -745,6 +745,7 @@ pub async fn server_info() -> Result<impl IntoResponse, StatusCode> {
         min_memory: u32,
         default_memory: u32,
         hostname: String,
+        port: u16,
     }
 
     Ok(axum::Json(ServerInfo {
@@ -757,6 +758,7 @@ pub async fn server_info() -> Result<impl IntoResponse, StatusCode> {
             min_memory: CONFIG.world.minimum_memory,
             default_memory: CONFIG.world_defaults.allocated_memory,
             hostname: CONFIG.velocity.hostname.clone(),
+            port: CONFIG.velocity.port,
         },
     }))
 }

@@ -134,14 +134,13 @@ impl VelocityServer for InternalVelocityServer {
         for (ip, host) in hosts {
             //println!("{}: {}", ip, host);
             servers_string.push_str(format!("{host} = \"{ip}\"\n").as_str());
-            hosts_string.push_str(&format!(
-                "\"{host}.{}\" = [\n    \"{host}\"\n]\n",
-                CONFIG.velocity.hostname.split(":").last().unwrap()
-            ));
+            hosts_string.push_str(&format!("\"{host}.{}\" = [\n    \"{host}\"\n]\n", CONFIG.velocity.hostname));
         }
         let binding = config.replace("$servers", servers_string.as_str());
         let config = &binding;
         let binding = config.replace("$hosts", hosts_string.as_str());
+        let config = &binding;
+        let binding = config.replace("$port", CONFIG.velocity.port.to_string().as_str());
         let config = &binding;
 
         let mut file = File::create(util::dirs::velocity_dir().join("velocity.toml"))?;
