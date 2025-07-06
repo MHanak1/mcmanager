@@ -46,6 +46,7 @@ axum-extra = { version = "0.10.1", features = ["cookie"] }
 image = "0.25.6"
 tokio-util = "0.7.15"
 moka = { version = "0.12.10", features = ["future", "sync"] }
+tower_governor = { version = "0.7.0", features = ["default", "axum", "tracing"]}
 
 [dev-dependencies]
 pretty_assertions = "1.4.1"

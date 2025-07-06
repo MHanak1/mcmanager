@@ -7,7 +7,7 @@ use crate::database::objects::{Group, InviteLink, Mod, ModLoader, Session, User,
 use crate::minecraft::velocity::{InternalVelocityServer, VelocityServer};
 use crate::util::dirs::icons_dir;
 use crate::{api, util};
-use axum::Router;
+use axum::{Router, ServiceExt};
 use axum::extract::{MatchedPath, Path, State};
 use axum::http::Request;
 use axum::routing::{MethodRouter, get, post};
@@ -22,20 +22,45 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
+use axum::response::Response;
+use reqwest::StatusCode;
 use test_log::test;
 use tokio::sync::Mutex;
-use tracing::info_span;
+use tokio_util::bytes::BufMut;
+use tower_governor::governor::GovernorConfigBuilder;
+use tower_governor::GovernorLayer;
+use tower_http::classify::ServerErrorsFailureClass;
+use tower_http::LatencyUnit;
+use tower_http::trace::{DefaultMakeSpan, DefaultOnFailure, DefaultOnResponse};
+use tracing::{info_span, Level, Span};
+use crate::minecraft::server::Server;
 
 pub type AppState = Database;
 
 pub async fn run(database: Database, config: config::Config) -> Result<(), anyhow::Error> {
     util::dirs::init_dirs().expect("Failed to initialize the data directory");
 
-    let limit = config.public_routes_rate_limit;
 
-    //TODO: Re-add Rate Limits
+    let governor_conf = Arc::new(
+        GovernorConfigBuilder::default()
+            .key_extractor(tower_governor::key_extractor::PeerIpKeyExtractor)
+            .per_millisecond((1000.0 / CONFIG.api_rate_limit) as u64)
+            .burst_size((10.0 * CONFIG.api_rate_limit) as u32)
+            .use_headers()
+            .finish()
+            .unwrap(),
+    );
+    let limit_layer = governor_conf.limiter().clone();
 
-    let limit = config.private_routes_rate_limit;
+    let interval = Duration::from_secs(60);
+    // a separate background task to clean up
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(interval);
+            tracing::info!("rate limiting storage size: {}", limit_layer.len());
+            limit_layer.retain_recent();
+        }
+    });
 
 
     let check_free = Router::new()
@@ -74,30 +99,22 @@ pub async fn run(database: Database, config: config::Config) -> Result<(), anyho
 
     let router = Router::new()
         .nest("/api", api)
+        .layer(GovernorLayer {
+            config: governor_conf,
+        })
         .layer(
-            tower_http::trace::TraceLayer::new_for_http().make_span_with(|request: &Request<_>| {
-                // Log the matched route's path (with placeholders not filled in).
-                // Use request.uri() or OriginalUri if you want the real path.
-                let matched_path = request
-                    .extensions()
-                    .get::<MatchedPath>()
-                    .map(MatchedPath::as_str);
-
-                info_span!(
-                    "http_request",
-                    method = ?request.method(),
-                    matched_path,
-                    some_other_field = tracing::field::Empty,
-                )
-            }),
-        );
+            tower_http::trace::TraceLayer::new_for_http()
+                .make_span_with(DefaultMakeSpan::default().level(Level::INFO))
+                .on_response(DefaultOnResponse::default().latency_unit(LatencyUnit::Micros))
+        )
+        ;
 
     let addr = format!("{}:{}", config.listen_address, config.listen_port);
 
     info!("listening on {}", addr);
     let listener = tokio::net::TcpListener::bind(addr).await?;
 
-    axum::serve(listener, router).await?;
+    axum::serve(listener, router.into_make_service_with_connect_info::<SocketAddr>()).await?;
 
     Ok(())
 }
@@ -130,7 +147,7 @@ fn user_creation_and_removal() -> anyhow::Result<()> {
         let mut config = CONFIG.clone();
         config.listen_port = TEST_PORT;
         // essentially disables the rate limit
-        config.public_routes_rate_limit = (10000000, 1);
+        config.api_rate_limit = (10000000, 1);
         config.private_routes_rate_limit = (1000000, 1);
         let rt = tokio::runtime::Runtime::new().expect("Can't create runtime");
         rt.block_on(run(database, config))

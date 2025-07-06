@@ -2,12 +2,8 @@
 listen_address = "0.0.0.0"
 # port of the api server
 listen_port = 3030
-# maximum requests to public endpoints (like login) per n seconds
-# default: 10 requests per 5 seconds
-public_routes_rate_limit = [10, 5]
-# maximum requests to private endpoints (those which requre authentication) per minute
-# default: 50 requests per 5 seconds
-private_routes_rate_limit = [50, 5]
+# the maximum amount of requests per second averaged over 10 seconds. keep in mind that things like image fetches also count toward this
+api_rate_limit = 5.0
 # whether to require an invite for a user to register
 require_invite_to_register = true
 

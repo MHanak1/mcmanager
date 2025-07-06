@@ -467,25 +467,27 @@ where
         let mut bytes = None;
 
         while let Some(field) = multipart.next_field().await.unwrap() {
-            let filename = if let Some(filename) = field.file_name() {
-                filename.to_string()
-            } else {
-                continue;
-            };
+            if let Some("icon") = field.name() {
+                let filename = if let Some(filename) = field.file_name() {
+                    filename.to_string()
+                } else {
+                    continue;
+                };
 
-            let field_bytes = if let Ok(bytes) = field.bytes().await {
-                bytes
-            } else {
-                continue;
-            };
+                let field_bytes = if let Ok(bytes) = field.bytes().await {
+                    bytes
+                } else {
+                    continue;
+                };
 
-            let extension = filename.split('.').last();
+                let extension = filename.split('.').last();
 
-            if let Some(extension) = extension {
-                let image_format = ImageFormat::from_extension(extension);
-                if let Some(image_format) = image_format {
-                    bytes = Some((field_bytes, image_format));
-                    break;
+                if let Some(extension) = extension {
+                    let image_format = ImageFormat::from_extension(extension);
+                    if let Some(image_format) = image_format {
+                        bytes = Some((field_bytes, image_format));
+                        break;
+                    }
                 }
             }
         }
@@ -540,7 +542,7 @@ where
         Ok(StatusCode::OK)
     }
 
-    async fn get_icon(id: Path<Id>) -> Result<impl IntoResponse, StatusCode> {
+    async fn get_icon(id: Path<Id>, _user: UserAuth /*check if the user is authenticated, but do not check if they have access to the object, since it doesn't justify the extra DB lookups*/) -> Result<impl IntoResponse, StatusCode> {
         let mut path = icons_dir().join(Self::table_name());
         let (path, is_gif) = if path.join(format!("{}.webp", id.to_string())).exists() {
             (path.join(format!("{}.webp", id.to_string())), false)
