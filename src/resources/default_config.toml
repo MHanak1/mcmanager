@@ -3,7 +3,7 @@ listen_address = "0.0.0.0"
 # port of the api server
 listen_port = 3030
 # the maximum amount of requests per second averaged over 10 seconds. keep in mind that things like image fetches also count toward this
-api_rate_limit = 5.0
+api_rate_limit = 10.0
 # whether to require an invite for a user to register
 require_invite_to_register = true
 

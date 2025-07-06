@@ -43,7 +43,7 @@ pub async fn run(database: Database, config: config::Config) -> Result<(), anyho
 
     let governor_conf = Arc::new(
         GovernorConfigBuilder::default()
-            .key_extractor(tower_governor::key_extractor::PeerIpKeyExtractor)
+            .key_extractor(tower_governor::key_extractor::SmartIpKeyExtractor)
             .per_millisecond((1000.0 / CONFIG.api_rate_limit) as u64)
             .burst_size((10.0 * CONFIG.api_rate_limit) as u32)
             .use_headers()
