@@ -33,13 +33,16 @@ use tower_http::classify::ServerErrorsFailureClass;
 use tower_http::LatencyUnit;
 use tower_http::trace::{DefaultMakeSpan, DefaultOnFailure, DefaultOnResponse};
 use tracing::{info_span, Level, Span};
-use crate::minecraft::server::Server;
+use crate::minecraft::server::{MinecraftServerCollection, Server};
 
-pub type AppState = Database;
+#[derive(Debug, Clone)]
+pub struct AppState {
+    pub database: Database,
+    pub servers: MinecraftServerCollection,
+}
 
-pub async fn run(database: Database, config: config::Config) -> Result<(), anyhow::Error> {
+pub async fn run(state: AppState, config: config::Config) -> Result<(), anyhow::Error> {
     util::dirs::init_dirs().expect("Failed to initialize the data directory");
-
 
     let governor_conf = Arc::new(
         GovernorConfigBuilder::default()
@@ -93,7 +96,7 @@ pub async fn run(database: Database, config: config::Config) -> Result<(), anyho
         .nest("/users", User::routes())
         .nest("/sessions", Session::routes())
         .nest("/invite_links", InviteLink::routes())
-        .with_state(database.clone());
+        .with_state(state);
 
     //TODO: include frontend
 

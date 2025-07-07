@@ -55,6 +55,7 @@ impl FromRequestParts<AppState> for WithSession {
         let token = BearerToken::from_request_parts(parts, state).await?;
 
         match state
+            .database
             .get_session(token.0, None)
             .await
             .map_err(handle_database_error)
@@ -83,6 +84,7 @@ impl FromRequestParts<AppState> for UserAuth {
         let session = WithSession::from_request_parts(parts, state).await?;
 
         match state
+            .database
             .get_user(session.0.user_id, None)
             .await
             .map_err(handle_database_error)

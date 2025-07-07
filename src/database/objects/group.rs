@@ -319,14 +319,15 @@ impl ApiList for Group {}
 #[async_trait]
 impl ApiGet for Group {
     async fn api_get(
-        id: Path<Id>,
-        database: State<AppState>,
-        user: UserAuth,
+        Path(id): Path<Id>,
+        State(state): State<AppState>,
+        UserAuth(user): UserAuth,
     ) -> Result<axum::Json<Self>, StatusCode> {
-        let group = user.0.group(database.0.clone(), None).await;
+        let group = user.group(state.clone(), None).await;
         let object = {
-            database
-                .get_group(id.0, Some((&user.0, &group)))
+            state
+                .database
+                .get_group(id, Some((&user, &group)))
                 .await
                 .map_err(handle_database_error)?
         };

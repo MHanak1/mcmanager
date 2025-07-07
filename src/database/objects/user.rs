@@ -11,7 +11,7 @@ use crate::database::types::{Access, Column, Id};
 use crate::database::{Database, DatabaseError, ValueType};
 use crate::minecraft::server::ServerConfigLimit;
 use async_trait::async_trait;
-use axum::Router;
+use axum::{Json, Router};
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post};
@@ -190,14 +190,15 @@ impl ApiList for User {}
 #[async_trait]
 impl ApiGet for User {
     async fn api_get(
-        id: Path<Id>,
-        database: State<AppState>,
-        user: UserAuth,
+        Path(id): Path<Id>,
+        State(state): State<AppState>,
+        UserAuth(user): UserAuth,
     ) -> Result<axum::Json<Self>, StatusCode> {
-        let group = user.0.group(database.0.clone(), None).await;
+        let group = user.group(state.clone(), None).await;
         let object = {
-            database
-                .get_user(id.0, Some((&user.0, &group)))
+            state
+                .database
+                .get_user(id, Some((&user, &group)))
                 .await
                 .map_err(handle_database_error)?
         };
@@ -210,11 +211,12 @@ impl ApiGet for User {
 impl ApiCreate for User {
     async fn after_api_create(
         &self,
-        database: AppState,
+        state: AppState,
         json: &mut Self::JsonFrom,
         _user: &User,
     ) -> Result<(), DatabaseError> {
-        database
+        state
+            .database
             .insert(&Password::new(self.id, &json.password), None)
             .await
             .expect("failed to create the password for the user.");
@@ -225,15 +227,16 @@ impl ApiCreate for User {
 impl ApiUpdate for User {
     async fn after_api_update(
         &self,
-        database: AppState,
+        state: AppState,
         json: &mut Self::JsonUpdate,
         _user: &User,
     ) -> Result<(), DatabaseError> {
         //the the password is first created then recreated so it can handle a missing password entry for the user
         if let Some(password) = json.password.clone() {
-            match database.get_one::<Password>(self.id, None).await {
+            match state.database.get_one::<Password>(self.id, None).await {
                 Ok(password) => {
-                    database
+                    state
+                        .database
                         .remove(&password, None)
                         .await
                         .expect("failed to remove the password for the user");
@@ -243,7 +246,8 @@ impl ApiUpdate for User {
                 }
             }
 
-            database
+            state
+                .database
                 .insert(&Password::new(self.id, &password), None)
                 .await
                 .expect("update the password for the user");
@@ -255,38 +259,38 @@ impl ApiUpdate for User {
 impl ApiRemove for User {
     async fn before_api_delete(
         &self,
-        database: AppState,
+        state: AppState,
         user: &User,
     ) -> Result<(), DatabaseError> {
         info!("removing user {}", self.id);
-        let worlds = database.get_all_where::<World, _>("owner_id", self.id, None/*in theory here the access restriction should be put but i couldn't be bothered with that*/).await?;
+        let worlds = state.database.get_all_where::<World, _>("owner_id", self.id, None/*in theory here the access restriction should be put but i couldn't be bothered with that*/).await?;
         let worlds_task = async {
             let tasks = worlds.iter().map(|world| async {
-                if let Err(err) = world.before_api_delete(database.clone(), user).await {
+                if let Err(err) = world.before_api_delete(state.clone(), user).await {
                     error! {"{err}"}
                 }
-                if let Err(err) = database.remove(world, None).await {
+                if let Err(err) = state.database.remove(world, None).await {
                     error! {"{err}"}
                 }
-                if let Err(err) = world.after_api_delete(database.clone(), user).await {
+                if let Err(err) = world.after_api_delete(state.clone(), user).await {
                     error! {"{err}"}
                 }
             });
             future::join_all(tasks).await
         };
 
-        let mods = database.get_all_where::<Mod, _>("owner_id", self.id, None/*in theory here the access restriction should be put but i couldn't be bothered with that*/).await?;
+        let mods = state.database.get_all_where::<Mod, _>("owner_id", self.id, None/*in theory here the access restriction should be put but i couldn't be bothered with that*/).await?;
         let mods_task = async {
-            let database = database.clone();
+            let database = state.clone();
             let tasks = mods.iter().map(|mcmod| async {
-                let database = database.clone();
-                if let Err(err) = mcmod.before_api_delete(database.clone(), user).await {
+                let state = database.clone();
+                if let Err(err) = mcmod.before_api_delete(state.clone(), user).await {
                     error! {"{err}"}
                 }
-                if let Err(err) = database.remove(mcmod, None).await {
+                if let Err(err) = state.database.remove(mcmod, None).await {
                     error! {"{err}"}
                 }
-                if let Err(err) = mcmod.after_api_delete(database, user).await {
+                if let Err(err) = mcmod.after_api_delete(state, user).await {
                     error! {"{err}"}
                 }
             });
@@ -303,8 +307,9 @@ impl ApiRemove for User {
 impl ApiIcon for User {}
 
 impl User {
-    pub async fn group(&self, databse: AppState, user: Option<(&User, &Group)>) -> Group {
-        databse
+    pub async fn group(&self, state: AppState, user: Option<(&User, &Group)>) -> Group {
+        state
+            .database
             .get_group(self.group_id, user)
             .await
             .expect(&format!("couldn't find group with id {}", self.group_id))

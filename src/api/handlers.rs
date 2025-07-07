@@ -54,16 +54,13 @@ where
 {
     //in theory the user filter should be done within the sql query, but for the sake of simplicity we do that when collecting the results
     async fn api_list(
-        database: State<AppState>,
-        user: UserAuth,
-        filters: axum::extract::Query<Vec<(String, String)>>,
+        State(state): State<AppState>,
+        UserAuth(user): UserAuth,
+        axum::extract::Query(filters): axum::extract::Query<Vec<(String, String)>>,
     ) -> Result<axum::Json<Vec<Self>>, StatusCode> {
-        let database = database.0;
-        let user = user.0;
-        let filters = filters.0;
-        let group = user.group(database.clone(), None).await;
+        let group = user.group(state.clone(), None).await;
         let objects: Vec<Self> = {
-            execute_on_enum!(&database.pool; (DatabasePool::Postgres, DatabasePool::Sqlite) |pool| {
+            execute_on_enum!(&state.database.pool; (DatabasePool::Postgres, DatabasePool::Sqlite) |pool| {
                 let mut query = QueryBuilder::select::<Self>();
                 for (column, value) in filters {
                     let (value, filter_type) = {
@@ -196,14 +193,15 @@ where
     Self: Unpin,
 {
     async fn api_get(
-        id: Path<Id>,
-        database: State<AppState>,
-        user: UserAuth,
+        Path(id): Path<Id>,
+        State(state): State<AppState>,
+        UserAuth(user): UserAuth,
     ) -> Result<axum::Json<Self>, StatusCode> {
-        let group = user.0.group(database.0.clone(), None).await;
+        let group = user.group(state.clone(), None).await;
         let object = {
-            database
-                .get_one::<Self>(id.0, Some((&user.0, &group)))
+            state
+                .database
+                .get_one::<Self>(id, Some((&user, &group)))
                 .await
                 .map_err(handle_database_error)?
         };
@@ -222,14 +220,12 @@ where
     Self: for<'a> IntoArguments<'a, sqlx::Postgres>,
 {
     async fn api_create(
-        database: State<AppState>,
-        user: UserAuth,
-        data: axum::extract::Json<Self::JsonFrom>,
-    ) -> Result<axum::Json<Self>, StatusCode> {
-        let database = database.0;
-        let user = user.0;
-        let mut data = data.0;
-        let group = user.group(database.clone(), None).await;
+        State(state): State<AppState>,
+        UserAuth(user): UserAuth,
+        Json(data): Json<Self::JsonFrom>,
+    ) -> Result<Json<Self>, StatusCode> {
+        let mut data = data;
+        let group = user.group(state.clone(), None).await;
 
         if !Self::can_create(&user, &group) {
             return Err(StatusCode::UNAUTHORIZED);
@@ -237,11 +233,12 @@ where
 
         let object = {
             debug!("running before create for /{}", Self::table_name());
-            Self::before_api_create(database.clone(), &mut data, &user)
+            Self::before_api_create(state.clone(), &mut data, &user)
                 .await
                 .map_err(handle_database_error)?;
             let object = Self::from_json(&data, &user);
-            let _ = database
+            let _ = state
+                .database
                 .insert(&object, Some((&user, &group)))
                 .await
                 .map_err(handle_database_error)?;
@@ -252,7 +249,7 @@ where
                 object.id()
             );
             object
-                .after_api_create(database, &mut data, &user)
+                .after_api_create(state, &mut data, &user)
                 .await
                 .map_err(handle_database_error)?;
             object
@@ -297,19 +294,17 @@ where
     Self: Clone,
 {
     async fn api_update(
-        id: Path<Id>,
-        database: State<AppState>,
-        user: UserAuth,
-        data: axum::Json<Self::JsonUpdate>,
+        Path(id): Path<Id>,
+        State(state): State<AppState>,
+        UserAuth(user): UserAuth,
+        Json(data): axum::Json<Self::JsonUpdate>,
     ) -> Result<axum::Json<Self>, StatusCode> {
-        let id = id.0;
-        let database = database.0;
-        let user = user.0;
-        let mut data = data.0;
+        let mut data = data;
         let object = {
-            let group = user.group(database.clone(), None).await;
+            let group = user.group(state.clone(), None).await;
 
-            let object = database
+            let object = state
+                .database
                 .get_one::<Self>(id, Some((&user, &group)))
                 .await
                 .map_err(handle_database_error)?;
@@ -320,13 +315,14 @@ where
                 object.id()
             );
             object
-                .before_api_update(database.clone(), &mut data, &user)
+                .before_api_update(state.clone(), &mut data, &user)
                 .await
                 .map_err(handle_database_error)?;
 
             let object = object.update_with_json(&data);
 
-            let _ = database
+            let _ = state
+                .database
                 .update(&object, Some((&user, &group)))
                 .await
                 .map_err(handle_database_error)?;
@@ -337,7 +333,7 @@ where
                 object.id()
             );
             object
-                .after_api_update(database, &mut data, &user)
+                .after_api_update(state, &mut data, &user)
                 .await
                 .map_err(handle_database_error)?;
             object
@@ -379,16 +375,17 @@ where
     Self: Unpin,
 {
     async fn api_remove(
-        id: Path<Id>,
-        database: State<AppState>,
-        user: UserAuth,
+        Path(id): Path<Id>,
+        State(database): State<AppState>,
+        UserAuth(user): UserAuth,
     ) -> Result<StatusCode, StatusCode> {
-        let id = id.0;
-        let database = database.0;
-        let user = user.0;
-        let group = user.group(database.clone(), None).await;
+        let id = id;
+        let state = database;
+        let user = user;
+        let group = user.group(state.clone(), None).await;
 
-        let object = database
+        let object = state
+            .database
             .get_one::<Self>(id, Some((&user, &group)))
             .await
             .map_err(handle_database_error)?;
@@ -399,11 +396,12 @@ where
             object.id()
         );
         object
-            .before_api_delete(database.clone(), &user)
+            .before_api_delete(state.clone(), &user)
             .await
             .map_err(handle_database_error)?;
 
-        let _ = database
+        let _ = state
+            .database
             .remove(&object, Some((&user, &group)))
             .await
             .map_err(handle_database_error)?;
@@ -414,7 +412,7 @@ where
             object.id()
         );
         object
-            .after_api_delete(database.clone(), &user)
+            .after_api_delete(state.clone(), &user)
             .await
             .map_err(handle_database_error)?;
 
@@ -454,13 +452,14 @@ where
         headers: HeaderMap,
         mut multipart: Multipart,
     ) -> Result<impl IntoResponse, StatusCode> {
-        let database = state.0;
+        let state = state.0;
         let id = id.0;
         let user = user.0;
 
         //check if the asset exists and the user has access to it
-        let _ = database
-            .get_one::<Self>(id, Some((&user, &user.group(database.clone(), None).await)))
+        let _ = state
+            .database
+            .get_one::<Self>(id, Some((&user, &user.group(state.clone(), None).await)))
             .await
             .map_err(|_| StatusCode::NOT_FOUND)?;
 
@@ -607,7 +606,7 @@ pub async fn user_register(
     query: axum::extract::Query<RegisterQuery>,
     credentials: axum::extract::Json<Login>,
 ) -> Result<impl IntoResponse, StatusCode> {
-    let database = database.0;
+    let state = database.0;
     let credentials = credentials.0;
     let token = query.0.token;
     //arbitrary values but who cares (foreshadowing)
@@ -637,7 +636,7 @@ pub async fn user_register(
 
     let mut can_continue = false;
     let invite = if let Some(token) = token {
-        let invite: Result<InviteLink, _> = database.get_where("invite_token", token, None).await;
+        let invite: Result<InviteLink, _> = state.database.get_where("invite_token", token, None).await;
         if let Ok(invite) = invite {
             can_continue = true;
             Some(invite)
@@ -655,7 +654,8 @@ pub async fn user_register(
         return Err(StatusCode::UNAUTHORIZED);
     }
 
-    if database
+    if state
+        .database
         .get_where::<User, _>("username", &credentials.username, None)
         .await
         .is_ok()
@@ -663,7 +663,8 @@ pub async fn user_register(
         return Err(StatusCode::CONFLICT);
     }
 
-    let user = database
+    let user = state
+        .database
         .create_user(&credentials.username, &credentials.password)
         .await
         .map_err(|err| {
@@ -671,7 +672,7 @@ pub async fn user_register(
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
     if let Some(invite) = invite {
-        database.remove(&invite, None).await.map_err(|err| {
+        state.database.remove(&invite, None).await.map_err(|err| {
             error!("{err}");
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
@@ -712,13 +713,14 @@ pub async fn user_auth(
 
 #[allow(clippy::unused_async)]
 pub async fn logout(
-    database: State<AppState>,
+    state: State<AppState>,
     session: WithSession,
 ) -> Result<StatusCode, StatusCode> {
-    let database = database.0;
+    let state = state.0;
     let session = session.0;
 
-    database
+    state
+        .database
         .remove(&session, None)
         .await
         .map_err(handle_database_error)?;
@@ -770,6 +772,7 @@ pub async fn get_username_valid(
     database: State<AppState>,
 ) -> impl IntoResponse {
     if database
+        .database
         .get_where::<User, _>("username", username.0, None)
         .await
         .is_ok()
@@ -780,11 +783,12 @@ pub async fn get_username_valid(
     }
 }
 pub async fn get_invite_valid(
-    invite_link: Path<Uuid>,
-    database: State<AppState>,
+    Path(invite_link): Path<Uuid>,
+    State(database): State<AppState>,
 ) -> impl IntoResponse {
     if database
-        .get_where::<InviteLink, _>("invite_token", invite_link.0, None)
+        .database
+        .get_where::<InviteLink, _>("invite_token", invite_link, None)
         .await
         .is_ok()
     {
@@ -796,12 +800,13 @@ pub async fn get_invite_valid(
 
 // user auth not needed, but unauthenticated users should not access this route
 pub async fn get_hostname_valid(
-    hostname: Path<String>,
-    database: State<AppState>,
+    Path(hostname): Path<String>,
+    State(state): State<AppState>,
     _: UserAuth,
 ) -> impl IntoResponse {
-    if database
-        .get_where::<World, _>("hostname", hostname.0, None)
+    if state
+        .database
+        .get_where::<World, _>("hostname", hostname, None)
         .await
         .is_ok()
     {

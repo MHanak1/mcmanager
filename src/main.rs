@@ -5,7 +5,7 @@ use mcmanager::config::{CONFIG, DatabaseType};
 use mcmanager::database::objects::{Group, User, World};
 use mcmanager::database::types::Id;
 use mcmanager::database::{Database, DatabasePool, objects};
-use mcmanager::minecraft::server::ServerConfigLimit;
+use mcmanager::minecraft::server::{MinecraftServerCollection, ServerConfigLimit};
 use mcmanager::minecraft::velocity::{InternalVelocityServer, VelocityServer};
 use mcmanager::{bin, util};
 use serde::Deserialize;
@@ -18,6 +18,7 @@ use std::fs::File;
 use std::io::{Read, Write};
 use std::path::Path;
 use std::time::Duration;
+use mcmanager::api::serve::AppState;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -63,6 +64,7 @@ async fn main() -> Result<()> {
 
     let database = Database::new(pool);
     database.init().await.expect("Failed to init database");
+
 
     let second_launch = database.get_all::<User>(None).await?.is_empty();
 
@@ -246,33 +248,44 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-    tokio::task::spawn(async {
-        let mut interval = tokio::time::interval(Duration::from_millis(1000));
-        loop {
-            interval.tick().await;
-            mcmanager::minecraft::server::util::refresh_servers().await;
-        }
-    });
+    let state = AppState {
+        database,
+        servers: MinecraftServerCollection::new(),
+    };
 
-    tokio::task::spawn(async {
-        info!("starting velocity at {}", CONFIG.velocity.port);
-        let mut velocity_server =
-            InternalVelocityServer::new().expect("failed to create a velocity server");
-        velocity_server
-            .start()
-            .await
-            .expect("failed to start a velocity server");
-
-        let mut interval = tokio::time::interval(Duration::from_millis(1000));
-        loop {
-            interval.tick().await;
-            if let Err(err) = velocity_server.update().await {
-                error!("failed to update velocity server: {err}");
+    tokio::task::spawn({
+        let servers = state.servers.clone();
+        async move {
+            let mut interval = tokio::time::interval(Duration::from_millis(1000));
+            loop {
+                interval.tick().await;
+                servers.refresh_servers().await;
             }
         }
     });
 
-    mcmanager::api::serve::run(database, CONFIG.clone()).await;
+    tokio::task::spawn({
+        let servers = state.servers.clone();
+        async move {
+            info!("starting velocity at {}", CONFIG.velocity.port);
+            let mut velocity_server =
+                InternalVelocityServer::new(servers).expect("failed to create a velocity server");
+            velocity_server
+                .start()
+                .await
+                .expect("failed to start a velocity server");
+
+            let mut interval = tokio::time::interval(Duration::from_millis(1000));
+            loop {
+                interval.tick().await;
+                if let Err(err) = velocity_server.update().await {
+                    error!("failed to update velocity server: {err}");
+                }
+            }
+        }
+    });
+
+    mcmanager::api::serve::run(state, CONFIG.clone()).await?;
     Ok(())
 }
 

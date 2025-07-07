@@ -18,6 +18,7 @@ use log::{debug, error, info};
 use serde::{Deserialize, Deserializer, Serialize};
 use sqlx::{Any, Arguments, Encode, FromRow, IntoArguments};
 use std::collections::HashMap;
+use std::os::linux::raw::stat;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::task::id;
@@ -251,15 +252,16 @@ impl ApiGet for World {}
 impl ApiCreate for World {
     //TODO: this needs a rewrite, too much repeated code
     async fn before_api_create(
-        database: AppState,
+        state: AppState,
         json: &mut Self::JsonFrom,
         user: &User,
     ) -> Result<(), DatabaseError> {
-        let group = user.group(database.clone(), None).await;
-        let user_worlds: Vec<World> = database
+        let group = user.group(state.clone(), None).await;
+        let user_worlds: Vec<World> = state
+            .database
             .get_all_where("owner_id", user.id, Some((&user, &group)))
             .await?;
-        let group = user.group(database.clone(), None).await;
+        let group = user.group(state.clone(), None).await;
 
         //enforce the world limit
         if let Some(world_limit) = group.world_limit {
@@ -269,7 +271,8 @@ impl ApiCreate for World {
         }
 
         json.hostname = into_valid_hostname(&json.hostname);
-        if !database
+        if !state
+            .database
             .get_all_where::<World, _>("hostname", json.hostname.clone(), None)
             .await?
             .is_empty()
@@ -298,11 +301,11 @@ impl ApiCreate for World {
     }
     async fn after_api_create(
         &self,
-        _database: AppState,
+        appstate: AppState,
         _json: &mut Self::JsonFrom,
         _user: &User,
     ) -> Result<(), DatabaseError> {
-        let _ = server::get_or_create_server(self).await;
+        let _ = appstate.servers.get_or_create_server(self).await;
         Ok(())
     }
 }
@@ -311,12 +314,13 @@ impl ApiUpdate for World {
     //TODO: this needs a rewrite, too much repeated code
     async fn before_api_update(
         &self,
-        database: AppState,
+        state: AppState,
         json: &mut Self::JsonUpdate,
         user: &User,
     ) -> Result<(), DatabaseError> {
-        let group = user.group(database.clone(), None).await;
-        let user_worlds: Vec<World> = database
+        let group = user.group(state.clone(), None).await;
+        let user_worlds: Vec<World> = state
+            .database
             .get_all_where("owner_id", user.id, Some((&user, &group)))
             .await?;
 
@@ -338,7 +342,8 @@ impl ApiUpdate for World {
             json.hostname = Some(into_valid_hostname(hostname))
         }
         if let Some(hostname) = &json.hostname {
-            if match database
+            if match state
+                .database
                 .get_where::<World, _>("hostname", hostname.clone(), None)
                 .await
             {
@@ -392,11 +397,11 @@ impl ApiUpdate for World {
     }
     async fn after_api_update(
         &self,
-        _database: AppState,
+        app_state: AppState,
         _json: &mut Self::JsonUpdate,
         _user: &User,
     ) -> Result<(), DatabaseError> {
-        let server = server::get_or_create_server(self)
+        let server = app_state.servers.get_or_create_server(self)
             .await
             .map_err(|err| DatabaseError::InternalServerError(err.to_string()))?;
         let mut server = server.lock().await;
@@ -411,11 +416,11 @@ impl ApiUpdate for World {
 impl ApiRemove for World {
     async fn before_api_delete(
         &self,
-        database: AppState,
+        app_state: AppState,
         user: &User,
     ) -> Result<(), DatabaseError> {
         info!("removing world {}", self.id);
-        match server::get_or_create_server(self).await {
+        match app_state.servers.get_or_create_server(self).await {
             Ok(server) => server
                 .lock()
                 .await
@@ -430,8 +435,9 @@ impl ApiRemove for World {
 impl ApiIcon for World {}
 
 impl World {
-    pub async fn version(&self, database: AppState, user: Option<(&User, &Group)>) -> Version {
-        database
+    pub async fn version(&self, state: AppState, user: Option<(&User, &Group)>) -> Version {
+        state
+            .database
             .get_one(self.version_id, user)
             .await
             .expect(&format!(
@@ -439,8 +445,9 @@ impl World {
                 self.version_id
             ))
     }
-    pub async fn owner(&self, database: AppState, user: Option<(&User, &Group)>) -> User {
-        database
+    pub async fn owner(&self, state: AppState, user: Option<(&User, &Group)>) -> User {
+        state
+            .database
             .get_one::<User>(self.owner_id, user)
             .await
             .expect(&format!("couldn't find user with id {}", self.owner_id))
@@ -448,22 +455,23 @@ impl World {
     #[allow(clippy::needless_pass_by_value)]
     async fn world_get_status(
         id: Path<Id>,
-        db_mutex: State<AppState>,
+        state: State<AppState>,
         user: UserAuth,
     ) -> Result<impl IntoResponse, axum::http::StatusCode> {
         let id = id.0;
-        let db_mutex = db_mutex.0;
+        let state = state.0;
         let user = user.0;
 
         {
-            let group = user.group(db_mutex.clone(), None).await;
-            db_mutex
+            let group = user.group(state.clone(), None).await;
+            state
+                .database
                 .get_one::<Self>(id, Some((&user, &group)))
                 .await
                 .map_err(crate::api::handlers::handle_database_error)?;
         }
 
-        let server = server::get_server(id);
+        let server = state.servers.get_server(id);
         let status = match server.await {
             Some(server) => server.lock().await.status().await,
             None => Ok(MinecraftServerStatus::Exited(0)),
@@ -496,23 +504,24 @@ impl World {
     #[allow(clippy::needless_pass_by_value)]
     async fn get_server_config(
         id: Path<Id>,
-        database: State<AppState>,
+        state: State<AppState>,
         user: UserAuth,
     ) -> Result<impl IntoResponse, axum::http::StatusCode> {
         let id = id.0;
-        let database = database.0;
+        let state = state.0;
         let user = user.0;
 
-        let group = user.group(database.clone(), None).await;
+        let group = user.group(state.clone(), None).await;
 
         let world = {
-            database
+            state
+                .database
                 .get_one::<Self>(id, Some((&user, &group)))
                 .await
                 .map_err(crate::api::handlers::handle_database_error)?
         };
 
-        let server = server::get_or_create_server(&world).await.map_err(|err| {
+        let server = state.servers.get_or_create_server(&world).await.map_err(|err| {
             error!("{err}");
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
@@ -543,25 +552,26 @@ impl World {
     #[allow(clippy::needless_pass_by_value)]
     async fn set_server_config(
         id: Path<Id>,
-        database: State<AppState>,
+        state: State<AppState>,
         user: UserAuth,
         new_config: axum::extract::Json<HashMap<String, String>>,
     ) -> Result<impl IntoResponse, axum::http::StatusCode> {
         let id = id.0;
-        let database = database.0;
+        let state = state.0;
         let user = user.0;
         let new_config = new_config.0;
 
-        let group = user.group(database.clone(), None).await;
+        let group = user.group(state.clone(), None).await;
 
         let world = {
-            database
+            state
+                .database
                 .get_one::<Self>(id, Some((&user, &group)))
                 .await
                 .map_err(crate::api::handlers::handle_database_error)?
         };
 
-        let server = server::get_or_create_server(&world).await.map_err(|err| {
+        let server = state.servers.get_or_create_server(&world).await.map_err(|err| {
             error!("{err}");
             StatusCode::INTERNAL_SERVER_ERROR
         })?;

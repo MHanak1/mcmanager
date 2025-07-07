@@ -1,6 +1,6 @@
 use crate::config::CONFIG;
 use crate::minecraft::server;
-use crate::minecraft::server::MinecraftServerStatus;
+use crate::minecraft::server::{MinecraftServerCollection, MinecraftServerStatus};
 use crate::util;
 use crate::util::dirs;
 use anyhow::{Context, bail};
@@ -23,15 +23,17 @@ pub trait VelocityServer {
 
 pub struct InternalVelocityServer {
     status: MinecraftServerStatus,
+    servers: MinecraftServerCollection,
     should_update: bool,
     path: PathBuf,
     process: Option<Popen>,
     old_hosts: Vec<(String, String)>, //keep the list of hosts to not rewrite the file if not needed
 }
 impl InternalVelocityServer {
-    pub fn new() -> anyhow::Result<Self> {
+    pub fn new(servers: MinecraftServerCollection) -> anyhow::Result<Self> {
         Ok(Self {
             status: MinecraftServerStatus::Exited(0),
+            servers,
             should_update: false,
             path: util::dirs::velocity_dir(),
             process: None,
@@ -164,7 +166,7 @@ impl VelocityServer for InternalVelocityServer {
         }
 
         let mut hosts = vec![];
-        for server in server::get_all_servers().await {
+        for server in self.servers.get_all_servers().await {
             let server = server.lock().await;
             //println!("{:?}", server.world());
             if let Some(port) = server.port() {

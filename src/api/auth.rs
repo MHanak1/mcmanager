@@ -11,9 +11,10 @@ use uuid::Uuid;
 pub async fn try_user_auth(
     username: &str,
     password: &str,
-    database: AppState,
+    state: AppState,
 ) -> Result<Session, DatabaseError> {
-    let user: Result<User, _> = database
+    let user: Result<User, _> = state
+        .database
         .get_where("username", username.to_string(), None)
         .await;
 
@@ -34,7 +35,7 @@ pub async fn try_user_auth(
         return Err(DatabaseError::Unauthorized);
     }
 
-    let user_password = database.get_one::<Password>(user.id, None).await?;
+    let user_password = state.database.get_one::<Password>(user.id, None).await?;
 
     let argon2 = argon2::Argon2::default();
 
@@ -55,7 +56,7 @@ pub async fn try_user_auth(
     };
 
     //bypass perm check, we want all users to be able to log in
-    database.insert(&new_session, None).await?;
+    state.database.insert(&new_session, None).await?;
 
     debug!("accepting auth for user {username}");
 
@@ -67,7 +68,7 @@ fn bollocks_hash() {
     let _ = argon2.hash_password_into(b"RandomPassword", b"RandomSalt", &mut [0u8; 32]);
 }
 
-pub async fn get_user(token: Uuid, database: AppState) -> Result<User, DatabaseError> {
+pub async fn get_user(token: Uuid, state: AppState) -> Result<User, DatabaseError> {
     /*
     let session = database
         .conn
@@ -79,7 +80,7 @@ pub async fn get_user(token: Uuid, database: AppState) -> Result<User, DatabaseE
         .map_err(DatabaseError::SqlxError)?;
      */
 
-    let session: Session = database.get_session(token, None).await?;
+    let session: Session = state.database.get_session(token, None).await?;
 
-    Ok(database.get_user(session.user_id, None).await?)
+    Ok(state.database.get_user(session.user_id, None).await?)
 }
