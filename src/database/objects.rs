@@ -1,9 +1,9 @@
-use std::fmt::Debug;
 use crate::database::types::{Access, Column, Id};
 use crate::database::{Database, DatabaseError, DatabaseType};
 use serde::de::DeserializeOwned;
 use sqlx::any::AnyRow;
 use sqlx::{Any, Encode, FromRow, IntoArguments, Row};
+use std::fmt::Debug;
 use std::os::fd::FromRawFd;
 use std::sync::Arc;
 
@@ -117,6 +117,11 @@ pub trait DbObject: Send + Sync + Debug {
     }
     fn owner_id(&self) -> Option<Id> {
         None
+    }
+
+    /// Used in [`Access::IfPublic`]
+    fn is_public(&self) -> bool {
+        false
     }
     /// returns a [`Column`] at a specified index
     fn get_column(name: &str) -> Option<Column> {

@@ -2,8 +2,10 @@ use crate::api::handlers::{ApiCreate, ApiGet, ApiIcon, ApiList, ApiObject, ApiRe
 use crate::api::serve::AppState;
 use crate::database::objects::{DbObject, FromJson, UpdateJson, User};
 use crate::database::types::{Access, Column, Id};
-use crate::database::{Database, ValueType};
+use crate::database::{Database, DatabaseError, ValueType};
+use async_trait::async_trait;
 use axum::Router;
+use axum::http::StatusCode;
 use axum::routing::{get, post};
 use serde::{Deserialize, Deserializer, Serialize};
 use sqlx::{Arguments, FromRow, IntoArguments};
@@ -22,11 +24,17 @@ pub struct Mod {
     pub name: String,
     /// Mod's description
     pub description: String,
+    /// Modrinth project's id or slug
+    pub modrinth_id: Option<String>,
+    /// Whether the mod is accessible to all user, or just the owner
+    pub public: bool,
 }
 
 impl DbObject for Mod {
     fn view_access() -> Access {
-        Access::Owner("owner_id").or(Access::PrivilegedUser)
+        Access::Owner("owner_id")
+            .or(Access::IfPublic("public"))
+            .or(Access::PrivilegedUser)
     }
 
     fn update_access() -> Access {
@@ -52,6 +60,8 @@ impl DbObject for Mod {
                 .references("versions(id)"),
             Column::new("name", ValueType::Text).not_null(),
             Column::new("description", ValueType::Text).not_null(),
+            Column::new("modrinth_id", ValueType::Text),
+            Column::new("public", ValueType::Boolean).not_null(),
         ]
     }
 
@@ -61,6 +71,9 @@ impl DbObject for Mod {
 
     fn owner_id(&self) -> Option<Id> {
         Some(self.owner_id)
+    }
+    fn is_public(&self) -> bool {
+        self.public
     }
 }
 
@@ -78,6 +91,10 @@ impl<'a> IntoArguments<'a, sqlx::Sqlite> for Mod {
         arguments
             .add(self.description)
             .expect("Failed to add argument");
+        arguments
+            .add(self.modrinth_id)
+            .expect("Failed to add argument");
+        arguments.add(self.public).expect("Failed to add argument");
         arguments
     }
 }
@@ -97,6 +114,10 @@ impl<'a> IntoArguments<'a, sqlx::Postgres> for Mod {
             .add(self.description)
             .expect("Failed to add argument");
         arguments
+            .add(self.modrinth_id)
+            .expect("Failed to add argument");
+        arguments.add(self.public).expect("Failed to add argument");
+        arguments
     }
 }
 
@@ -114,6 +135,8 @@ pub struct JsonFrom {
     pub version_id: Id,
     pub name: String,
     pub description: Option<String>,
+    pub modrinth_id: Option<String>,
+    pub public: Option<bool>,
 }
 
 impl FromJson for Mod {
@@ -125,6 +148,8 @@ impl FromJson for Mod {
             version_id: data.version_id,
             name: data.name.clone(),
             description: data.description.clone().unwrap_or_default(),
+            modrinth_id: data.modrinth_id.clone(),
+            public: data.public.unwrap_or(false),
             owner_id: user.id,
         }
     }
@@ -135,6 +160,9 @@ pub struct JsonUpdate {
     pub version_id: Option<Id>,
     pub name: Option<String>,
     pub description: Option<String>,
+    #[serde(deserialize_with = "deserialize_some")]
+    pub modrinth_id: Option<Option<String>>,
+    pub public: Option<bool>,
 }
 
 impl UpdateJson for Mod {
@@ -144,6 +172,8 @@ impl UpdateJson for Mod {
         new.version_id = data.version_id.unwrap_or(new.version_id);
         new.description = data.description.clone().unwrap_or(new.description);
         new.name = data.name.clone().unwrap_or(new.name);
+        new.modrinth_id = data.modrinth_id.clone().unwrap_or(new.modrinth_id);
+        new.public = data.public.unwrap_or(new.public);
         new
     }
 }
@@ -169,7 +199,41 @@ impl ApiObject for Mod {
 
 impl ApiList for Mod {}
 impl ApiGet for Mod {}
-impl ApiCreate for Mod {}
-impl ApiUpdate for Mod {}
+#[async_trait]
+impl ApiCreate for Mod {
+    async fn before_api_create(
+        state: AppState,
+        json: &mut Self::JsonFrom,
+        user: &User,
+    ) -> Result<(), DatabaseError> {
+        let group = user.group(state.database, None).await;
+
+        if !group.can_upload_mods {
+            return Err(DatabaseError::Unauthorized);
+        }
+
+        if !group.is_privileged {
+            json.public = Some(false);
+        }
+
+        Ok(())
+    }
+}
+#[async_trait]
+impl ApiUpdate for Mod {
+    async fn before_api_update(
+        &self,
+        state: AppState,
+        json: &mut Self::JsonUpdate,
+        user: &User,
+    ) -> Result<(), DatabaseError> {
+        let group = user.group(state.database, None).await;
+        if !group.is_privileged {
+            json.public = Some(false);
+        }
+
+        Ok(())
+    }
+}
 impl ApiRemove for Mod {}
 impl ApiIcon for Mod {}

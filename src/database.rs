@@ -129,7 +129,9 @@ impl Database {
         }
         match (value as &dyn Any).downcast_ref::<Session>() {
             Some(session) => {
-                self.session_cache.insert(session.token, session.clone()).await;
+                self.session_cache
+                    .insert(session.token, session.clone())
+                    .await;
             }
             None => {}
         }
@@ -185,7 +187,9 @@ impl Database {
         }
         match (value as &dyn Any).downcast_ref::<Session>() {
             Some(session) => {
-                self.session_cache.insert(session.token, session.clone()).await;
+                self.session_cache
+                    .insert(session.token, session.clone())
+                    .await;
             }
             None => {}
         }

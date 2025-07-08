@@ -127,12 +127,14 @@ impl Modifier {
 /// [`Access::All`]: the access will always pass
 /// [`Access::User`]: every active user has access
 /// [`Access::Owner(column_name: String)`]: only the owner has access. to use this on a [`DbObject`], the parameter is the name of the column accessing user's id will be matched with
+/// [`Access::IfPublic(column_name: String)`]: pass if the object implements is_public() = true if using `can_access`, and if the the column name provided is true if using `access_filter`
 /// [`Access::PrivilegedUser`]: every user with `privileged = true` has access
 /// [`Access::None`]: access is always denied
 pub enum Access {
     All,
     User,
     Owner(&'static str),
+    IfPublic(&'static str),
     PrivilegedUser,
     None,
 
@@ -181,6 +183,10 @@ impl Access {
                                 .expect("object does not implement owner_id()")
                                 == user.id
                         }
+                        Access::IfPublic(_) => {
+                            let object = object.expect("Access::IfPublic must provide an object");
+                            object.is_public()
+                        }
                         Access::PrivilegedUser => group.is_privileged,
                         Access::None => false,
                         Access::All | Access::And(..) | Access::Or(..) => {
@@ -198,18 +204,35 @@ impl Access {
         match self {
             Access::All => "TRUE".to_string(),
             Access::And(left, right) => {
-                format!(
-                    "({} AND {})",
-                    left.access_filter::<T>(user, group),
-                    right.access_filter::<T>(user, group)
-                )
+                let left = left.access_filter::<T>(user, group);
+                let right = right.access_filter::<T>(user, group);
+
+                if left == "FALSE" || right == "FALSE" {
+                    "FALSE".to_string()
+                } else if left == "TRUE" && right == "TRUE" {
+                    "TRUE".to_string()
+                } else if left == "TRUE" {
+                    right
+                } else if right == "TRUE" {
+                    left
+                } else {
+                    format!("({} AND {})", left, right)
+                }
             }
             Access::Or(left, right) => {
-                format!(
-                    "({} OR {})",
-                    left.access_filter::<T>(user, group),
-                    right.access_filter::<T>(user, group)
-                )
+                let left = left.access_filter::<T>(user, group);
+                let right = right.access_filter::<T>(user, group);
+                if left == "TRUE" || right == "TRUE" {
+                    "TRUE".to_string()
+                } else if left == "FALSE" && right == "FALSE" {
+                    "FALSE".to_string()
+                } else if left == "FALSE" {
+                    right
+                } else if right == "FALSE" {
+                    left
+                } else {
+                    format!("({} OR {})", left, right)
+                }
             }
             _ => {
                 //all the following restrict the user to be enabled
@@ -218,6 +241,9 @@ impl Access {
                         Access::User => "1".to_string(),
                         Access::Owner(owner_column_name) => {
                             format!("{}={}", owner_column_name, user.id.as_i64()) // if something breaks blame the conversion to i64 here
+                        }
+                        Access::IfPublic(public_column_name) => {
+                            format!("{}={}", public_column_name, true) // if something breaks blame the conversion to i64 here
                         }
                         Access::PrivilegedUser => {
                             if group.is_privileged { "TRUE" } else { "FALSE" }.to_string()
@@ -379,7 +405,7 @@ fn id() {
 
     assert_eq!(
         Id::from_i64(0).expect("failed to create id from i64 (0)"),
-        Id { id: 0 }
+        Id(0)
     );
     assert!(Id::from_i64(ID_MAX_VALUE + 1).is_err());
 

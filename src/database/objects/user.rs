@@ -11,10 +11,10 @@ use crate::database::types::{Access, Column, Id};
 use crate::database::{Database, DatabaseError, ValueType};
 use crate::minecraft::server::ServerConfigLimit;
 use async_trait::async_trait;
-use axum::{Json, Router};
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post};
+use axum::{Json, Router};
 use futures::future;
 use log::{error, info, warn};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -31,6 +31,8 @@ pub struct User {
     pub username: String,
     /// which permission [`Group`] does the user belong to
     pub group_id: Id,
+    /// how much memory in total does the user have allocated
+    pub total_memory_usage: i64,
     /// whether the user can access the API
     pub enabled: bool,
 }
@@ -77,6 +79,9 @@ impl DbObject for User {
             Column::new("group_id", ValueType::Id)
                 .not_null()
                 .references("groups(id)"),
+            Column::new("total_memory_usage", ValueType::Integer)
+                .not_null()
+                .default("0"),
             Column::new("enabled", ValueType::Boolean)
                 .not_null()
                 .default("true"),
@@ -97,6 +102,9 @@ impl<'a> IntoArguments<'a, sqlx::Sqlite> for User {
         arguments.add(self.id).expect("Failed to argument");
         arguments.add(self.username).expect("Failed to argument");
         arguments.add(self.group_id).expect("Failed to argument");
+        arguments
+            .add(self.total_memory_usage)
+            .expect("Failed to argument");
         arguments.add(self.enabled).expect("Failed to argument");
         arguments
     }
@@ -108,6 +116,9 @@ impl<'a> IntoArguments<'a, sqlx::Postgres> for User {
         arguments.add(self.id).expect("Failed to argument");
         arguments.add(self.username).expect("Failed to argument");
         arguments.add(self.group_id).expect("Failed to argument");
+        arguments
+            .add(self.total_memory_usage)
+            .expect("Failed to argument");
         arguments.add(self.enabled).expect("Failed to argument");
         arguments
     }
@@ -119,6 +130,7 @@ impl Default for User {
             id: Id::default(),
             username: String::new(),
             group_id: CONFIG.user_defaults.group_id,
+            total_memory_usage: 0,
             enabled: true,
         }
     }
@@ -149,6 +161,7 @@ impl FromJson for User {
             id: Id::default(),
             username: data.username.clone(),
             group_id: data.group_id.unwrap_or(CONFIG.user_defaults.group_id),
+            total_memory_usage: 0,
             enabled: data.enabled.unwrap_or(true),
         }
     }
@@ -181,8 +194,18 @@ impl ApiObject for User {
     fn routes() -> Router<AppState> {
         Router::new()
             .route("/", get(Self::api_list).post(Self::api_create))
-            .route("/{id}", get(Self::api_get).patch(Self::api_update).delete(Self::api_remove))
-            .route("/{id}/icon", post(Self::upload_icon).patch(Self::upload_icon).get(Self::get_icon))
+            .route(
+                "/{id}",
+                get(Self::api_get)
+                    .patch(Self::api_update)
+                    .delete(Self::api_remove),
+            )
+            .route(
+                "/{id}/icon",
+                post(Self::upload_icon)
+                    .patch(Self::upload_icon)
+                    .get(Self::get_icon),
+            )
     }
 }
 
@@ -194,7 +217,7 @@ impl ApiGet for User {
         State(state): State<AppState>,
         UserAuth(user): UserAuth,
     ) -> Result<axum::Json<Self>, StatusCode> {
-        let group = user.group(state.clone(), None).await;
+        let group = user.group(state.database.clone(), None).await;
         let object = {
             state
                 .database
@@ -205,7 +228,6 @@ impl ApiGet for User {
 
         Ok(axum::Json(object))
     }
-
 }
 #[async_trait]
 impl ApiCreate for User {
@@ -257,11 +279,7 @@ impl ApiUpdate for User {
 }
 #[async_trait]
 impl ApiRemove for User {
-    async fn before_api_delete(
-        &self,
-        state: AppState,
-        user: &User,
-    ) -> Result<(), DatabaseError> {
+    async fn before_api_delete(&self, state: AppState, user: &User) -> Result<(), DatabaseError> {
         info!("removing user {}", self.id);
         let worlds = state.database.get_all_where::<World, _>("owner_id", self.id, None/*in theory here the access restriction should be put but i couldn't be bothered with that*/).await?;
         let worlds_task = async {
@@ -307,9 +325,8 @@ impl ApiRemove for User {
 impl ApiIcon for User {}
 
 impl User {
-    pub async fn group(&self, state: AppState, user: Option<(&User, &Group)>) -> Group {
-        state
-            .database
+    pub async fn group(&self, database: Database, user: Option<(&User, &Group)>) -> Group {
+        database
             .get_group(self.group_id, user)
             .await
             .expect(&format!("couldn't find group with id {}", self.group_id))

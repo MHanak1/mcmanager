@@ -1,13 +1,12 @@
 use crate::api::handlers::{ApiCreate, ApiGet, ApiList, ApiObject, ApiRemove, ApiUpdate};
 use crate::api::serve::AppState;
+use crate::database::ValueType;
 use crate::database::objects::{DbObject, FromJson, UpdateJson, User};
 use crate::database::types::{Access, Column, Id};
-use crate::database::{Database, ValueType};
 use axum::Router;
 use axum::routing::get;
 use serde::{Deserialize, Serialize};
 use sqlx::{Arguments, FromRow, IntoArguments};
-use std::sync::Arc;
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, FromRow)]
 #[allow(clippy::struct_field_names)]

@@ -66,7 +66,7 @@ pub struct WorldConfig {
     pub stop_timeout: u64,
     pub port_range: Range<u16>,
     pub java_launch_command: String,
-    pub minimum_memory: u32
+    pub minimum_memory: u32,
 }
 
 #[derive(Debug, Clone, Deserialize)]

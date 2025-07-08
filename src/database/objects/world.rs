@@ -2,6 +2,7 @@ use crate::api::filters;
 use crate::api::filters::UserAuth;
 use crate::api::handlers::{ApiCreate, ApiGet, ApiIcon, ApiList, ApiObject, ApiRemove, ApiUpdate};
 use crate::api::serve::AppState;
+use crate::config::CONFIG;
 use crate::database::objects::group::Group;
 use crate::database::objects::{DbObject, FromJson, UpdateJson, User, Version};
 use crate::database::types::{Access, Column, Id};
@@ -22,7 +23,6 @@ use std::os::linux::raw::stat;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::task::id;
-use crate::config::CONFIG;
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, FromRow)]
 pub struct World {
@@ -256,12 +256,12 @@ impl ApiCreate for World {
         json: &mut Self::JsonFrom,
         user: &User,
     ) -> Result<(), DatabaseError> {
-        let group = user.group(state.clone(), None).await;
+        let group = user.group(state.database.clone(), None).await;
         let user_worlds: Vec<World> = state
             .database
             .get_all_where("owner_id", user.id, Some((&user, &group)))
             .await?;
-        let group = user.group(state.clone(), None).await;
+        let group = user.group(state.database.clone(), None).await;
 
         //enforce the world limit
         if let Some(world_limit) = group.world_limit {
@@ -281,16 +281,19 @@ impl ApiCreate for World {
             json.hostname += &rand::random_range(0..100000).to_string();
         }
 
-        json.allocated_memory = Some(json.allocated_memory.unwrap_or(CONFIG.world_defaults.allocated_memory));
+        json.allocated_memory = Some(
+            json.allocated_memory
+                .unwrap_or(CONFIG.world_defaults.allocated_memory),
+        );
 
         //enforce memory limit
         if let Some(mut allocated_memory) = json.allocated_memory {
             if allocated_memory < CONFIG.world.minimum_memory {
-                return Err(DatabaseError::Unauthorized)
+                return Err(DatabaseError::Unauthorized);
             }
             if let Some(group_mem_limit) = group.per_world_memory_limit {
                 if allocated_memory as u64 > group_mem_limit as u64 {
-                    return Err(DatabaseError::Unauthorized)
+                    return Err(DatabaseError::Unauthorized);
                 }
             }
 
@@ -318,7 +321,7 @@ impl ApiUpdate for World {
         json: &mut Self::JsonUpdate,
         user: &User,
     ) -> Result<(), DatabaseError> {
-        let group = user.group(state.clone(), None).await;
+        let group = user.group(state.database.clone(), None).await;
         let user_worlds: Vec<World> = state
             .database
             .get_all_where("owner_id", user.id, Some((&user, &group)))
@@ -347,13 +350,7 @@ impl ApiUpdate for World {
                 .get_where::<World, _>("hostname", hostname.clone(), None)
                 .await
             {
-                Ok(world) => {
-                    if world.id == self.id {
-                        false
-                    } else {
-                        true
-                    }
-                }
+                Ok(world) => world.id != self.id,
                 Err(_) => false,
             } {
                 debug!("hostname already used. adding a random value to it");
@@ -361,33 +358,36 @@ impl ApiUpdate for World {
             }
         }
 
-        json.allocated_memory = Some(json.allocated_memory.unwrap_or(self.allocated_memory as u32));
+        json.allocated_memory = Some(
+            json.allocated_memory
+                .unwrap_or(self.allocated_memory as u32),
+        );
         let allocated_memory = json.allocated_memory.unwrap();
         let enabled = json.enabled.unwrap_or(self.enabled);
 
         //enforce memory limit
         if enabled {
             if allocated_memory < CONFIG.world.minimum_memory {
-                return Err(DatabaseError::Unauthorized)
+                return Err(DatabaseError::Unauthorized);
             }
             if let Some(group_mem_limit) = group.per_world_memory_limit {
                 if allocated_memory as u64 > group_mem_limit as u64 {
-                    return Err(DatabaseError::Unauthorized)
+                    return Err(DatabaseError::Unauthorized);
                 }
             }
 
             if let Some(memory_limit) = group.total_memory_limit {
                 if allocated_memory != self.allocated_memory as u32 {
-                    let mut total_memory = allocated_memory as i32;
+                    // sum of total users memory usage plus the new usage
+                    let mut total_memory = user.total_memory_usage + allocated_memory as i64;
 
-                    for world in &user_worlds {
-                        if world.id != self.id  && world.enabled {
-                            total_memory += world.allocated_memory;
-                        }
+                    //if the world was previously enabled, it means it contributed to total allocated memory, and we don't want to include it
+                    if self.enabled {
+                        total_memory -= self.allocated_memory as i64;
                     }
 
-                    if total_memory > memory_limit {
-                        return Err(DatabaseError::Unauthorized)
+                    if total_memory > memory_limit as i64 {
+                        return Err(DatabaseError::Unauthorized);
                     }
                 }
             }
@@ -399,9 +399,11 @@ impl ApiUpdate for World {
         &self,
         app_state: AppState,
         _json: &mut Self::JsonUpdate,
-        _user: &User,
+        user: &User,
     ) -> Result<(), DatabaseError> {
-        let server = app_state.servers.get_or_create_server(self)
+        let server = app_state
+            .servers
+            .get_or_create_server(self)
             .await
             .map_err(|err| DatabaseError::InternalServerError(err.to_string()))?;
         let mut server = server.lock().await;
@@ -409,7 +411,28 @@ impl ApiUpdate for World {
         server
             .update_world(self.clone())
             .await
-            .map_err(|err| DatabaseError::InternalServerError(err.to_string()))
+            .map_err(|err| DatabaseError::InternalServerError(err.to_string()))?;
+
+        let user_enabled_worlds = app_state
+            .database
+            .get_all_where::<World, _>(
+                "enabled",
+                true,
+                Some((user, &user.group(app_state.database.clone(), None).await)),
+            )
+            .await?;
+
+        let mut total_memory_usage = 0;
+        for world in &user_enabled_worlds {
+            total_memory_usage += world.allocated_memory;
+        }
+        let mut user = user.clone();
+
+        user.total_memory_usage = total_memory_usage as i64;
+
+        app_state.database.update(&user, None).await?;
+
+        Ok(())
     }
 }
 #[async_trait]
@@ -435,9 +458,8 @@ impl ApiRemove for World {
 impl ApiIcon for World {}
 
 impl World {
-    pub async fn version(&self, state: AppState, user: Option<(&User, &Group)>) -> Version {
-        state
-            .database
+    pub async fn version(&self, database: Database, user: Option<(&User, &Group)>) -> Version {
+        database
             .get_one(self.version_id, user)
             .await
             .expect(&format!(
@@ -445,9 +467,8 @@ impl World {
                 self.version_id
             ))
     }
-    pub async fn owner(&self, state: AppState, user: Option<(&User, &Group)>) -> User {
-        state
-            .database
+    pub async fn owner(&self, database: Database, user: Option<(&User, &Group)>) -> User {
+        database
             .get_one::<User>(self.owner_id, user)
             .await
             .expect(&format!("couldn't find user with id {}", self.owner_id))
@@ -463,7 +484,7 @@ impl World {
         let user = user.0;
 
         {
-            let group = user.group(state.clone(), None).await;
+            let group = user.group(state.database.clone(), None).await;
             state
                 .database
                 .get_one::<Self>(id, Some((&user, &group)))
@@ -511,7 +532,7 @@ impl World {
         let state = state.0;
         let user = user.0;
 
-        let group = user.group(state.clone(), None).await;
+        let group = user.group(state.database.clone(), None).await;
 
         let world = {
             state
@@ -521,10 +542,14 @@ impl World {
                 .map_err(crate::api::handlers::handle_database_error)?
         };
 
-        let server = state.servers.get_or_create_server(&world).await.map_err(|err| {
-            error!("{err}");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+        let server = state
+            .servers
+            .get_or_create_server(&world)
+            .await
+            .map_err(|err| {
+                error!("{err}");
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
 
         let server = server.lock().await;
 
@@ -561,7 +586,7 @@ impl World {
         let user = user.0;
         let new_config = new_config.0;
 
-        let group = user.group(state.clone(), None).await;
+        let group = user.group(state.database.clone(), None).await;
 
         let world = {
             state
@@ -571,10 +596,14 @@ impl World {
                 .map_err(crate::api::handlers::handle_database_error)?
         };
 
-        let server = state.servers.get_or_create_server(&world).await.map_err(|err| {
-            error!("{err}");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+        let server = state
+            .servers
+            .get_or_create_server(&world)
+            .await
+            .map_err(|err| {
+                error!("{err}");
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
 
         let mut server = server.lock().await;
 

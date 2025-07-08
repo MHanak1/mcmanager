@@ -27,25 +27,27 @@ impl MinecraftServerCollection {
 
     pub async fn get_server(&self, id: Id) -> Option<ServerMutex> {
         let mut server = None;
-        { // this should hopefully drop SERVERS, right?
+        {
+            // this should hopefully drop SERVERS, right?
             server = self.servers.lock().await.get(&id).cloned()
         }
         server
     }
 
-    pub async fn get_or_create_server(&self, world: &World) -> Result<minecraft::server::ServerMutex> {
+    pub async fn get_or_create_server(
+        &self,
+        world: &World,
+    ) -> Result<minecraft::server::ServerMutex> {
         let mut server = self.get_server(world.id).await;
         match server {
             Some(server) => Ok(server),
             None => {
                 self.add_server(match CONFIG.minecraft_server_type {
-                    ServerType::Internal => Box::new(
-                        internal::InternalServer::new(world.clone())
-                            .await
-                            .map_err(|err| {
-                                crate::database::DatabaseError::InternalServerError(err.to_string())
-                            })?,
-                    ),
+                    ServerType::Internal => {
+                        Box::new(internal::InternalServer::new(world.clone()).map_err(|err| {
+                            crate::database::DatabaseError::InternalServerError(err.to_string())
+                        })?)
+                    }
                     ServerType::Remote => Box::new(external::MinimanagerServer::new(
                         CONFIG
                             .remote
@@ -56,7 +58,7 @@ impl MinecraftServerCollection {
                         world.clone(),
                     )),
                 })
-                    .await;
+                .await;
                 server = self.get_server(world.id).await;
                 assert!(server.is_some());
                 Ok(server.unwrap())
@@ -65,8 +67,7 @@ impl MinecraftServerCollection {
     }
 
     pub async fn add_server(&self, server: Box<dyn MinecraftServer>) {
-        self.
-            servers
+        self.servers
             .lock()
             .await
             .insert(server.id(), Arc::new(Mutex::new(server)));
@@ -90,7 +91,8 @@ impl MinecraftServerCollection {
                 .await
                 .into_iter()
                 .map(|server: ServerMutex| async move { server.lock().await.world() }),
-        ).await
+        )
+        .await
     }
 
     pub async fn refresh_servers(&self) {
@@ -99,10 +101,10 @@ impl MinecraftServerCollection {
                 .await
                 .into_iter()
                 .map(|server: ServerMutex| async move { server.lock().await.refresh().await }),
-        ).await;
+        )
+        .await;
     }
 }
-
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Server {
@@ -176,7 +178,7 @@ pub mod internal {
         process: Option<Popen>,
     }
     impl InternalServer {
-        pub async fn new(world: World) -> Result<Self> {
+        pub fn new(world: World) -> Result<Self> {
             let enabled = world.enabled;
             let mut new = Self {
                 status: MinecraftServerStatus::Exited(0),
@@ -188,12 +190,12 @@ pub mod internal {
                 world,
             };
             if enabled {
-                new.start().await?;
+                new.start()?;
             }
             Ok(new)
         }
 
-        async fn initialise_files(&self) -> Result<()> {
+        fn initialise_files(&self) -> Result<()> {
             let port = self
                 .port()
                 .context("Port not set, cannot initialise files")?;
@@ -212,10 +214,8 @@ pub mod internal {
 
             Ok(())
         }
-    }
 
-    impl InternalServer {
-        async fn start(&mut self) -> Result<()> {
+        fn start(&mut self) -> Result<()> {
             let jar_path =
                 util::dirs::versions_dir().join(format!("{}.jar", self.world.version_id));
             if !jar_path.exists() {
@@ -239,12 +239,12 @@ pub mod internal {
                 .expect("failed to lock local ports")
                 .insert(port);
 
-            self.initialise_files().await?;
+            self.initialise_files()?;
             debug!("starting server {}", self.id());
             let command = CONFIG.world.java_launch_command.clone();
             let command = command.replace("%jar%", jar_path.display().to_string().as_str());
             let command = command.replace(
-                "%max_mem%",
+                "%min_mem%",
                 &format!("-Xms{}m", CONFIG.world.minimum_memory),
             );
             let command = command.replace(
@@ -270,7 +270,7 @@ pub mod internal {
             Ok(())
         }
 
-        async fn stop(&mut self) -> Result<()> {
+        fn stop(&mut self) -> Result<()> {
             let stop_result = self.write_console(b"stop\n");
             if let Some(mut process) = self.process.take() {
                 if stop_result.is_err() {
@@ -406,7 +406,7 @@ pub mod internal {
             let old = self.world();
             if old.allocated_memory != world.allocated_memory || old.version_id != world.version_id
             {
-                self.stop().await?;
+                self.stop()?;
             }
 
             let enabled = world.enabled;
@@ -415,9 +415,9 @@ pub mod internal {
             self.world = world;
 
             if enabled {
-                self.start().await?;
+                self.start()?;
             } else {
-                self.stop().await?;
+                self.stop()?;
             }
             Ok(())
         }
@@ -442,7 +442,7 @@ pub mod internal {
         }
 
         async fn remove(&mut self) -> Result<()> {
-            self.stop().await?;
+            self.stop()?;
             debug!("removing directory {}", self.directory.display());
             if self.directory.exists() {
                 std::fs::remove_dir_all(self.directory.clone())?;

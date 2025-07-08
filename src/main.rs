@@ -1,8 +1,9 @@
 use anyhow::{Result, bail};
 use futures::{SinkExt, TryFutureExt};
 use log::{error, info};
+use mcmanager::api::serve::AppState;
 use mcmanager::config::{CONFIG, DatabaseType};
-use mcmanager::database::objects::{Group, User, World};
+use mcmanager::database::objects::{Group, ModLoader, User, World};
 use mcmanager::database::types::Id;
 use mcmanager::database::{Database, DatabasePool, objects};
 use mcmanager::minecraft::server::{MinecraftServerCollection, ServerConfigLimit};
@@ -18,7 +19,6 @@ use std::fs::File;
 use std::io::{Read, Write};
 use std::path::Path;
 use std::time::Duration;
-use mcmanager::api::serve::AppState;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -64,7 +64,6 @@ async fn main() -> Result<()> {
 
     let database = Database::new(pool);
     database.init().await.expect("Failed to init database");
-
 
     let second_launch = database.get_all::<User>(None).await?.is_empty();
 
@@ -166,6 +165,7 @@ async fn main() -> Result<()> {
                         String::from("white-list"),
                     ],
                     config_limits,
+                    can_upload_mods: false,
                     is_privileged: false,
                 }
             };
@@ -182,6 +182,7 @@ async fn main() -> Result<()> {
                     config_blacklist: vec![],
                     config_whitelist: vec![],
                     config_limits: HashMap::new(),
+                    can_upload_mods: true,
                     is_privileged: true,
                 }
             };
@@ -201,6 +202,7 @@ async fn main() -> Result<()> {
                         id: Default::default(),
                         username: String::from(username.trim()),
                         group_id: admin_group.id,
+                        total_memory_usage: 0,
                         enabled: true,
                     },
                     password.trim(),
@@ -227,6 +229,38 @@ async fn main() -> Result<()> {
             velocity_config_file
                 .write_all(include_bytes!("resources/velocity_config.toml"))
                 .expect("failed to write default config file");
+
+            // add some basic default values
+            database
+                .insert(
+                    &ModLoader {
+                        id: Default::default(),
+                        name: "Vanilla".to_string(),
+                        can_load_mods: false,
+                    },
+                    None,
+                )
+                .await?;
+            database
+                .insert(
+                    &ModLoader {
+                        id: Default::default(),
+                        name: "Fabric".to_string(),
+                        can_load_mods: true,
+                    },
+                    None,
+                )
+                .await?;
+            database
+                .insert(
+                    &ModLoader {
+                        id: Default::default(),
+                        name: "Forge".to_string(),
+                        can_load_mods: true,
+                    },
+                    None,
+                )
+                .await?;
         }
 
         {

@@ -26,7 +26,7 @@ use image::{DynamicImage, ImageFormat, ImageReader, Limits};
 use log::{debug, error};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use sqlx::{Encode, FromRow, IntoArguments, Type};
+use sqlx::{Encode, FromRow, IntoArguments, Type, query};
 use std::fmt::format;
 use std::fs::File;
 use std::io::{BufWriter, Cursor, Read, Write};
@@ -58,7 +58,7 @@ where
         UserAuth(user): UserAuth,
         axum::extract::Query(filters): axum::extract::Query<Vec<(String, String)>>,
     ) -> Result<axum::Json<Vec<Self>>, StatusCode> {
-        let group = user.group(state.clone(), None).await;
+        let group = user.group(state.database.clone(), None).await;
         let objects: Vec<Self> = {
             execute_on_enum!(&state.database.pool; (DatabasePool::Postgres, DatabasePool::Sqlite) |pool| {
                 let mut query = QueryBuilder::select::<Self>();
@@ -197,7 +197,7 @@ where
         State(state): State<AppState>,
         UserAuth(user): UserAuth,
     ) -> Result<axum::Json<Self>, StatusCode> {
-        let group = user.group(state.clone(), None).await;
+        let group = user.group(state.database.clone(), None).await;
         let object = {
             state
                 .database
@@ -225,7 +225,7 @@ where
         Json(data): Json<Self::JsonFrom>,
     ) -> Result<Json<Self>, StatusCode> {
         let mut data = data;
-        let group = user.group(state.clone(), None).await;
+        let group = user.group(state.database.clone(), None).await;
 
         if !Self::can_create(&user, &group) {
             return Err(StatusCode::UNAUTHORIZED);
@@ -261,7 +261,7 @@ where
     #[allow(unused)]
     /// runs before the database entry creation
     async fn before_api_create(
-        database: AppState,
+        state: AppState,
         json: &mut Self::JsonFrom,
         user: &User,
     ) -> Result<(), DatabaseError> {
@@ -273,7 +273,7 @@ where
     /// this returns a [`Result`], but there is no mechanism to undo the entry creation. if this fails it should probably cause the program to panic
     async fn after_api_create(
         &self,
-        database: AppState,
+        state: AppState,
         json: &mut Self::JsonFrom,
         user: &User,
     ) -> Result<(), DatabaseError> {
@@ -301,7 +301,7 @@ where
     ) -> Result<axum::Json<Self>, StatusCode> {
         let mut data = data;
         let object = {
-            let group = user.group(state.clone(), None).await;
+            let group = user.group(state.database.clone(), None).await;
 
             let object = state
                 .database
@@ -345,7 +345,7 @@ where
     /// runs before the database entry update
     async fn before_api_update(
         &self,
-        database: AppState,
+        state: AppState,
         json: &mut Self::JsonUpdate,
         user: &User,
     ) -> Result<(), DatabaseError> {
@@ -357,7 +357,7 @@ where
     /// this returns a [`Result`], but there is no mechanism to undo the entry update. if this fails it should probably cause the program to panic
     async fn after_api_update(
         &self,
-        database: AppState,
+        state: AppState,
         json: &mut Self::JsonUpdate,
         user: &User,
     ) -> Result<(), DatabaseError> {
@@ -376,13 +376,10 @@ where
 {
     async fn api_remove(
         Path(id): Path<Id>,
-        State(database): State<AppState>,
+        State(state): State<AppState>,
         UserAuth(user): UserAuth,
     ) -> Result<StatusCode, StatusCode> {
-        let id = id;
-        let state = database;
-        let user = user;
-        let group = user.group(state.clone(), None).await;
+        let group = user.group(state.database.clone(), None).await;
 
         let object = state
             .database
@@ -421,18 +418,14 @@ where
 
     #[allow(unused)]
     /// runs before the database entry deletion
-    async fn before_api_delete(
-        &self,
-        database: AppState,
-        user: &User,
-    ) -> Result<(), DatabaseError> {
+    async fn before_api_delete(&self, state: AppState, user: &User) -> Result<(), DatabaseError> {
         Ok(())
     }
     #[allow(unused)]
     /// runs after the database entry deletion
     ///
     /// this returns a [`Result`], but there is no mechanism to undo the entry deletion. if this fails it should probably cause the program to panic
-    async fn after_api_delete(&self, database: AppState, user: &User) -> Result<(), DatabaseError> {
+    async fn after_api_delete(&self, state: AppState, user: &User) -> Result<(), DatabaseError> {
         Ok(())
     }
 }
@@ -459,7 +452,10 @@ where
         //check if the asset exists and the user has access to it
         let _ = state
             .database
-            .get_one::<Self>(id, Some((&user, &user.group(state.clone(), None).await)))
+            .get_one::<Self>(
+                id,
+                Some((&user, &user.group(state.database.clone(), None).await)),
+            )
             .await
             .map_err(|_| StatusCode::NOT_FOUND)?;
 
@@ -541,7 +537,10 @@ where
         Ok(StatusCode::OK)
     }
 
-    async fn get_icon(id: Path<Id>, _user: UserAuth /*check if the user is authenticated, but do not check if they have access to the object, since it doesn't justify the extra DB lookups*/) -> Result<impl IntoResponse, StatusCode> {
+    async fn get_icon(
+        id: Path<Id>,
+        _user: UserAuth, /*check if the user is authenticated, but do not check if they have access to the object, since it doesn't justify the extra DB lookups*/
+    ) -> Result<impl IntoResponse, StatusCode> {
         let mut path = icons_dir().join(Self::table_name());
         let (path, is_gif) = if path.join(format!("{}.webp", id.to_string())).exists() {
             (path.join(format!("{}.webp", id.to_string())), false)
@@ -602,13 +601,11 @@ pub struct RegisterQuery {
 }
 
 pub async fn user_register(
-    database: State<AppState>,
-    query: axum::extract::Query<RegisterQuery>,
-    credentials: axum::extract::Json<Login>,
+    State(state): State<AppState>,
+    axum::extract::Query(query): axum::extract::Query<RegisterQuery>,
+    Json(credentials): axum::extract::Json<Login>,
 ) -> Result<impl IntoResponse, StatusCode> {
-    let state = database.0;
-    let credentials = credentials.0;
-    let token = query.0.token;
+    let token = query.token;
     //arbitrary values but who cares (foreshadowing)
     const ALLOWED_USERNAME_CHARS: &str =
         "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ012345789-_";
@@ -636,7 +633,8 @@ pub async fn user_register(
 
     let mut can_continue = false;
     let invite = if let Some(token) = token {
-        let invite: Result<InviteLink, _> = state.database.get_where("invite_token", token, None).await;
+        let invite: Result<InviteLink, _> =
+            state.database.get_where("invite_token", token, None).await;
         if let Ok(invite) = invite {
             can_continue = true;
             Some(invite)

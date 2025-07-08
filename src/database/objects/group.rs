@@ -35,12 +35,16 @@ pub struct Group {
     pub active_world_limit: Option<i32>,
     /// how much storage is available to a user in MiB. [`None`] means no limit
     pub storage_limit: Option<i32>,
-    /// server.properties config limitation. for more info look at the description in the config file
+    /// server.properties config limitation. Those are the values members of the group will not be able to edit
     pub config_blacklist: Vec<String>,
-    /// server.properties config limitation. for more info look at the description in the config file
+    /// server.properties config limitation. Those are the only values the members of the groups will be able to edit.
     pub config_whitelist: Vec<String>,
-    /// server.properties config limitation. for more info look at the description in the config file
+    /// server.properties config limitation.
+    /// If a value is prepended with < or >, it is considered an integer limit, and only values smaller than or equal, or larger than or equal will be accepted respectively.
+    /// if a value is not prepended with < or >, it is considered a value whitelist, and the user will only be able to set this value. multiple allowed values can be set by using | to separate the values (for example "survival|creative")
     pub config_limits: HashMap<String, ServerConfigLimit>,
+    /// Whether a user can upload mods
+    pub can_upload_mods: bool,
     /// whether a user has administrative privileges, this means they can manage other users and create new accounts
     pub is_privileged: bool,
 }
@@ -74,9 +78,12 @@ impl DbObject for Group {
             Column::new("config_blacklist", ValueType::Text),
             Column::new("config_whitelist", ValueType::Text),
             Column::new("config_limits", ValueType::Text),
+            Column::new("can_upload_mods", ValueType::Boolean)
+                .not_null()
+                .default("FALSE"),
             Column::new("is_privileged", ValueType::Boolean)
                 .not_null()
-                .default("false"),
+                .default("FALSE"),
         ]
     }
 
@@ -102,6 +109,7 @@ impl<'a> FromRow<'_, Row> for Group {
                 .unwrap(),
             config_limits: serde_json::from_str(&row.try_get::<String, _>("config_limits")?)
                 .unwrap(),
+            can_upload_mods: row.try_get("can_upload_mods")?,
             is_privileged: row.try_get("is_privileged")?,
         })
     }
@@ -143,6 +151,9 @@ impl<'a> IntoArguments<'a, sqlx::Sqlite> for Group {
             .expect("Failed to add argument");
         arguments
             .add(config_limits)
+            .expect("Failed to add argument");
+        arguments
+            .add(self.can_upload_mods)
             .expect("Failed to add argument");
         arguments
             .add(self.is_privileged)
@@ -199,7 +210,12 @@ impl ApiObject for Group {
     fn routes() -> Router<AppState> {
         Router::new()
             .route("/", get(Self::api_list).post(Self::api_create))
-            .route("/{id}", get(Self::api_get).patch(Self::api_update).delete(Self::api_remove))
+            .route(
+                "/{id}",
+                get(Self::api_get)
+                    .patch(Self::api_update)
+                    .delete(Self::api_remove),
+            )
     }
 }
 
@@ -214,6 +230,7 @@ pub struct JsonFrom {
     pub config_blacklist: Option<Vec<String>>,
     pub config_whitelist: Option<Vec<String>>,
     pub config_limits: Option<HashMap<String, ServerConfigLimit>>,
+    pub can_upload_mods: Option<bool>,
     pub is_privileged: Option<bool>,
 }
 
@@ -237,6 +254,7 @@ impl FromJson for Group {
             config_blacklist: data.config_blacklist.clone().unwrap_or_default(),
             config_whitelist: data.config_whitelist.clone().unwrap_or_default(),
             config_limits: data.config_limits.clone().unwrap_or_default(),
+            can_upload_mods: data.can_upload_mods.unwrap_or(false),
             is_privileged: data.is_privileged.unwrap_or(false),
         }
     }
@@ -274,6 +292,8 @@ pub struct JsonUpdate {
     #[serde(default, deserialize_with = "deserialize_some")]
     pub config_limits: Option<HashMap<String, ServerConfigLimit>>,
     #[serde(default, deserialize_with = "deserialize_some")]
+    pub can_upload_mods: Option<bool>,
+    #[serde(default, deserialize_with = "deserialize_some")]
     pub is_privileged: Option<bool>,
 }
 impl UpdateJson for Group {
@@ -310,6 +330,7 @@ impl UpdateJson for Group {
             .clone()
             .unwrap_or(new.config_whitelist);
         new.config_limits = data.config_limits.clone().unwrap_or(new.config_limits);
+        new.can_upload_mods = data.can_upload_mods.unwrap_or(new.can_upload_mods);
         new.is_privileged = data.is_privileged.unwrap_or(new.is_privileged);
         new
     }
@@ -323,7 +344,7 @@ impl ApiGet for Group {
         State(state): State<AppState>,
         UserAuth(user): UserAuth,
     ) -> Result<axum::Json<Self>, StatusCode> {
-        let group = user.group(state.clone(), None).await;
+        let group = user.group(state.database.clone(), None).await;
         let object = {
             state
                 .database

@@ -4,14 +4,17 @@ use crate::config;
 use crate::config::CONFIG;
 use crate::database::Database;
 use crate::database::objects::{Group, InviteLink, Mod, ModLoader, Session, User, Version, World};
+use crate::minecraft::server::{MinecraftServerCollection, Server};
 use crate::minecraft::velocity::{InternalVelocityServer, VelocityServer};
 use crate::util::dirs::icons_dir;
 use crate::{api, util};
-use axum::{Router, ServiceExt};
 use axum::extract::{MatchedPath, Path, State};
 use axum::http::Request;
-use axum::routing::{MethodRouter, get, post, delete};
+use axum::response::Response;
+use axum::routing::{MethodRouter, delete, get, post};
+use axum::{Router, ServiceExt};
 use log::{debug, error, info};
+use reqwest::StatusCode;
 use sqlx::Encode;
 use sqlx::any::AnyPoolOptions;
 use sqlx::sqlite::SqlitePoolOptions;
@@ -22,18 +25,15 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
-use axum::response::Response;
-use reqwest::StatusCode;
 use test_log::test;
 use tokio::sync::Mutex;
 use tokio_util::bytes::BufMut;
-use tower_governor::governor::GovernorConfigBuilder;
 use tower_governor::GovernorLayer;
-use tower_http::classify::ServerErrorsFailureClass;
+use tower_governor::governor::GovernorConfigBuilder;
 use tower_http::LatencyUnit;
+use tower_http::classify::ServerErrorsFailureClass;
 use tower_http::trace::{DefaultMakeSpan, DefaultOnFailure, DefaultOnResponse};
-use tracing::{info_span, Level, Span};
-use crate::minecraft::server::{MinecraftServerCollection, Server};
+use tracing::{Level, Span, info_span};
 
 #[derive(Debug, Clone)]
 pub struct AppState {
@@ -69,7 +69,6 @@ pub async fn run(state: AppState, config: config::Config) -> Result<(), anyhow::
         }
     });
 
-
     let check_free = Router::new()
         .route(
             "/username/{username}",
@@ -92,16 +91,25 @@ pub async fn run(state: AppState, config: config::Config) -> Result<(), anyhow::
     /// PATCH /session/user - change username/password (not implemented)
     /// DELETE /session/user - delete account (not implemented)
     let session = Router::new()
-        .route("/user", get(api::handlers::user_info).post(api::handlers::user_register).patch(|_| async {StatusCode::NOT_IMPLEMENTED} ).delete(|_| async { StatusCode::NOT_IMPLEMENTED } ) )
-        .route("/", get(|_| async { StatusCode::NOT_IMPLEMENTED } ).post(api::handlers::user_auth).delete(api::handlers::logout));
+        .route(
+            "/user",
+            get(api::handlers::user_info)
+                .post(api::handlers::user_register)
+                .patch(|| async { StatusCode::NOT_IMPLEMENTED })
+                .delete(|| async { StatusCode::NOT_IMPLEMENTED }),
+        )
+        .route(
+            "/",
+            get(|| async { StatusCode::NOT_IMPLEMENTED })
+                .post(api::handlers::user_auth)
+                .delete(api::handlers::logout),
+        );
 
-    let server = Router::new()
-        .route("/", get(api::handlers::server_info));
+    let server = Router::new().route("/", get(api::handlers::server_info));
 
     let api = Router::new()
         .nest("/session", session)
         .nest("/server", server)
-
         .nest("/valid", check_free)
         .nest("/mods", Mod::routes())
         .nest("/versions", Version::routes())
@@ -127,7 +135,11 @@ pub async fn run(state: AppState, config: config::Config) -> Result<(), anyhow::
     info!("listening on {}", addr);
     let listener = tokio::net::TcpListener::bind(addr).await?;
 
-    axum::serve(listener, router.into_make_service_with_connect_info::<SocketAddr>()).await?;
+    axum::serve(
+        listener,
+        router.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await?;
 
     Ok(())
 }

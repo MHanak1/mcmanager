@@ -136,7 +136,10 @@ impl VelocityServer for InternalVelocityServer {
         for (ip, host) in hosts {
             //println!("{}: {}", ip, host);
             servers_string.push_str(format!("{host} = \"{ip}\"\n").as_str());
-            hosts_string.push_str(&format!("\"{host}.{}\" = [\n    \"{host}\"\n]\n", CONFIG.velocity.hostname));
+            hosts_string.push_str(&format!(
+                "\"{host}.{}\" = [\n    \"{host}\"\n]\n",
+                CONFIG.velocity.hostname
+            ));
         }
         let binding = config.replace("$servers", servers_string.as_str());
         let config = &binding;
