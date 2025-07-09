@@ -205,6 +205,10 @@ pub mod internal {
 
             let version_folder = util::dirs::versions_dir().join(self.world.version_id.to_string());
 
+            if !version_folder.exists() {
+                bail!("version directory of {} doesn't exist", self.world.version_id);
+            }
+
             util::copy_dir_all_no_overwrite(version_folder, self.directory.clone())?;
 
             //todo: maybe remove files that shouldn't be there
@@ -253,7 +257,14 @@ pub mod internal {
                 .expect("failed to lock local ports")
                 .insert(port);
 
-            self.initialise_files()?;
+            self
+                .initialise_files()
+                .inspect_err(|_| {
+                    TAKEN_LOCAL_PORTS
+                        .lock()
+                        .expect("failed to lock local ports")
+                        .remove(&self.port.unwrap());
+                })?;
             debug!("starting server {}", self.id());
             let command = CONFIG.world.java_launch_command.clone();
             let command = command.replace("%jar%", jar_path.display().to_string().as_str());

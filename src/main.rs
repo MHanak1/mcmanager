@@ -29,7 +29,7 @@ async fn main() -> Result<()> {
     let secrets_path = util::dirs::base_dir().join("secrets.toml");
     if !secrets_path.exists() {
         let mut secrets_file = File::create(&secrets_path)?;
-        secrets_file.write_all(format!("api_secret = {}\nforwarding_secret = {}", Uuid::new_v4().as_simple().to_string(), Uuid::new_v4().as_simple().to_string()).as_bytes())?;
+        secrets_file.write_all(format!("api_secret = \"{}\"\nforwarding_secret = \"{}\"", Uuid::new_v4().as_simple().to_string(), Uuid::new_v4().as_simple().to_string()).as_bytes())?;
         println!("secrets file written to {}", secrets_path.display());
     }
 
