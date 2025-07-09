@@ -223,11 +223,14 @@ pub mod internal {
             properties.insert(String::from("server-port"), format!("{port}",));
 
             let properties = crate::minecraft::util::create_minecraft_properties(properties);
+            debug!("writing server.properties");
             self.write_file("server.properties", &properties)?;
 
+            debug!("writing forwarding secrets");
             self.write_file("forwarding.secret", &SECRETS.forwarding_secret)?;
             self.write_file("config/FabricProxy-Lite.toml", &include_str!("../resources/default_fabricproxy_lite_config.toml").replace("$secret", &SECRETS.forwarding_secret))?;
 
+            debug!("writing eula.txt");
             self.write_file("eula.txt", "eula=true")?;
 
             Ok(())
