@@ -210,7 +210,7 @@ pub mod internal {
                 bail!("version directory of {} doesn't exist", self.world.version_id);
             }
 
-            debug!("copying version files from {}", version_folder.display() to self.directory.display());
+            debug!("copying version files from {} to {}", version_folder.display(), self.directory.display());
             util::copy_dir_all_no_overwrite(version_folder, self.directory.clone())?;
 
             //todo: maybe remove files that shouldn't be there
