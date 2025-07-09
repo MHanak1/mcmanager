@@ -120,7 +120,8 @@ pub mod secrets {
     use uuid::Uuid;
 
     pub struct Secrets {
-        pub api_secret: Uuid,
+        pub api_secret: String,
+        pub forwarding_secret: String,
     }
 
     impl TryFrom<Config> for Secrets {
@@ -129,6 +130,7 @@ pub mod secrets {
         fn try_from(config: Config) -> Result<Self, Self::Error> {
             Ok(Self {
                 api_secret: config.get("api_secret")?,
+                forwarding_secret: config.get("forwarding_secret")?,
             })
         }
     }

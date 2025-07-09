@@ -10,6 +10,7 @@ use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::time::Duration;
 use subprocess::{Exec, ExitStatus, Popen};
+use crate::config::secrets::SECRETS;
 
 pub trait VelocityServer {
     async fn start(&mut self) -> anyhow::Result<()>;
@@ -57,6 +58,10 @@ impl VelocityServer for InternalVelocityServer {
             let mut file = File::create(&config_path)?;
             file.write_all(include_bytes!("../resources/velocity_config.toml"))?;
         }
+
+        let config_path = dirs::velocity_dir().join("forwarding.secret");
+        let mut secret_file = File::create(&config_path)?;
+        secret_file.write_all(SECRETS.forwarding_secret.as_bytes())?;
 
         let command = format!("java -jar {}", jar_path.display());
         //println!("{command}");

@@ -149,12 +149,14 @@ pub mod internal {
     use async_trait::async_trait;
     use log::{debug, info, warn};
     use std::collections::{HashMap, HashSet};
+    use std::fs;
     use std::fs::File;
     use std::io::{Read, Write};
     use std::path::PathBuf;
     use std::sync::{LazyLock, Mutex};
     use std::time::Duration;
     use subprocess::{Exec, ExitStatus, Popen};
+    use crate::config::secrets::SECRETS;
 
     pub(crate) static TAKEN_LOCAL_PORTS: LazyLock<Mutex<HashSet<u16>>> =
         LazyLock::new(|| Mutex::new(HashSet::new()));
@@ -196,9 +198,16 @@ pub mod internal {
         }
 
         fn initialise_files(&self) -> Result<()> {
+            fs::create_dir_all(self.directory.clone())?;
             let port = self
                 .port()
                 .context("Port not set, cannot initialise files")?;
+
+            let version_folder = util::dirs::versions_dir().join(self.world.version_id.to_string());
+
+            util::copy_dir_all_no_overwrite(version_folder, self.directory.clone())?;
+
+            //todo: maybe remove files that shouldn't be there
 
             let properties = self
                 .read_file("server.properties")
@@ -210,6 +219,9 @@ pub mod internal {
             let properties = crate::minecraft::util::create_minecraft_properties(properties);
             self.write_file("server.properties", &properties)?;
 
+            self.write_file("forwarding.secret", &SECRETS.forwarding_secret)?;
+            self.write_file("config/FabricProxy-Lite.toml", &include_str!("../resources/default_fabricproxy_lite_config.toml").replace("$secret", &SECRETS.forwarding_secret))?;
+
             self.write_file("eula.txt", "eula=true")?;
 
             Ok(())
@@ -217,9 +229,11 @@ pub mod internal {
 
         fn start(&mut self) -> Result<()> {
             let jar_path =
-                util::dirs::versions_dir().join(format!("{}.jar", self.world.version_id));
-            if !jar_path.exists() {
-                bail!("{} doesn't exist", jar_path.display());
+                self.directory.join("server.jar");
+            let version_path =
+                util::dirs::versions_dir().join(format!("{}/server.jar", self.world.version_id));
+            if !version_path.exists() {
+                bail!("{} doesn't exist", version_path.display());
             }
 
             if !self.directory.exists() {
@@ -367,6 +381,7 @@ pub mod internal {
         }
 
         fn write_file(&self, path: &str, data: &str) -> Result<()> {
+            std::fs::create_dir_all(self.directory.clone())?;
             let mut file = File::create(self.directory.join(path))?;
             file.write_all(data.as_bytes())?;
             Ok(())

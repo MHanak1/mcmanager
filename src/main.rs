@@ -19,21 +19,29 @@ use std::fs::File;
 use std::io::{Read, Write};
 use std::path::Path;
 use std::time::Duration;
+use uuid::Uuid;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     env_logger::init();
     util::dirs::init_dirs().expect("Failed to initialize the data directory");
 
-    let config_path = util::dirs::base_dir().join("config.toml");
+    let secrets_path = util::dirs::base_dir().join("secrets.toml");
+    if !secrets_path.exists() {
+        let mut secrets_file = File::create(&secrets_path)?;
+        secrets_file.write_all(format!("api_secret = {}\nforwarding_secret = {}", Uuid::new_v4().as_simple().to_string(), Uuid::new_v4().as_simple().to_string()).as_bytes())?;
+        println!("secrets file written to {}", secrets_path.display());
+    }
 
+    let config_path = util::dirs::base_dir().join("config.toml");
     if !config_path.exists() {
         let mut config_file = File::create(&config_path)?;
         config_file.write_all(include_bytes!("resources/default_config.toml"))?;
-        println!("Config file written to {}", config_path.to_string_lossy());
+        println!("Config file written to {}", config_path.display());
         println!("You can now edit the values in the config file and restart this executable.");
         return Ok(());
     }
+
 
     let pool: DatabasePool = match CONFIG.database.database_type {
         DatabaseType::Sqlite => {

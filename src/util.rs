@@ -1,3 +1,6 @@
+use std::{fs, io};
+use std::path::Path;
+
 pub mod dirs {
     use std::env;
     use std::fs::create_dir_all;
@@ -102,6 +105,35 @@ macro_rules! execute_on_enum {
             _ => execute_on_enum!($enum_; ($($variants),+) |$value| $block),
         }
     };
+}
+
+
+pub fn copy_dir_all(src: impl AsRef<Path>, dst: impl AsRef<Path>) -> io::Result<()> {
+    fs::create_dir_all(&dst)?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let ty = entry.file_type()?;
+        if ty.is_dir() {
+            copy_dir_all(entry.path(), dst.as_ref().join(entry.file_name()))?;
+        } else {
+            fs::copy(entry.path(), dst.as_ref().join(entry.file_name()))?;
+        }
+    }
+    Ok(())
+}
+
+pub fn copy_dir_all_no_overwrite(src: impl AsRef<Path>, dst: impl AsRef<Path>) -> io::Result<()> {
+    fs::create_dir_all(&dst)?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let ty = entry.file_type()?;
+        if ty.is_dir() {
+            copy_dir_all(entry.path(), dst.as_ref().join(entry.file_name()))?;
+        } else if !dst.as_ref().join(entry.file_name()).exists() {
+            fs::copy(entry.path(), dst.as_ref().join(entry.file_name()))?;
+        }
+    }
+    Ok(())
 }
 
 #[allow(clippy::all, clippy::pedantic, clippy::nursery)] //not my code, not my problem

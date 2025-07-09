@@ -818,8 +818,8 @@ fn bytes_to_image(bytes: Bytes, format: ImageFormat) -> Result<DynamicImage, Sta
     let mut reader = ImageReader::new(Cursor::new(bytes.as_ref()));
 
     let mut limits = Limits::default();
-    limits.max_image_width = Some(1024);
-    limits.max_image_height = Some(1024);
+    limits.max_image_width = Some(2048);
+    limits.max_image_height = Some(2048);
 
     reader.set_format(format);
 

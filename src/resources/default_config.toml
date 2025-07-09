@@ -41,6 +41,7 @@ port = 25565
 executable_name = "velocity.jar"
 hostname = "example.net" # under what domain is the server running on. the servers will be avaliable at server_name.example.net. THIS MUST BE SET CORRECTLY. OTHERWISE VELOCITY WILL NOT PROXY REQUESTS
 
+
 [world]
 # how long should mcmanager wait for the server to gracefully shut down before killing it
 stop_timeout = 15
