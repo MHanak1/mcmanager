@@ -5,7 +5,7 @@ use crate::config::CONFIG;
 use crate::database::Database;
 use crate::database::objects::{Group, InviteLink, Mod, ModLoader, Session, User, Version, World};
 use crate::minecraft::server::{MinecraftServerCollection, Server};
-use crate::minecraft::velocity::{InternalVelocityServer, VelocityServer};
+use crate::minecraft::proxy::{InternalVelocityServer, MinecraftProxy};
 use crate::util::dirs::icons_dir;
 use crate::{api, util};
 use axum::extract::{MatchedPath, Path, State};

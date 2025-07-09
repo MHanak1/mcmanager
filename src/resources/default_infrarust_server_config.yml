@@ -1,0 +1,9 @@
+domains:
+- "$hostname"
+addresses:
+- "$address"
+
+sendProxyProtocol: false
+proxy_protocol_version: 2
+
+proxyMode: "passthrough"

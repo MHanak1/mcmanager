@@ -7,7 +7,7 @@ use mcmanager::database::objects::{Group, ModLoader, User, World};
 use mcmanager::database::types::Id;
 use mcmanager::database::{Database, DatabasePool, objects};
 use mcmanager::minecraft::server::{MinecraftServerCollection, ServerConfigLimit};
-use mcmanager::minecraft::velocity::{InternalVelocityServer, VelocityServer};
+use mcmanager::minecraft::proxy::{InfrarustServer, InternalVelocityServer, MinecraftProxy};
 use mcmanager::{bin, util};
 use serde::Deserialize;
 use sqlx::any::AnyPoolOptions;
@@ -309,10 +309,10 @@ async fn main() -> Result<()> {
     tokio::task::spawn({
         let servers = state.servers.clone();
         async move {
-            info!("starting velocity at {}", CONFIG.velocity.port);
-            let mut velocity_server =
-                InternalVelocityServer::new(servers).expect("failed to create a velocity server");
-            velocity_server
+            info!("starting velocity at {}", CONFIG.proxy.port);
+            let mut proxy =
+                InfrarustServer::new(servers).expect("failed to create a velocity server");
+            proxy
                 .start()
                 .await
                 .expect("failed to start a velocity server");
@@ -320,7 +320,7 @@ async fn main() -> Result<()> {
             let mut interval = tokio::time::interval(Duration::from_millis(1000));
             loop {
                 interval.tick().await;
-                if let Err(err) = velocity_server.update().await {
+                if let Err(err) = proxy.update().await {
                     error!("failed to update velocity server: {err}");
                 }
             }

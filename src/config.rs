@@ -23,7 +23,7 @@ pub struct Config {
     pub world: WorldConfig,
     pub user_defaults: UserDefaults,
     pub world_defaults: WorldDefaults,
-    pub velocity: VelocityConfig,
+    pub proxy: ProxyConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -56,6 +56,13 @@ pub enum ServerType {
     Remote,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProxyType {
+    Infrarust,
+    Velocity,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct RemoteConfig {
     pub host: url::Url,
@@ -81,10 +88,12 @@ pub struct WorldDefaults {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct VelocityConfig {
+pub struct ProxyConfig {
     pub port: u16,
-    pub executable_name: String,
     pub hostname: String,
+    pub proxy: ProxyType,
+    pub velocity_executable_name: String,
+    pub infrarust_executable_name: String,
 }
 
 pub static CONFIG: Lazy<Config> = Lazy::new(|| {

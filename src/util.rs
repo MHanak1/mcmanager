@@ -31,6 +31,9 @@ pub mod dirs {
     pub fn velocity_dir() -> PathBuf {
         data_dir().join("velocity")
     }
+    pub fn infrarust_dir() -> PathBuf {
+        base_dir().join("infrarust")
+    }
     pub fn versions_dir() -> PathBuf {
         data_dir().join("versions")
     }
@@ -46,6 +49,8 @@ pub mod dirs {
         create_dir_all(world_icons_dir())?;
 
         create_dir_all(velocity_dir())?;
+        create_dir_all(infrarust_dir())?;
+
         create_dir_all(versions_dir())?;
         create_dir_all(worlds_dir())?;
 

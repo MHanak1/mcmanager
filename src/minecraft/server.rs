@@ -167,7 +167,7 @@ pub mod internal {
             .world
             .port_range
             .clone()
-            .find(|&port| !servers.contains(&port) && port != CONFIG.velocity.port)
+            .find(|&port| !servers.contains(&port) && port != CONFIG.proxy.port)
     }
 
     #[derive(Debug)]

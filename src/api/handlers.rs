@@ -759,8 +759,8 @@ pub async fn server_info() -> Result<impl IntoResponse, StatusCode> {
         world: WorldInfo {
             min_memory: CONFIG.world.minimum_memory,
             default_memory: CONFIG.world_defaults.allocated_memory,
-            hostname: CONFIG.velocity.hostname.clone(),
-            port: CONFIG.velocity.port,
+            hostname: CONFIG.proxy.hostname.clone(),
+            port: CONFIG.proxy.port,
         },
     }))
 }

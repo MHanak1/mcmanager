@@ -34,12 +34,17 @@ pg_host = "postgres://mcmanager:PASSWORD@localhost:5432/mcmanager"
 [remote] # run the servers on a separate system using minimanager
 host = "http://localhost:3031"
 
-[velocity]
-# on which port the velocity proxy should run. it should usually be the default minecraft port so 25565
+[proxy]
+# on which port the proxy should run. it should usually be the default minecraft port so 25565
 port = 25565
+hostname = "example.net" # under what domain is the server running on. the servers will be avaliable at server_name.example.net. THIS MUST BE SET CORRECTLY. OTHERWISE THE PROXY WILL NOT FORWARD CORRECTLY
+proxy = "infrarust" # which proxy to use. ifrarust is recommended
+
+infrarust_executable_name = "infrarust"
+velocity_executable_name = "velocity.jar"
+
+[velocity]
 # what is the velocity executable called. it should be placed in the data/velocity directory. for now you will have download it yourself.
-executable_name = "velocity.jar"
-hostname = "example.net" # under what domain is the server running on. the servers will be avaliable at server_name.example.net. THIS MUST BE SET CORRECTLY. OTHERWISE VELOCITY WILL NOT PROXY REQUESTS
 
 
 [world]
