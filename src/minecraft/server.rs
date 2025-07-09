@@ -204,15 +204,6 @@ pub mod internal {
                 .port()
                 .context("Port not set, cannot initialise files")?;
 
-            let version_folder = util::dirs::versions_dir().join(self.world.version_id.to_string());
-
-            if !version_folder.exists() {
-                bail!("version directory of {} doesn't exist", self.world.version_id);
-            }
-
-            debug!("copying version files from {} to {}", version_folder.display(), self.directory.display());
-            util::copy_dir_all_no_overwrite(version_folder, self.directory.clone())?;
-
             //todo: maybe remove files that shouldn't be there
 
             let properties = self
@@ -238,11 +229,9 @@ pub mod internal {
 
         fn start(&mut self) -> Result<()> {
             let jar_path =
-                self.directory.join("server.jar");
-            let version_path =
-                util::dirs::versions_dir().join(format!("{}/server.jar", self.world.version_id));
-            if !version_path.exists() {
-                bail!("{} doesn't exist", version_path.display());
+                util::dirs::versions_dir().join(format!("{}.jar", self.world.version_id));
+            if !jar_path.exists() {
+                bail!("{} doesn't exist", jar_path.display());
             }
 
             if !self.directory.exists() {
