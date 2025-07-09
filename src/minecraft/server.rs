@@ -198,6 +198,7 @@ pub mod internal {
         }
 
         fn initialise_files(&self) -> Result<()> {
+            debug!("creating dir for server {}", self.world.id);
             fs::create_dir_all(self.directory.clone())?;
             let port = self
                 .port()
@@ -209,6 +210,7 @@ pub mod internal {
                 bail!("version directory of {} doesn't exist", self.world.version_id);
             }
 
+            debug!("copying version files from {}", version_folder.display() to self.directory.display());
             util::copy_dir_all_no_overwrite(version_folder, self.directory.clone())?;
 
             //todo: maybe remove files that shouldn't be there
