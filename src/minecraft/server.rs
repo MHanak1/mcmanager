@@ -397,8 +397,9 @@ pub mod internal {
         }
 
         fn write_file(&self, path: &str, data: &str) -> Result<()> {
-            std::fs::create_dir_all(self.directory.clone())?;
-            let mut file = File::create(self.directory.join(path))?;
+            let path = self.directory.join(path);
+            std::fs::create_dir_all(path.parent().unwrap_or(self.directory.as_path()))?;
+            let mut file = File::create(path)?;
             file.write_all(data.as_bytes())?;
             Ok(())
         }
