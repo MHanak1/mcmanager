@@ -1,8 +1,6 @@
 pub use self::{password::Password, session::Session};
 use crate::api::filters::UserAuth;
-use crate::api::handlers::{
-    ApiCreate, ApiGet, ApiIcon, ApiList, ApiObject, ApiRemove, ApiUpdate, handle_database_error,
-};
+use crate::api::handlers::{ApiCreate, ApiGet, ApiIcon, ApiList, ApiObject, ApiRemove, ApiUpdate, handle_database_error, RecursiveQuery};
 use crate::api::serve::AppState;
 use crate::config::CONFIG;
 use crate::database;
@@ -21,6 +19,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use sqlx::{Arguments, Encode, FromRow, IntoArguments};
 use std::collections::HashMap;
 use std::sync::Arc;
+use axum::response::IntoResponse;
 use tokio::sync::Mutex;
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, FromRow)]
@@ -214,19 +213,26 @@ impl ApiList for User {}
 impl ApiGet for User {
     async fn api_get(
         Path(id): Path<Id>,
+        axum::extract::Query(recursive): axum::extract::Query<RecursiveQuery>,
         State(state): State<AppState>,
         UserAuth(user): UserAuth,
-    ) -> Result<axum::Json<Self>, StatusCode> {
+    ) -> Result<impl IntoResponse, StatusCode> {
         let group = user.group(state.database.clone(), None).await;
-        let object = {
+        Ok(Json(if recursive.recursive.unwrap_or(false) {
             state
                 .database
-                .get_user(id, Some((&user, &group)))
+                .get_user_recursive(id, Some((&user, &group)))
                 .await
                 .map_err(handle_database_error)?
-        };
+        } else {
+            serde_json::to_value(
+                state
+                    .database
+                    .get_user_recursive(id, Some((&user, &group)))
+                    .await
+                    .map_err(handle_database_error)?).unwrap()
 
-        Ok(axum::Json(object))
+        }))
     }
 }
 #[async_trait]

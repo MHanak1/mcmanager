@@ -1,7 +1,5 @@
 use crate::api::filters::UserAuth;
-use crate::api::handlers::{
-    ApiCreate, ApiGet, ApiList, ApiObject, ApiRemove, ApiUpdate, handle_database_error,
-};
+use crate::api::handlers::{ApiCreate, ApiGet, ApiList, ApiObject, ApiRemove, ApiUpdate, handle_database_error, RecursiveQuery};
 use crate::api::serve::AppState;
 use crate::config::CONFIG;
 use crate::database::objects::{DbObject, FromJson, UpdateJson, User};
@@ -9,7 +7,7 @@ use crate::database::types::{Access, Column, Id};
 use crate::database::{Database, DatabaseError, ValueType};
 use crate::minecraft::server::ServerConfigLimit;
 use async_trait::async_trait;
-use axum::Router;
+use axum::{Json, Router};
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::routing::{MethodRouter, get};
@@ -18,6 +16,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use sqlx::{Arguments, Error, FromRow, IntoArguments, Row};
 use std::collections::HashMap;
 use std::sync::Arc;
+use axum::response::IntoResponse;
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub struct Group {
@@ -341,19 +340,26 @@ impl ApiList for Group {}
 impl ApiGet for Group {
     async fn api_get(
         Path(id): Path<Id>,
+        axum::extract::Query(recursive): axum::extract::Query<RecursiveQuery>,
         State(state): State<AppState>,
         UserAuth(user): UserAuth,
-    ) -> Result<axum::Json<Self>, StatusCode> {
+    ) -> Result<impl IntoResponse, StatusCode> {
         let group = user.group(state.database.clone(), None).await;
-        let object = {
+        Ok(Json(if recursive.recursive.unwrap_or(false) {
             state
                 .database
-                .get_group(id, Some((&user, &group)))
+                .get_group_recursive(id, Some((&user, &group)))
                 .await
                 .map_err(handle_database_error)?
-        };
+        } else {
+            serde_json::to_value(
+                state
+                    .database
+                    .get_group_recursive(id, Some((&user, &group)))
+                    .await
+                    .map_err(handle_database_error)?).unwrap()
 
-        Ok(axum::Json(object))
+        }))
     }
 }
 impl ApiCreate for Group {}

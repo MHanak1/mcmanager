@@ -1,4 +1,4 @@
-use crate::api::filters::{BearerToken, UserAuth, WithSession};
+use crate::api::filters::{BearerToken, FileUpload, UserAuth, WithSession};
 use crate::api::serve::AppState;
 use crate::api::{auth, filters};
 use crate::config::CONFIG;
@@ -33,6 +33,7 @@ use std::io::{BufWriter, Cursor, Read, Write};
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
+use sqlx::query::Query;
 use tokio::io::BufReader;
 use tokio::join;
 use tokio::sync::Mutex;
@@ -183,6 +184,12 @@ where
         Ok(axum::Json(objects))
     }
 }
+
+#[derive(Debug, Deserialize)]
+pub struct RecursiveQuery {
+    pub recursive: Option<bool>,
+}
+
 #[async_trait]
 pub trait ApiGet: ApiObject
 where
@@ -194,19 +201,26 @@ where
 {
     async fn api_get(
         Path(id): Path<Id>,
+        axum::extract::Query(recursive): axum::extract::Query<RecursiveQuery>,
         State(state): State<AppState>,
         UserAuth(user): UserAuth,
-    ) -> Result<axum::Json<Self>, StatusCode> {
+    ) -> Result<impl IntoResponse, StatusCode> {
         let group = user.group(state.database.clone(), None).await;
-        let object = {
+        Ok(Json(if recursive.recursive.unwrap_or(false) {
+            state
+                .database
+                .get_recursive::<Self>(id, Some((&user, &group)))
+                .await
+                .map_err(handle_database_error)?
+        } else {
+            serde_json::to_value(
             state
                 .database
                 .get_one::<Self>(id, Some((&user, &group)))
                 .await
-                .map_err(handle_database_error)?
-        };
+                .map_err(handle_database_error)?).unwrap()
 
-        Ok(axum::Json(object))
+        }))
     }
 }
 
@@ -443,7 +457,7 @@ where
         id: Path<Id>,
         user: UserAuth,
         headers: HeaderMap,
-        mut multipart: Multipart,
+        mut file: FileUpload,
     ) -> Result<impl IntoResponse, StatusCode> {
         let state = state.0;
         let id = id.0;
@@ -459,35 +473,11 @@ where
             .await
             .map_err(|_| StatusCode::NOT_FOUND)?;
 
-        let mut bytes = None;
-
-        while let Some(field) = multipart.next_field().await.unwrap() {
-            if let Some("icon") = field.name() {
-                let filename = if let Some(filename) = field.file_name() {
-                    filename.to_string()
-                } else {
-                    continue;
-                };
-
-                let field_bytes = if let Ok(bytes) = field.bytes().await {
-                    bytes
-                } else {
-                    continue;
-                };
-
-                let extension = filename.split('.').last();
-
-                if let Some(extension) = extension {
-                    let image_format = ImageFormat::from_extension(extension);
-                    if let Some(image_format) = image_format {
-                        bytes = Some((field_bytes, image_format));
-                        break;
-                    }
-                }
-            }
+        let (bytes, image_format) = (file.bytes , ImageFormat::from_mime_type(file.content_type.essence_str()));
+        if image_format.is_none() {
+            return Err(StatusCode::BAD_REQUEST);
         }
-
-        let (bytes, image_format) = bytes.ok_or_else(|| StatusCode::BAD_REQUEST)?;
+        let image_format = image_format.unwrap();
 
         let is_gif = match image_format {
             ImageFormat::Jpeg | ImageFormat::Png | ImageFormat::WebP | ImageFormat::Bmp => false,
@@ -727,8 +717,13 @@ pub async fn logout(
 }
 
 #[allow(clippy::unused_async)]
-pub async fn user_info(user: UserAuth) -> Result<axum::Json<User>, StatusCode> {
-    Ok(axum::Json(user.0))
+#[axum::debug_handler]
+pub async fn user_info(user: UserAuth, axum::extract::Query(recursive): axum::extract::Query<RecursiveQuery>, State(state): State<AppState>) -> Result<impl IntoResponse, StatusCode> {
+    Ok(axum::Json( if recursive.recursive.unwrap_or(false) {
+        state.database.get_user_recursive(user.0.id, None).await.unwrap()
+    } else {
+        serde_json::to_value(user.0).unwrap()
+    }))
 }
 
 #[allow(clippy::unused_async)]

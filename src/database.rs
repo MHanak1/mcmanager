@@ -2,16 +2,21 @@ use crate::database::objects::{DbObject, Group};
 use crate::database::objects::{
     InviteLink, Mod, ModLoader, Password, Session, User, Version, World,
 };
-use crate::database::types::Id;
+use crate::database::types::{Id, Modifier};
 use crate::execute_on_enum;
 use log::debug;
 use moka::future::Cache;
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize};
 use sqlx::{Database as SqlxDatabase, Encode, FromRow, IntoArguments, Pool, Postgres, Type};
 use std::any::Any;
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
+use std::iter::Map;
 use std::time::Duration;
+use anyhow::{anyhow, bail, Context};
+use async_recursion::async_recursion;
+use futures::TryFutureExt;
+use serde_json::json;
 use uuid::Uuid;
 
 pub mod objects;
@@ -280,6 +285,38 @@ impl Database {
         })
     }
 
+    #[async_recursion]
+    pub async fn get_recursive<
+        T: DbObject
+        + for<'r> FromRow<'r, sqlx::sqlite::SqliteRow>
+        + for<'r> FromRow<'r, sqlx::postgres::PgRow>
+        + Serialize
+        + Unpin
+    >(
+        &self,
+        id: Id,
+        user: Option<(&User, &Group)>,
+    ) -> Result<serde_json::Value, DatabaseError> {
+        let object: T = self.get_one::<T>(id, user).map_err(|err| DatabaseError::InternalServerError(err.to_string())).await?;
+        let json = serde_json::to_value(object).map_err(|err| DatabaseError::InternalServerError(err.to_string()))?;
+
+        let mut map = serde_json::Map::new();
+        if let Some(object) = json.as_object() {
+            for (field, value) in object.iter() {
+                if let Ok((field, value)) = self.object_from_field::<T>(field, value.clone(), user).await {
+                    let field = field.strip_suffix("_id").map(|str| str.to_string()).unwrap_or(field);
+                    map.insert(field, value);
+                } else {
+                    map.insert(field.clone(), value.clone());
+                }
+            }
+
+            Ok(serde_json::to_value(map).map_err(|err| DatabaseError::InternalServerError(err.to_string()))?)
+        } else {
+            Ok(json)
+        }
+    }
+
     pub async fn get_user(
         &self,
         id: Id,
@@ -311,6 +348,33 @@ impl Database {
         }
 
         Ok(db_user)
+    }
+
+    #[async_recursion]
+    pub async fn get_user_recursive (
+        &self,
+        id: Id,
+        user: Option<(&User, &Group)>,
+    ) -> Result<serde_json::Value, DatabaseError> {
+        let object: User = self.get_user(id, user).map_err(|err| DatabaseError::InternalServerError(err.to_string())).await?;
+        let json = serde_json::to_value(object).map_err(|err| DatabaseError::InternalServerError(err.to_string()))?;
+
+        let mut map = serde_json::Map::new();
+        if let Some(object) = json.as_object() {
+            for (field, value) in object.iter() {
+                if let Ok((field, value)) = self.object_from_field::<User>(field, value.clone(), user).await {
+                    let field = field.strip_suffix("_id").map(|str| str.to_string()).unwrap_or(field);
+                    map.insert(field, value);
+                } else {
+                    map.insert(field.clone(), value.clone());
+                }
+            }
+
+            Ok(serde_json::to_value(map).map_err(|err| DatabaseError::InternalServerError(err.to_string()))?)
+        } else {
+            Ok(json)
+        }
+
     }
 
     pub async fn get_group(
@@ -346,6 +410,32 @@ impl Database {
         Ok(db_user)
     }
 
+    #[async_recursion]
+    pub async fn get_group_recursive(
+        &self,
+        id: Id,
+        user: Option<(&User, &Group)>,
+    ) -> Result<serde_json::Value, DatabaseError> {
+        let object: Group = self.get_group(id, user).map_err(|err| DatabaseError::InternalServerError(err.to_string())).await?;
+        let json = serde_json::to_value(object).map_err(|err| DatabaseError::InternalServerError(err.to_string()))?;
+
+        let mut map = serde_json::Map::new();
+        if let Some(object) = json.as_object() {
+            for (field, value) in object.iter() {
+                if let Ok((field, value)) = self.object_from_field::<Group>(field, value.clone(), user).await {
+                    let field = field.strip_suffix("_id").map(|str| str.to_string()).unwrap_or(field);
+                    map.insert(field, value);
+                } else {
+                    map.insert(field.clone(), value.clone());
+                }
+            }
+
+            Ok(serde_json::to_value(map).map_err(|err| DatabaseError::InternalServerError(err.to_string()))?)
+        } else {
+            Ok(json)
+        }
+    }
+
     pub async fn get_session(
         &self,
         token: Uuid,
@@ -378,6 +468,32 @@ impl Database {
         }
 
         Ok(db_user)
+    }
+
+    #[async_recursion]
+    async fn object_from_field<T: DbObject>(&self, field: &str, value: serde_json::Value, user: Option<(&User, &Group)>) -> Result<(String, serde_json::Value), anyhow::Error> {
+        if let Some(column) = T::get_column(field) {
+            if let Some(Modifier::References(references)) = column.modifiers.iter().find(|modifier| matches!(modifier, Modifier::References(_))) {
+                if let Some(references) = references.strip_suffix("(id)") {
+                    let id = Id::from_string(value.as_str().context("not a str")?).context("not an id")?;
+
+                    let referenced = match references {
+                        "users" => self.get_user_recursive(id, user).await?,
+                        "sessions" => self.get_recursive::<Session>(id, user).await?,
+                        "groups" => self.get_group_recursive(id, user).await?,
+                        "invite_links" => self.get_recursive::<InviteLink>(id, user).await?,
+                        "mod_loaders" => self.get_recursive::<ModLoader>(id, user).await?,
+                        "mods" => self.get_recursive::<Mod>(id, user).await?,
+                        "versions" => self.get_recursive::<Version>(id, user).await?,
+                        "worlds" => self.get_recursive::<World>(id, user).await?,
+                        _ => bail!("unknown column: {}", field),
+                    };
+
+                    return Ok((field.to_string(), serde_json::to_value(referenced)?));
+                }
+            }
+        }
+        bail!("not found")
     }
 
     pub async fn get_where<

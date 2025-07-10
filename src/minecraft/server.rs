@@ -208,18 +208,15 @@ pub mod internal {
 
             let properties = self
                 .read_file("server.properties")
-                .unwrap_or(include_str!("../resources/server.properties").to_string());
+                .unwrap_or_default();
             let mut properties = crate::minecraft::util::parse_minecraft_properties(&properties);
             properties.insert(String::from("query.port"), format!("{port}"));
             properties.insert(String::from("server-port"), format!("{port}",));
+            properties.insert(String::from("rcon.port"), format!("{port}",));
 
             let properties = crate::minecraft::util::create_minecraft_properties(properties);
             debug!("writing server.properties");
             self.write_file("server.properties", &properties)?;
-
-            debug!("writing forwarding secrets");
-            self.write_file("forwarding.secret", &SECRETS.forwarding_secret)?;
-            self.write_file("config/FabricProxy-Lite.toml", &include_str!("../resources/default_fabricproxy_lite_config.toml").replace("$secret", &SECRETS.forwarding_secret))?;
 
             debug!("writing eula.txt");
             self.write_file("eula.txt", "eula=true")?;
@@ -446,7 +443,7 @@ pub mod internal {
         async fn config(&self) -> Result<HashMap<String, String>> {
             let properties = self
                 .read_file("server.properties")
-                .unwrap_or(include_str!("../resources/server.properties").to_string());
+                .unwrap_or_default();
             Ok(crate::minecraft::util::parse_minecraft_properties(
                 &properties,
             ))

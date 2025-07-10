@@ -45,8 +45,7 @@ pub async fn run(state: AppState, config: config::Config) -> Result<(), anyhow::
     util::dirs::init_dirs().expect("Failed to initialize the data directory");
 
     let governor_conf = Arc::new(
-        GovernorConfigBuilder::default()
-            .key_extractor(tower_governor::key_extractor::SmartIpKeyExtractor)
+        GovernorConfigBuilder::default().key_extractor(tower_governor::key_extractor::SmartIpKeyExtractor)
             .per_millisecond((1000.0 / CONFIG.api_rate_limit) as u64)
             .burst_size((10.0 * CONFIG.api_rate_limit) as u32)
             .use_headers()
