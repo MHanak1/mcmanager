@@ -1,8 +1,9 @@
+use std::any::Any;
 use crate::api::handlers::{ApiCreate, ApiGet, ApiIcon, ApiList, ApiObject, ApiRemove, ApiUpdate};
 use crate::api::serve::AppState;
-use crate::database::objects::{DbObject, FromJson, UpdateJson, User};
+use crate::database::objects::{DbObject, FromJson, ModLoader, UpdateJson, User};
 use crate::database::types::{Access, Column, Id};
-use crate::database::{Database, DatabaseError, ValueType};
+use crate::database::{Cachable, Database, DatabaseError, ValueType};
 use async_trait::async_trait;
 use axum::Router;
 use axum::http::StatusCode;
@@ -74,6 +75,12 @@ impl DbObject for Mod {
     }
     fn is_public(&self) -> bool {
         self.public
+    }
+}
+
+impl Cachable for Mod {
+    fn into_any(self: Box<Self>) -> Box<dyn Any> {
+        self as Box<dyn Any>
     }
 }
 

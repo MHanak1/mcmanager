@@ -6,7 +6,7 @@ use crate::database::DatabaseError::SqlxError;
 use crate::database::objects::{DbObject, FromJson, InviteLink, Session, UpdateJson, User, World};
 use crate::database::types::Id;
 pub(crate) use crate::database::{Database, DatabaseError};
-use crate::database::{DatabasePool, QueryBuilder, ValueType, WhereOperand};
+use crate::database::{Cachable, DatabasePool, QueryBuilder, ValueType, WhereOperand};
 use crate::execute_on_enum;
 use crate::util::base64::base64_decode;
 use crate::util::dirs::icons_dir;
@@ -198,6 +198,7 @@ where
     for<'a> Self: FromRow<'a, sqlx::sqlite::SqliteRow>,
     for<'a> Self: FromRow<'a, sqlx::postgres::PgRow>,
     Self: Unpin,
+    Self: Cachable,
 {
     async fn api_get(
         Path(id): Path<Id>,
@@ -232,6 +233,7 @@ where
     Self: Clone,
     Self: for<'a> IntoArguments<'a, sqlx::Sqlite>,
     Self: for<'a> IntoArguments<'a, sqlx::Postgres>,
+    Self: Cachable,
 {
     async fn api_create(
         State(state): State<AppState>,
@@ -306,6 +308,7 @@ where
     Self: for<'r> FromRow<'r, sqlx::postgres::PgRow>,
     Self: Unpin,
     Self: Clone,
+    Self: Cachable,
 {
     async fn api_update(
         Path(id): Path<Id>,
@@ -387,6 +390,7 @@ where
     Self: for<'r> FromRow<'r, sqlx::postgres::PgRow>,
     Self: serde::Serialize,
     Self: Unpin,
+    Self: Cachable,
 {
     async fn api_remove(
         Path(id): Path<Id>,
@@ -451,6 +455,7 @@ where
     Self: for<'r> FromRow<'r, sqlx::postgres::PgRow>,
     Self: serde::Serialize,
     Self: Unpin,
+    Self: Cachable,
 {
     async fn upload_icon(
         state: State<AppState>,
@@ -720,7 +725,7 @@ pub async fn logout(
 #[axum::debug_handler]
 pub async fn user_info(user: UserAuth, axum::extract::Query(recursive): axum::extract::Query<RecursiveQuery>, State(state): State<AppState>) -> Result<impl IntoResponse, StatusCode> {
     Ok(axum::Json( if recursive.recursive.unwrap_or(false) {
-        state.database.get_user_recursive(user.0.id, None).await.unwrap()
+        state.database.get_recursive::<User>(user.0.id, None).await.unwrap()
     } else {
         serde_json::to_value(user.0).unwrap()
     }))

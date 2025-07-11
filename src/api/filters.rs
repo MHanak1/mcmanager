@@ -90,7 +90,7 @@ impl FromRequestParts<AppState> for UserAuth {
 
         match state
             .database
-            .get_user(session.0.user_id, None)
+            .get_one::<User>(session.0.user_id, None)
             .await
             .map_err(handle_database_error)
         {

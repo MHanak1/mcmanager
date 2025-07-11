@@ -4,31 +4,100 @@ use crate::database::objects::{
 };
 use crate::database::types::{Id, Modifier};
 use crate::execute_on_enum;
-use log::debug;
-use moka::future::Cache;
-use serde::{Deserialize, Deserializer, Serialize};
-use sqlx::{Database as SqlxDatabase, Encode, FromRow, IntoArguments, Pool, Postgres, Type};
+use log::{error};
+use moka::future::{Cache,};
+use serde::{Deserializer, Serialize};
+use sqlx::{Encode, FromRow, IntoArguments, Pool, Postgres, Type};
 use std::any::Any;
+use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
-use std::iter::Map;
+use std::sync::Arc;
 use std::time::Duration;
-use anyhow::{anyhow, bail, Context};
+use anyhow::{bail, Context};
 use async_recursion::async_recursion;
+use dyn_clone::DynClone;
 use futures::TryFutureExt;
-use serde_json::json;
 use uuid::Uuid;
 
 pub mod objects;
 pub mod types;
 
-#[derive(Debug, Clone)]
+pub trait Cachable: DynClone + Sync + Send + Any  {
+    fn into_any(self: Box<Self>) -> Box<dyn Any>;
+}
+
+dyn_clone::clone_trait_object!(Cachable);
+
+
+#[derive(Clone)]
+pub struct DatabaseCache {
+    pub caches: Arc<HashMap<&'static str, Cache<Id, Box<dyn Cachable>>>>,
+}
+
+impl DatabaseCache {
+    pub fn new() -> Self {
+        let mut caches =  HashMap::new();
+
+        const CACHES_SIZE: u64 = 1000;
+
+        caches.insert(Group::table_name(), Cache::new(CACHES_SIZE));
+        caches.insert(InviteLink::table_name(), Cache::new(CACHES_SIZE));
+        caches.insert(ModLoader::table_name(), Cache::new(CACHES_SIZE));
+        caches.insert(Mod::table_name(), Cache::new(CACHES_SIZE));
+        caches.insert(User::table_name(), Cache::new(CACHES_SIZE));
+        caches.insert(Session::table_name(), Cache::new(CACHES_SIZE));
+        caches.insert(Password::table_name(), Cache::new(CACHES_SIZE));
+        caches.insert(Version::table_name(), Cache::new(CACHES_SIZE));
+        caches.insert(World::table_name(), Cache::new(CACHES_SIZE));
+
+        Self {
+            caches: Arc::new(caches),
+        }
+    }
+
+    fn get_cache(&self, name: &str) -> Cache<Id, Box<dyn Cachable>> {
+        self.caches.get(name).cloned().expect("cache not found")
+    }
+
+    pub async fn get<T: DbObject + 'static>(&self, id: Id) -> Option<T> {
+        let cache = self.get_cache(&T::table_name());
+        let value = cache.get(&id).await?;
+
+        let value = value.into_any().downcast::<T>();
+
+        match value {
+            Ok(value) => Some(*value),
+            Err(_) => {
+                error!("Cache type mismatch");
+                None
+            },
+        }
+    }
+
+    pub async fn insert<T: DbObject + Cachable + 'static>(&self, value: T) {
+        let cache = self.get_cache(T::table_name());
+        cache.insert(value.id(), Box::new(value) as Box<dyn Cachable>).await;
+    }
+
+    pub async fn insert_all<T: DbObject + Cachable + 'static>(&self, values: Vec<T>) {
+        //todo: make this parallel
+        for value in values {
+            self.insert(value).await;
+        }
+    }
+
+    pub async fn remove<T: DbObject>(&self, id: Id) {
+        self.get_cache(T::table_name()).remove(&id).await.expect("cache not found");
+    }
+}
+
+#[derive(Clone)]
 pub struct Database {
     //pub conn: rusqlite::Connection,
     pub pool: DatabasePool,
-    pub user_cache: Cache<Id, User>,
+    pub cache: DatabaseCache,
     pub session_cache: Cache<Uuid, Session>,
-    pub group_cache: Cache<Id, Group>,
 }
 
 pub enum DatabaseType {
@@ -39,19 +108,7 @@ pub enum DatabaseType {
 #[allow(dead_code)]
 impl Database {
     pub fn new(pool: DatabasePool) -> Self {
-        let user_cache = Cache::builder()
-            .time_to_live(Duration::from_secs(
-                crate::config::CONFIG.database.cache_time_to_live,
-            ))
-            .max_capacity(1000)
-            .build();
         let session_cache = Cache::builder()
-            .time_to_live(Duration::from_secs(
-                crate::config::CONFIG.database.cache_time_to_live,
-            ))
-            .max_capacity(1000)
-            .build();
-        let group_cache = Cache::builder()
             .time_to_live(Duration::from_secs(
                 crate::config::CONFIG.database.cache_time_to_live,
             ))
@@ -60,9 +117,8 @@ impl Database {
 
         Self {
             pool,
-            user_cache,
+            cache: DatabaseCache::new(),
             session_cache,
-            group_cache,
         }
     }
 
@@ -96,7 +152,8 @@ impl Database {
             + for<'a> IntoArguments<'a, sqlx::Sqlite>
             + for<'a> IntoArguments<'a, sqlx::Postgres>
             + Any
-            + Clone,
+            + Clone
+            + Cachable,
     >(
         &self,
         value: &T,
@@ -120,25 +177,12 @@ impl Database {
         });
         value.after_create(self).await?;
 
-        match (value as &dyn Any).downcast_ref::<User>() {
-            Some(user) => {
-                self.user_cache.insert(user.id, user.clone()).await;
-            }
-            None => {}
-        }
-        match (value as &dyn Any).downcast_ref::<Group>() {
-            Some(group) => {
-                self.group_cache.insert(group.id, group.clone()).await;
-            }
-            None => {}
-        }
-        match (value as &dyn Any).downcast_ref::<Session>() {
-            Some(session) => {
-                self.session_cache
-                    .insert(session.token, session.clone())
-                    .await;
-            }
-            None => {}
+        self.cache.insert(value.clone()).await;
+
+        if let Some(session) = (value as &dyn Any).downcast_ref::<Session>() {
+            self.session_cache
+                .insert(session.token, session.clone())
+                .await;
         }
 
         Ok(())
@@ -149,7 +193,8 @@ impl Database {
             + for<'a> IntoArguments<'a, sqlx::Sqlite>
             + for<'a> IntoArguments<'a, sqlx::Postgres>
             + Any
-            + Clone,
+            + Clone
+            + Cachable
     >(
         &self,
         value: &T,
@@ -178,25 +223,12 @@ impl Database {
                 .map_err(DatabaseError::from)?;
         });
 
-        match (value as &dyn Any).downcast_ref::<User>() {
-            Some(user) => {
-                self.user_cache.insert(user.id, user.clone()).await;
-            }
-            None => {}
-        }
-        match (value as &dyn Any).downcast_ref::<Group>() {
-            Some(group) => {
-                self.group_cache.insert(group.id, group.clone()).await;
-            }
-            None => {}
-        }
-        match (value as &dyn Any).downcast_ref::<Session>() {
-            Some(session) => {
-                self.session_cache
-                    .insert(session.token, session.clone())
-                    .await;
-            }
-            None => {}
+        self.cache.insert(value.clone()).await;
+
+        if let Some(session) = (value as &dyn Any).downcast_ref::<Session>() {
+            self.session_cache
+                .insert(session.token, session.clone())
+                .await;
         }
 
         value.after_update(self).await?;
@@ -221,18 +253,8 @@ impl Database {
         }
         value.before_delete(self).await?;
 
-        match (value as &dyn Any).downcast_ref::<User>() {
-            Some(user) => {
-                self.user_cache.remove(&user.id).await;
-            }
-            None => {}
-        }
-        match (value as &dyn Any).downcast_ref::<Group>() {
-            Some(group) => {
-                self.group_cache.remove(&group.id).await;
-            }
-            None => {}
-        }
+        self.cache.remove::<T>(value.id()).await;
+
         match (value as &dyn Any).downcast_ref::<Session>() {
             Some(session) => {
                 self.session_cache.remove(&session.token).await;
@@ -264,30 +286,45 @@ impl Database {
         T: DbObject
             + for<'r> FromRow<'r, sqlx::sqlite::SqliteRow>
             + for<'r> FromRow<'r, sqlx::postgres::PgRow>
-            + Unpin,
+            + Unpin
+            + Cachable
     >(
         &self,
         id: Id,
         user: Option<(&User, &Group)>,
     ) -> Result<T, DatabaseError> {
-        execute_on_enum!(&self.pool; (DatabasePool::Postgres, DatabasePool::Sqlite) |pool| {
-            let mut query = QueryBuilder::select::<T>();
-            query.where_id::<T>(id);
-            if let Some((user, group)) = user {
-                query.user_group::<T>(user, group);
+        let db_object = if let Some(cached_object) = self.cache.get(id).await {
+            cached_object
+        } else {
+            let db_object: T = execute_on_enum!(&self.pool; (DatabasePool::Postgres, DatabasePool::Sqlite) |pool| {
+                let mut query = QueryBuilder::select::<T>();
+                query.where_id::<T>(id);
+                //no user filter in query, it will be done later so it always lands in cache
+                query
+                    .query_builder
+                    .build_query_as()
+                    .fetch_one(pool)
+                    .await
+                    .map_err(DatabaseError::from)
+            })?;
+
+            self.cache.insert(db_object.clone()).await;
+            db_object
+        };
+
+        if let Some((user, group)) = user {
+            if !db_object.viewable_by(user, group) {
+                return Err(DatabaseError::NotFound);
             }
-            query
-                .query_builder
-                .build_query_as()
-                .fetch_one(pool)
-                .await
-                .map_err(DatabaseError::from)
-        })
+        }
+
+        Ok(db_object)
     }
 
     #[async_recursion]
     pub async fn get_recursive<
         T: DbObject
+        + Cachable
         + for<'r> FromRow<'r, sqlx::sqlite::SqliteRow>
         + for<'r> FromRow<'r, sqlx::postgres::PgRow>
         + Serialize
@@ -317,124 +354,6 @@ impl Database {
         }
     }
 
-    pub async fn get_user(
-        &self,
-        id: Id,
-        user: Option<(&User, &Group)>,
-    ) -> Result<User, DatabaseError> {
-        let db_user = if let Some(cached_user) = self.user_cache.get(&id).await {
-            cached_user
-        } else {
-            let db_user: User = execute_on_enum!(&self.pool; (DatabasePool::Postgres, DatabasePool::Sqlite) |pool| {
-                let mut query = QueryBuilder::select::<User>();
-                query.where_id::<User>(id);
-                //no user filter in query, it will be done later so it always lands in cache
-                query
-                    .query_builder
-                    .build_query_as()
-                    .fetch_one(pool)
-                    .await
-                    .map_err(DatabaseError::from)
-            })?;
-
-            self.user_cache.insert(id, db_user.clone()).await;
-            db_user
-        };
-
-        if let Some((user, group)) = user {
-            if !db_user.viewable_by(user, group) {
-                return Err(DatabaseError::NotFound);
-            }
-        }
-
-        Ok(db_user)
-    }
-
-    #[async_recursion]
-    pub async fn get_user_recursive (
-        &self,
-        id: Id,
-        user: Option<(&User, &Group)>,
-    ) -> Result<serde_json::Value, DatabaseError> {
-        let object: User = self.get_user(id, user).map_err(|err| DatabaseError::InternalServerError(err.to_string())).await?;
-        let json = serde_json::to_value(object).map_err(|err| DatabaseError::InternalServerError(err.to_string()))?;
-
-        let mut map = serde_json::Map::new();
-        if let Some(object) = json.as_object() {
-            for (field, value) in object.iter() {
-                if let Ok((field, value)) = self.object_from_field::<User>(field, value.clone(), user).await {
-                    let field = field.strip_suffix("_id").map(|str| str.to_string()).unwrap_or(field);
-                    map.insert(field, value);
-                } else {
-                    map.insert(field.clone(), value.clone());
-                }
-            }
-
-            Ok(serde_json::to_value(map).map_err(|err| DatabaseError::InternalServerError(err.to_string()))?)
-        } else {
-            Ok(json)
-        }
-
-    }
-
-    pub async fn get_group(
-        &self,
-        id: Id,
-        user: Option<(&User, &Group)>,
-    ) -> Result<Group, DatabaseError> {
-        let db_user = if let Some(cached_session) = self.group_cache.get(&id).await {
-            cached_session
-        } else {
-            let group: Group = execute_on_enum!(&self.pool; (DatabasePool::Postgres, DatabasePool::Sqlite) |pool| {
-                let mut query = QueryBuilder::select::<Group>();
-                query.where_id::<Group>(id);
-                //no user filter in query, it will be done later so it always lands in cache
-                query
-                    .query_builder
-                    .build_query_as()
-                    .fetch_one(pool)
-                    .await
-                    .map_err(DatabaseError::from)
-            })?;
-
-            self.group_cache.insert(id, group.clone()).await;
-            group
-        };
-
-        if let Some((user, group)) = user {
-            if !db_user.viewable_by(user, group) {
-                return Err(DatabaseError::NotFound);
-            }
-        }
-
-        Ok(db_user)
-    }
-
-    #[async_recursion]
-    pub async fn get_group_recursive(
-        &self,
-        id: Id,
-        user: Option<(&User, &Group)>,
-    ) -> Result<serde_json::Value, DatabaseError> {
-        let object: Group = self.get_group(id, user).map_err(|err| DatabaseError::InternalServerError(err.to_string())).await?;
-        let json = serde_json::to_value(object).map_err(|err| DatabaseError::InternalServerError(err.to_string()))?;
-
-        let mut map = serde_json::Map::new();
-        if let Some(object) = json.as_object() {
-            for (field, value) in object.iter() {
-                if let Ok((field, value)) = self.object_from_field::<Group>(field, value.clone(), user).await {
-                    let field = field.strip_suffix("_id").map(|str| str.to_string()).unwrap_or(field);
-                    map.insert(field, value);
-                } else {
-                    map.insert(field.clone(), value.clone());
-                }
-            }
-
-            Ok(serde_json::to_value(map).map_err(|err| DatabaseError::InternalServerError(err.to_string()))?)
-        } else {
-            Ok(json)
-        }
-    }
 
     pub async fn get_session(
         &self,
@@ -478,9 +397,9 @@ impl Database {
                     let id = Id::from_string(value.as_str().context("not a str")?).context("not an id")?;
 
                     let referenced = match references {
-                        "users" => self.get_user_recursive(id, user).await?,
+                        "users" => self.get_recursive::<User>(id, user).await?,
                         "sessions" => self.get_recursive::<Session>(id, user).await?,
-                        "groups" => self.get_group_recursive(id, user).await?,
+                        "groups" => self.get_recursive::<Group>(id, user).await?,
                         "invite_links" => self.get_recursive::<InviteLink>(id, user).await?,
                         "mod_loaders" => self.get_recursive::<ModLoader>(id, user).await?,
                         "mods" => self.get_recursive::<Mod>(id, user).await?,
@@ -500,7 +419,8 @@ impl Database {
         T: DbObject
             + for<'r> FromRow<'r, sqlx::sqlite::SqliteRow>
             + for<'r> FromRow<'r, sqlx::postgres::PgRow>
-            + Unpin,
+            + Unpin
+            + Cachable,
         V: for<'r> Encode<'r, sqlx::Sqlite>
             + Type<sqlx::Sqlite>
             + for<'r> Encode<'r, sqlx::Postgres>
@@ -532,12 +452,13 @@ impl Database {
         T: DbObject
             + for<'r> FromRow<'r, sqlx::sqlite::SqliteRow>
             + for<'r> FromRow<'r, sqlx::postgres::PgRow>
-            + std::marker::Unpin,
+            + Unpin
+            + Cachable
     >(
         &self,
         user: Option<(&User, &Group)>,
     ) -> Result<Vec<T>, DatabaseError> {
-        execute_on_enum!(&self.pool; (DatabasePool::Postgres, DatabasePool::Sqlite) |pool| {
+        let value = execute_on_enum!(&self.pool; (DatabasePool::Postgres, DatabasePool::Sqlite) |pool| {
             let mut query = QueryBuilder::select::<T>();
             if let Some((user, group)) = user {
                 query.user_group::<T>(user, group);
@@ -548,7 +469,11 @@ impl Database {
                 .fetch_all(pool)
                 .await
                 .map_err(DatabaseError::from)
-        })
+        })?;
+
+        self.cache.insert_all(value.clone()).await;
+
+        Ok(value)
     }
 
     pub async fn get_all_where<
@@ -675,7 +600,7 @@ impl DbType for Pool<Postgres> {
     }
 }
 
-enum QueryType {
+pub enum QueryType {
     Insert,
     Select,
     Update,

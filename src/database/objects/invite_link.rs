@@ -1,8 +1,9 @@
+use std::any::Any;
 use crate::api::handlers::{ApiCreate, ApiGet, ApiList, ApiObject, ApiRemove};
 use crate::api::serve::AppState;
 use crate::database::objects::{DbObject, FromJson, User};
 use crate::database::types::{Access, Column, Id};
-use crate::database::{Database, ValueType};
+use crate::database::{Cachable, Database, ValueType};
 use axum::Router;
 use axum::routing::get;
 use chrono::{DateTime, Utc};
@@ -68,6 +69,12 @@ impl DbObject for InviteLink {
 
     fn owner_id(&self) -> Option<Id> {
         Some(self.creator_id)
+    }
+}
+
+impl Cachable for InviteLink {
+    fn into_any(self: Box<Self>) -> Box<dyn Any> {
+        self as Box<dyn Any>
     }
 }
 

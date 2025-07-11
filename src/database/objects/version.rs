@@ -1,7 +1,8 @@
+use std::any::Any;
 use crate::api::handlers::{ApiCreate, ApiGet, ApiList, ApiObject, ApiRemove, ApiUpdate};
 use crate::api::serve::AppState;
-use crate::database::ValueType;
-use crate::database::objects::{DbObject, FromJson, UpdateJson, User};
+use crate::database::{Cachable, ValueType};
+use crate::database::objects::{DbObject, FromJson, ModLoader, UpdateJson, User};
 use crate::database::types::{Access, Column, Id};
 use axum::Router;
 use axum::routing::get;
@@ -46,6 +47,12 @@ impl DbObject for Version {
     }
     fn id(&self) -> Id {
         self.id
+    }
+}
+
+impl Cachable for Version {
+    fn into_any(self: Box<Self>) -> Box<dyn Any> {
+        self as Box<dyn Any>
     }
 }
 

@@ -1,12 +1,13 @@
+use std::any::Any;
 pub use self::{password::Password, session::Session};
 use crate::api::filters::UserAuth;
 use crate::api::handlers::{ApiCreate, ApiGet, ApiIcon, ApiList, ApiObject, ApiRemove, ApiUpdate, handle_database_error, RecursiveQuery};
 use crate::api::serve::AppState;
 use crate::config::CONFIG;
 use crate::database;
-use crate::database::objects::{DbObject, FromJson, Group, Mod, UpdateJson, World};
+use crate::database::objects::{DbObject, FromJson, Group, Mod, ModLoader, UpdateJson, World};
 use crate::database::types::{Access, Column, Id};
-use crate::database::{Database, DatabaseError, ValueType};
+use crate::database::{Cachable, Database, DatabaseError, ValueType};
 use crate::minecraft::server::ServerConfigLimit;
 use async_trait::async_trait;
 use axum::extract::{Path, State};
@@ -92,6 +93,12 @@ impl DbObject for User {
 
     fn owner_id(&self) -> Option<Id> {
         Some(self.id)
+    }
+}
+
+impl Cachable for User {
+    fn into_any(self: Box<Self>) -> Box<dyn Any> {
+        self as Box<dyn Any>
     }
 }
 
@@ -209,32 +216,7 @@ impl ApiObject for User {
 }
 
 impl ApiList for User {}
-#[async_trait]
-impl ApiGet for User {
-    async fn api_get(
-        Path(id): Path<Id>,
-        axum::extract::Query(recursive): axum::extract::Query<RecursiveQuery>,
-        State(state): State<AppState>,
-        UserAuth(user): UserAuth,
-    ) -> Result<impl IntoResponse, StatusCode> {
-        let group = user.group(state.database.clone(), None).await;
-        Ok(Json(if recursive.recursive.unwrap_or(false) {
-            state
-                .database
-                .get_user_recursive(id, Some((&user, &group)))
-                .await
-                .map_err(handle_database_error)?
-        } else {
-            serde_json::to_value(
-                state
-                    .database
-                    .get_user_recursive(id, Some((&user, &group)))
-                    .await
-                    .map_err(handle_database_error)?).unwrap()
-
-        }))
-    }
-}
+impl ApiGet for User {}
 #[async_trait]
 impl ApiCreate for User {
     async fn after_api_create(
@@ -333,14 +315,15 @@ impl ApiIcon for User {}
 impl User {
     pub async fn group(&self, database: Database, user: Option<(&User, &Group)>) -> Group {
         database
-            .get_group(self.group_id, user)
+            .get_one::<Group>(self.group_id, user)
             .await
             .expect(&format!("couldn't find group with id {}", self.group_id))
     }
 }
 
 pub mod password {
-    use crate::database::ValueType;
+    use std::any::Any;
+    use crate::database::{Cachable, ValueType};
     use crate::database::objects::DbObject;
     use crate::database::types::{Access, Column, Id};
     use argon2::password_hash::rand_core::OsRng;
@@ -410,6 +393,11 @@ pub mod password {
             Some(self.user_id)
         }
     }
+    impl Cachable for Password {
+        fn into_any(self: Box<Self>) -> Box<dyn Any> {
+            self as Box<dyn Any>
+        }
+    }
 
     impl<'a> IntoArguments<'a, sqlx::Sqlite> for Password {
         fn into_arguments(self) -> sqlx::sqlite::SqliteArguments<'a> {
@@ -450,14 +438,15 @@ pub mod password {
 }
 
 pub mod session {
+    use std::any::Any;
     use crate::api::filters::UserAuth;
     use crate::api::handlers::{
         ApiCreate, ApiGet, ApiList, ApiObject, ApiRemove, handle_database_error,
     };
     use crate::api::serve::AppState;
-    use crate::database::objects::{DbObject, FromJson, User};
+    use crate::database::objects::{DbObject, FromJson, Password, User};
     use crate::database::types::{Access, Column, Id};
-    use crate::database::{Database, ValueType};
+    use crate::database::{Cachable, Database, ValueType};
     use async_trait::async_trait;
     use axum::Router;
     use axum::extract::{Path, State};
@@ -524,6 +513,12 @@ pub mod session {
 
         fn owner_id(&self) -> Option<Id> {
             Some(self.user_id)
+        }
+    }
+
+    impl Cachable for Session{
+        fn into_any(self: Box<Self>) -> Box<dyn Any> {
+            self as Box<dyn Any>
         }
     }
 

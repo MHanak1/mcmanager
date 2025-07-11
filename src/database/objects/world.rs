@@ -4,9 +4,9 @@ use crate::api::handlers::{ApiCreate, ApiGet, ApiIcon, ApiList, ApiObject, ApiRe
 use crate::api::serve::AppState;
 use crate::config::CONFIG;
 use crate::database::objects::group::Group;
-use crate::database::objects::{DbObject, FromJson, UpdateJson, User, Version};
+use crate::database::objects::{DbObject, FromJson, ModLoader, UpdateJson, User, Version};
 use crate::database::types::{Access, Column, Id};
-use crate::database::{Database, DatabaseError, ValueType};
+use crate::database::{Cachable, Database, DatabaseError, ValueType};
 use crate::minecraft::server;
 use crate::minecraft::server::{MinecraftServerStatus, ServerConfigLimit};
 use async_trait::async_trait;
@@ -83,6 +83,12 @@ impl DbObject for World {
 
     fn owner_id(&self) -> Option<Id> {
         Some(self.owner_id)
+    }
+}
+
+impl Cachable for World {
+    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> {
+        self as Box<dyn std::any::Any>
     }
 }
 

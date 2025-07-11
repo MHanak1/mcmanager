@@ -1,8 +1,9 @@
+use std::any::Any;
 use crate::api::handlers::{ApiCreate, ApiGet, ApiList, ApiObject, ApiRemove, ApiUpdate};
 use crate::api::serve::AppState;
 use crate::database::objects::{DbObject, FromJson, UpdateJson, User};
 use crate::database::types::{Access, Column, Id};
-use crate::database::{Database, ValueType};
+use crate::database::{Cachable, Database, ValueType};
 use axum::Router;
 use axum::routing::get;
 use serde::{Deserialize, Serialize};
@@ -48,6 +49,12 @@ impl DbObject for ModLoader {
     }
     fn id(&self) -> Id {
         self.id
+    }
+}
+
+impl Cachable for ModLoader {
+    fn into_any(self: Box<Self>) -> Box<dyn Any> {
+        self as Box<dyn Any>
     }
 }
 

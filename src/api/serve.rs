@@ -35,7 +35,7 @@ use tower_http::classify::ServerErrorsFailureClass;
 use tower_http::trace::{DefaultMakeSpan, DefaultOnFailure, DefaultOnResponse};
 use tracing::{Level, Span, info_span};
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct AppState {
     pub database: Database,
     pub servers: MinecraftServerCollection,

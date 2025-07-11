@@ -1,10 +1,11 @@
+use std::any::Any;
 use crate::api::filters::UserAuth;
 use crate::api::handlers::{ApiCreate, ApiGet, ApiList, ApiObject, ApiRemove, ApiUpdate, handle_database_error, RecursiveQuery};
 use crate::api::serve::AppState;
 use crate::config::CONFIG;
 use crate::database::objects::{DbObject, FromJson, UpdateJson, User};
 use crate::database::types::{Access, Column, Id};
-use crate::database::{Database, DatabaseError, ValueType};
+use crate::database::{Cachable, Database, DatabaseError, ValueType};
 use crate::minecraft::server::ServerConfigLimit;
 use async_trait::async_trait;
 use axum::{Json, Router};
@@ -88,6 +89,12 @@ impl DbObject for Group {
 
     fn id(&self) -> Id {
         self.id
+    }
+}
+
+impl Cachable for Group {
+    fn into_any(self: Box<Self>) -> Box<dyn Any> {
+        self as Box<dyn Any>
     }
 }
 
@@ -336,32 +343,7 @@ impl UpdateJson for Group {
 }
 
 impl ApiList for Group {}
-#[async_trait]
-impl ApiGet for Group {
-    async fn api_get(
-        Path(id): Path<Id>,
-        axum::extract::Query(recursive): axum::extract::Query<RecursiveQuery>,
-        State(state): State<AppState>,
-        UserAuth(user): UserAuth,
-    ) -> Result<impl IntoResponse, StatusCode> {
-        let group = user.group(state.database.clone(), None).await;
-        Ok(Json(if recursive.recursive.unwrap_or(false) {
-            state
-                .database
-                .get_group_recursive(id, Some((&user, &group)))
-                .await
-                .map_err(handle_database_error)?
-        } else {
-            serde_json::to_value(
-                state
-                    .database
-                    .get_group_recursive(id, Some((&user, &group)))
-                    .await
-                    .map_err(handle_database_error)?).unwrap()
-
-        }))
-    }
-}
+impl ApiGet for Group {}
 impl ApiCreate for Group {}
 impl ApiUpdate for Group {}
 
