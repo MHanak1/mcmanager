@@ -1,4 +1,4 @@
-use anyhow::{Result, bail};
+use color_eyre::{Result};
 use futures::{SinkExt, TryFutureExt};
 use log::{error, info};
 use mcmanager::api::serve::AppState;

@@ -41,7 +41,7 @@ pub struct AppState {
     pub servers: MinecraftServerCollection,
 }
 
-pub async fn run(state: AppState, config: config::Config) -> Result<(), anyhow::Error> {
+pub async fn run(state: AppState, config: config::Config) -> Result<(), color_eyre::eyre::Error> {
     util::dirs::init_dirs().expect("Failed to initialize the data directory");
 
     let governor_conf = Arc::new(
@@ -54,9 +54,9 @@ pub async fn run(state: AppState, config: config::Config) -> Result<(), anyhow::
     );
     let governor_limiter = governor_conf.limiter().clone();
 
-    let governor_layer = tower_http::trace::TraceLayer::new_for_http()
+    let trace_layer = tower_http::trace::TraceLayer::new_for_http()
         .make_span_with(DefaultMakeSpan::default().level(Level::INFO))
-        .on_response(DefaultOnResponse::default().latency_unit(LatencyUnit::Micros));
+        .on_response(DefaultOnResponse::default().latency_unit(LatencyUnit::Millis));
 
     let interval = Duration::from_secs(60);
     // a separate background task to clean up governor
@@ -127,7 +127,7 @@ pub async fn run(state: AppState, config: config::Config) -> Result<(), anyhow::
         .layer(GovernorLayer {
             config: governor_conf,
         })
-        .layer(governor_layer);
+        .layer(trace_layer);
 
     let addr = format!("{}:{}", config.listen_address, config.listen_port);
 

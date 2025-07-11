@@ -19,11 +19,9 @@ use axum::response::IntoResponse;
 use axum::routing::{MethodRouter, get, post};
 use axum::{Json, Router};
 use chrono::DateTime;
-use futures::{StreamExt, TryFutureExt};
-use image::error::UnsupportedErrorKind::Format;
 use image::imageops::FilterType;
 use image::{DynamicImage, ImageFormat, ImageReader, Limits};
-use log::{debug, error};
+use log::{debug, error, info};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sqlx::{Encode, FromRow, IntoArguments, Type, query};
@@ -33,16 +31,26 @@ use std::io::{BufWriter, Cursor, Read, Write};
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
+use futures::task::SpawnExt;
 use sqlx::query::Query;
 use tokio::io::BufReader;
 use tokio::join;
 use tokio::sync::Mutex;
+use tokio::task::JoinSet;
+use tokio::time::Instant;
+use tokio_stream::StreamExt;
 use tokio_util::io::ReaderStream;
 use uuid::{Error, Uuid};
 
 pub trait ApiObject: DbObject {
     fn routes() -> Router<AppState>;
 }
+
+#[derive(Debug, Deserialize)]
+pub struct RecursiveQuery {
+    pub recursive: Option<bool>,
+}
+
 
 #[async_trait]
 pub trait ApiList: ApiObject
@@ -52,13 +60,16 @@ where
     for<'a> Self: FromRow<'a, sqlx::sqlite::SqliteRow>,
     for<'a> Self: FromRow<'a, sqlx::postgres::PgRow>,
     Self: Unpin,
+    Self: Cachable,
 {
     //in theory the user filter should be done within the sql query, but for the sake of simplicity we do that when collecting the results
     async fn api_list(
         State(state): State<AppState>,
         UserAuth(user): UserAuth,
+        recursive: axum::extract::Query<RecursiveQuery>,
         axum::extract::Query(filters): axum::extract::Query<Vec<(String, String)>>,
-    ) -> Result<axum::Json<Vec<Self>>, StatusCode> {
+    ) -> Result<impl IntoResponse, StatusCode> {
+
         let group = user.group(state.database.clone(), None).await;
         let objects: Vec<Self> = {
             execute_on_enum!(&state.database.pool; (DatabasePool::Postgres, DatabasePool::Sqlite) |pool| {
@@ -181,13 +192,27 @@ where
                     .map_err(handle_database_error)?
             })
         };
-        Ok(axum::Json(objects))
-    }
-}
 
-#[derive(Debug, Deserialize)]
-pub struct RecursiveQuery {
-    pub recursive: Option<bool>,
+        if recursive.recursive.unwrap_or(false) {
+            let start = Instant::now();
+            let mut values = Vec::new();
+
+            // blocking, because asynchronous implementation would result in more cache misses
+            for object in objects.into_iter() {
+                state.database.cache.insert(object.clone()).await;
+                values.push(state.database
+                    .get_recursive::<Self>(
+                        object.id(),
+                        Some((&user, &group))).await);
+            }
+
+            println!("returning {} values at {}ms", values.len(), start.elapsed().as_millis());
+
+            return Ok(Json(values.into_iter().filter_map(|value| value.ok()).collect::<Vec<_>>()));
+        }
+
+        Ok(axum::Json(objects.into_iter().filter_map(|object| serde_json::to_value(object).ok()).collect::<Vec<_>>()))
+    }
 }
 
 #[async_trait]
@@ -546,8 +571,8 @@ where
         };
 
         let file = tokio::fs::File::open(path)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
-            .await?;
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
         let stream = ReaderStream::new(file);
         let body = axum::body::Body::from_stream(stream);

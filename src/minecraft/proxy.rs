@@ -5,20 +5,20 @@ use crate::minecraft::server;
 use crate::minecraft::server::{MinecraftServerCollection, MinecraftServerStatus};
 use crate::util;
 use crate::util::dirs;
-use anyhow::{Context, bail};
 use log::{error, info, warn};
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::time::Duration;
+use color_eyre::eyre::{bail, ContextCompat};
 use subprocess::{Exec, ExitStatus, Popen};
 use crate::config::secrets::SECRETS;
 
 pub trait MinecraftProxy {
-    async fn start(&mut self) -> anyhow::Result<()>;
-    async fn stop(&mut self) -> anyhow::Result<ExitStatus>;
+    async fn start(&mut self) -> color_eyre::Result<()>;
+    async fn stop(&mut self) -> color_eyre::Result<ExitStatus>;
     async fn status(&self) -> MinecraftServerStatus;
-    async fn update(&mut self) -> anyhow::Result<()>;
+    async fn update(&mut self) -> color_eyre::Result<()>;
 }
 
 pub struct InfrarustServer {
@@ -30,7 +30,7 @@ pub struct InfrarustServer {
 }
 
 impl InfrarustServer {
-    pub fn new(servers: MinecraftServerCollection) -> anyhow::Result<Self> {
+    pub fn new(servers: MinecraftServerCollection) -> color_eyre::Result<Self> {
        Ok(Self{
            status: MinecraftServerStatus::Exited(0),
            servers,
@@ -40,7 +40,7 @@ impl InfrarustServer {
        })
     }
 
-    async fn add_server(&mut self, hostname: String, address: String) -> anyhow::Result<()> {
+    async fn add_server(&mut self, hostname: String, address: String) -> color_eyre::Result<()> {
         self.hosts.insert(hostname.clone(), address.clone());
         let mut file = File::create(self.path.join(format!("proxies/{}.yml", hostname)))?;
         file.write_all(
@@ -52,7 +52,7 @@ impl InfrarustServer {
         Ok(())
     }
 
-    async fn remove_server(&mut self, hostname: String) -> anyhow::Result<()> {
+    async fn remove_server(&mut self, hostname: String) -> color_eyre::Result<()> {
         self.hosts.remove(&hostname);
         let path = self.path.join(format!("proxies/{}.yml", hostname));
         if path.exists() {
@@ -63,7 +63,7 @@ impl InfrarustServer {
 }
 
 impl MinecraftProxy for InfrarustServer {
-    async fn start(&mut self) -> anyhow::Result<()> {
+    async fn start(&mut self) -> color_eyre::Result<()> {
         std::fs::create_dir_all(&self.path)?;
 
         let executable_path = self.path.join(CONFIG.proxy.infrarust_executable_name.clone());
@@ -97,7 +97,7 @@ impl MinecraftProxy for InfrarustServer {
         Ok(())
     }
 
-    async fn stop(&mut self) -> anyhow::Result<ExitStatus> {
+    async fn stop(&mut self) -> color_eyre::Result<ExitStatus> {
         if let Some(mut process) = self.process.take() {
             //try to kill velocity, if it fails, terminate it.
             #[allow(clippy::collapsible_if)]
@@ -139,7 +139,7 @@ impl MinecraftProxy for InfrarustServer {
         self.status
     }
 
-    async fn update(&mut self) -> anyhow::Result<()> {
+    async fn update(&mut self) -> color_eyre::Result<()> {
         if let Some(mut process) = self.process.take() {
             if let Some(exit_code) = process.poll() {
                 error!(
@@ -187,7 +187,7 @@ pub struct InternalVelocityServer {
     old_hosts: Vec<(String, String)>, //keep the list of hosts to not rewrite the file if not needed
 }
 impl InternalVelocityServer {
-    pub fn new(servers: MinecraftServerCollection) -> anyhow::Result<Self> {
+    pub fn new(servers: MinecraftServerCollection) -> color_eyre::Result<Self> {
         Ok(Self {
             status: MinecraftServerStatus::Exited(0),
             servers,
@@ -197,7 +197,7 @@ impl InternalVelocityServer {
         })
     }
 
-    async fn update_server_list(&mut self, hosts: &[(String, String)]) -> anyhow::Result<()> {
+    async fn update_server_list(&mut self, hosts: &[(String, String)]) -> color_eyre::Result<()> {
         info!("Updating the velocity config");
 
         let mut config = String::new();
@@ -229,7 +229,7 @@ impl InternalVelocityServer {
 }
 
 impl MinecraftProxy for InternalVelocityServer {
-    async fn start(&mut self) -> anyhow::Result<()> {
+    async fn start(&mut self) -> color_eyre::Result<()> {
         std::fs::create_dir_all(&self.path)?;
         let jar_path = self.path.join(CONFIG.proxy.velocity_executable_name.clone());
         if !jar_path.exists() {
@@ -269,7 +269,7 @@ impl MinecraftProxy for InternalVelocityServer {
         Ok(())
     }
 
-    async fn stop(&mut self) -> anyhow::Result<ExitStatus> {
+    async fn stop(&mut self) -> color_eyre::Result<ExitStatus> {
         if let Some(mut process) = self.process.take() {
             //try to kill velocity, if it fails, terminate it.
             #[allow(clippy::collapsible_if)]
@@ -315,7 +315,7 @@ impl MinecraftProxy for InternalVelocityServer {
         self.status
     }
 
-    async fn update(&mut self) -> anyhow::Result<()> {
+    async fn update(&mut self) -> color_eyre::Result<()> {
         if let Some(mut process) = self.process.take() {
             if let Some(exit_code) = process.poll() {
                 error!(
@@ -363,7 +363,7 @@ impl MinecraftProxy for InternalVelocityServer {
     }
 
     /*
-    fn update_if_needed(&mut self) -> anyhow::Result<()> {
+    fn update_if_needed(&mut self) -> color_eyre::Result<()> {
         if self.should_update{
             self.should_update = false;
             self.update()?;

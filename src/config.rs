@@ -134,7 +134,7 @@ pub mod secrets {
     }
 
     impl TryFrom<Config> for Secrets {
-        type Error = anyhow::Error;
+        type Error = color_eyre::eyre::Error;
 
         fn try_from(config: Config) -> Result<Self, Self::Error> {
             Ok(Self {

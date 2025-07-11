@@ -2,7 +2,7 @@ use crate::config::{CONFIG, ServerType};
 use crate::database::objects::World;
 use crate::database::types::Id;
 use crate::minecraft;
-use anyhow::Result;
+use color_eyre::Result;
 use async_trait::async_trait;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashMap;
@@ -139,13 +139,13 @@ pub trait MinecraftServer: Send + Debug {
     async fn refresh(&mut self) -> bool;
 }
 pub mod internal {
-    use crate::config::CONFIG;
+    use std::error::Error;
+use crate::config::CONFIG;
     use crate::database::objects::World;
     use crate::database::types::Id;
     use crate::minecraft::server::{MinecraftServer, MinecraftServerStatus};
     use crate::util;
-    use anyhow::Result;
-    use anyhow::{Context, bail};
+    use color_eyre::Result;
     use async_trait::async_trait;
     use log::{debug, info, warn};
     use std::collections::{HashMap, HashSet};
@@ -155,6 +155,7 @@ pub mod internal {
     use std::path::PathBuf;
     use std::sync::{LazyLock, Mutex};
     use std::time::Duration;
+    use color_eyre::eyre::{bail, ContextCompat};
     use subprocess::{Exec, ExitStatus, Popen};
     use crate::config::secrets::SECRETS;
 
@@ -455,7 +456,7 @@ pub mod internal {
             Ok(())
         }
 
-        async fn status(&self) -> Result<MinecraftServerStatus, anyhow::Error> {
+        async fn status(&self) -> Result<MinecraftServerStatus, color_eyre::eyre::Error> {
             Ok(self.status)
         }
 
@@ -509,12 +510,12 @@ pub mod external {
     use crate::database::objects::World;
     use crate::database::types::Id;
     use crate::minecraft::server::{MinecraftServer, MinecraftServerStatus, Server};
-    use anyhow::__private::kind::TraitKind;
-    use anyhow::{Result, bail};
+    use color_eyre::{Result};
     use async_trait::async_trait;
     use log::debug;
     use reqwest::StatusCode;
     use std::collections::HashMap;
+    use color_eyre::eyre::bail;
 
     #[derive(Debug)]
     pub struct MinimanagerServer {
@@ -600,7 +601,7 @@ pub mod external {
             todo!()
         }
 
-        async fn status(&self) -> Result<MinecraftServerStatus, anyhow::Error> {
+        async fn status(&self) -> Result<MinecraftServerStatus, color_eyre::eyre::Error> {
             let server = self.server().await?;
             Ok(server.status)
         }

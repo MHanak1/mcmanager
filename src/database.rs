@@ -4,7 +4,7 @@ use crate::database::objects::{
 };
 use crate::database::types::{Id, Modifier};
 use crate::execute_on_enum;
-use log::{error};
+use log::{error, info};
 use moka::future::{Cache,};
 use serde::{Deserializer, Serialize};
 use sqlx::{Encode, FromRow, IntoArguments, Pool, Postgres, Type};
@@ -14,10 +14,12 @@ use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 use std::sync::Arc;
 use std::time::Duration;
-use anyhow::{bail, Context};
+use color_eyre::{Context};
 use async_recursion::async_recursion;
 use dyn_clone::DynClone;
 use futures::TryFutureExt;
+use serde_json::Value;
+use tokio_stream::StreamExt;
 use uuid::Uuid;
 
 pub mod objects;
@@ -81,7 +83,6 @@ impl DatabaseCache {
     }
 
     pub async fn insert_all<T: DbObject + Cachable + 'static>(&self, values: Vec<T>) {
-        //todo: make this parallel
         for value in values {
             self.insert(value).await;
         }
@@ -255,11 +256,8 @@ impl Database {
 
         self.cache.remove::<T>(value.id()).await;
 
-        match (value as &dyn Any).downcast_ref::<Session>() {
-            Some(session) => {
-                self.session_cache.remove(&session.token).await;
-            }
-            None => {}
+        if let Some(session) = (value as &dyn Any).downcast_ref::<Session>() {
+            self.session_cache.remove(&session.token).await;
         }
 
         execute_on_enum!(&self.pool; (DatabasePool::Postgres, DatabasePool::Sqlite) |pool| {
@@ -334,17 +332,18 @@ impl Database {
         id: Id,
         user: Option<(&User, &Group)>,
     ) -> Result<serde_json::Value, DatabaseError> {
+        let start = tokio::time::Instant::now();
         let object: T = self.get_one::<T>(id, user).map_err(|err| DatabaseError::InternalServerError(err.to_string())).await?;
         let json = serde_json::to_value(object).map_err(|err| DatabaseError::InternalServerError(err.to_string()))?;
 
         let mut map = serde_json::Map::new();
-        if let Some(object) = json.as_object() {
-            for (field, value) in object.iter() {
-                if let Ok((field, value)) = self.object_from_field::<T>(field, value.clone(), user).await {
+        if let Value::Object(object) = json {
+            for (field, value) in object.into_iter() {
+                if let Ok((field, value)) = self.object_from_field::<T>(&field, &value, user).await {
                     let field = field.strip_suffix("_id").map(|str| str.to_string()).unwrap_or(field);
                     map.insert(field, value);
                 } else {
-                    map.insert(field.clone(), value.clone());
+                    map.insert(field, value);
                 }
             }
 
@@ -390,11 +389,20 @@ impl Database {
     }
 
     #[async_recursion]
-    async fn object_from_field<T: DbObject>(&self, field: &str, value: serde_json::Value, user: Option<(&User, &Group)>) -> Result<(String, serde_json::Value), anyhow::Error> {
+    async fn object_from_field<T: DbObject>(&self, field: &str, value: &Value, user: Option<(&User, &Group)>) -> Result<(String, Value), DatabaseError> {
         if let Some(column) = T::get_column(field) {
             if let Some(Modifier::References(references)) = column.modifiers.iter().find(|modifier| matches!(modifier, Modifier::References(_))) {
                 if let Some(references) = references.strip_suffix("(id)") {
-                    let id = Id::from_string(value.as_str().context("not a str")?).context("not an id")?;
+                    let str = value.as_str();
+                    if str.is_none() {
+                        return Ok((field.to_string(), value.clone()))
+                    }
+                    let str = str.unwrap();
+                    let id = Id::from_string(str);
+                    if id.is_err() {
+                        return Ok((field.to_string(), value.clone()))
+                    }
+                    let id = id.unwrap();
 
                     let referenced = match references {
                         "users" => self.get_recursive::<User>(id, user).await?,
@@ -405,14 +413,14 @@ impl Database {
                         "mods" => self.get_recursive::<Mod>(id, user).await?,
                         "versions" => self.get_recursive::<Version>(id, user).await?,
                         "worlds" => self.get_recursive::<World>(id, user).await?,
-                        _ => bail!("unknown column: {}", field),
+                        _ => Err(DatabaseError::InternalServerError("Not Found".to_string()))?,
                     };
 
-                    return Ok((field.to_string(), serde_json::to_value(referenced)?));
+                    return Ok((field.to_string(), serde_json::to_value(referenced).unwrap()));
                 }
             }
         }
-        bail!("not found")
+        Ok((field.to_string(), value.clone()))
     }
 
     pub async fn get_where<
@@ -510,7 +518,7 @@ impl Database {
     }
 
     /// This should only be used during testing or during first setup to create an admin account
-    pub async fn create_user(&self, username: &str, password: &str) -> anyhow::Result<User> {
+    pub async fn create_user(&self, username: &str, password: &str) -> color_eyre::Result<User> {
         let user = User {
             username: username.to_string(),
             ..Default::default()
@@ -518,7 +526,7 @@ impl Database {
         self.create_user_from(user, password).await
     }
     /// This should only be used during testing or during first setup to create an admin account
-    pub async fn create_user_from(&self, user: User, password: &str) -> anyhow::Result<User> {
+    pub async fn create_user_from(&self, user: User, password: &str) -> color_eyre::Result<User> {
         self.insert(&user, None).await?;
 
         self.insert(&Password::new(user.id, password), None).await?;

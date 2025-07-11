@@ -41,7 +41,7 @@ pub mod dirs {
         data_dir().join("worlds")
     }
 
-    pub fn init_dirs() -> anyhow::Result<()> {
+    pub fn init_dirs() -> color_eyre::Result<()> {
         create_dir_all(data_dir())?;
 
         create_dir_all(user_avatars_dir())?;

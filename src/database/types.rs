@@ -3,7 +3,7 @@ pub(crate) use crate::database::ValueType;
 use crate::database::objects::{DbObject, Group, User};
 use crate::util;
 use crate::util::base64::base64_encode;
-use anyhow::Result;
+use color_eyre::Result;
 use rand::TryRngCore;
 use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -11,6 +11,7 @@ use sqlx::{Column as SqlxColumn, ColumnIndex, Database, Decode, Encode, Row, Typ
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::str::FromStr;
+use color_eyre::eyre::eyre;
 use test_log::test;
 
 pub(crate) const ID_MAX_VALUE: i64 = 281_474_976_710_655;
@@ -273,7 +274,7 @@ pub struct Id(i64);
 impl Id {
     pub fn from_i64(value: i64) -> Result<Self> {
         if value > ID_MAX_VALUE {
-            return Err(anyhow::anyhow!("id is out of the 48 bit range"));
+            return Err(eyre!("id is out of the 48 bit range"));
         }
         Ok(Self(value))
     }
@@ -284,11 +285,11 @@ impl Id {
 
     pub fn from_string(s: &str) -> Result<Self> {
         if s.len() != 8 {
-            return Err(anyhow::anyhow!("The provided id must be 8 characters long"));
+            return Err(eyre!("The provided id must be 8 characters long"));
         }
         let id_slice = util::base64::base64_decode(s);
         if id_slice.is_err() {
-            return Err(anyhow::anyhow!("Failed to parse id"));
+            return Err(eyre!("Failed to parse id"));
         }
 
         let id_slice = id_slice.expect("failed to optain the id's slice");
@@ -331,7 +332,7 @@ where
  */
 
 impl FromStr for Id {
-    type Err = anyhow::Error;
+    type Err = color_eyre::eyre::Error;
 
     fn from_str(s: &str) -> Result<Self> {
         Self::from_string(s)
@@ -495,7 +496,7 @@ impl From<String> for Token {
 }
 
 impl FromStr for Token {
-    type Err = anyhow::Error;
+    type Err = color_eyre::Error;
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         Self::from_string_ckecked(s.to_string())

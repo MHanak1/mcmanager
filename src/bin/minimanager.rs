@@ -6,7 +6,7 @@ use crate::minecraft::server;
 use crate::minecraft::server::MinecraftServerStatus;
 use crate::minecraft::server::internal::InternalServer;
 use crate::{api, config::Config, util::dirs};
-use anyhow::Result;
+use color_eyre::Result;
 use axum::Router;
 use axum::http::StatusCode;
 use log::info;
