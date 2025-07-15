@@ -9,7 +9,7 @@ use async_recursion::async_recursion;
 use color_eyre::Context;
 use dyn_clone::DynClone;
 use futures::TryFutureExt;
-use log::{error, info};
+use log::{debug, error, info};
 use moka::future::Cache;
 use serde::{Deserializer, Serialize};
 use serde_json::Value;
@@ -37,6 +37,12 @@ pub struct DatabaseCache {
     pub caches: Arc<HashMap<&'static str, Cache<Id, Box<dyn Cachable>>>>,
 }
 
+impl Default for DatabaseCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DatabaseCache {
     pub fn new() -> Self {
         let mut caches = HashMap::new();
@@ -52,6 +58,10 @@ impl DatabaseCache {
         caches.insert(Password::table_name(), Cache::new(CACHES_SIZE));
         caches.insert(Version::table_name(), Cache::new(CACHES_SIZE));
         caches.insert(World::table_name(), Cache::new(CACHES_SIZE));
+
+        for key in caches.keys() {
+            println!("{key}")
+        }
 
         Self {
             caches: Arc::new(caches),
@@ -91,10 +101,12 @@ impl DatabaseCache {
     }
 
     pub async fn remove<T: DbObject>(&self, id: Id) {
-        self.get_cache(T::table_name())
+        if self.get_cache(T::table_name())
             .remove(&id)
             .await
-            .expect("cache not found");
+            .is_none() {
+            debug!("value from {} with id {} not in cache, cannot remove", T::table_name(), id);
+        }
     }
 }
 

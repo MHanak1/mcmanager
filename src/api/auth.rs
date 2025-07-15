@@ -82,8 +82,8 @@ pub async fn get_user(token: Uuid, state: AppState) -> Result<User, DatabaseErro
 
     let session: Session = state.database.get_session(token, None).await?;
 
-    Ok(state
+    state
         .database
         .get_one::<User>(session.user_id, None)
-        .await?)
+        .await
 }
