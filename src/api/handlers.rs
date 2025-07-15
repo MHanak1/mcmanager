@@ -5,8 +5,8 @@ use crate::config::CONFIG;
 use crate::database::DatabaseError::SqlxError;
 use crate::database::objects::{DbObject, FromJson, InviteLink, Session, UpdateJson, User, World};
 use crate::database::types::Id;
-pub(crate) use crate::database::{Database, DatabaseError};
 use crate::database::{Cachable, DatabasePool, QueryBuilder, ValueType, WhereOperand};
+pub(crate) use crate::database::{Database, DatabaseError};
 use crate::execute_on_enum;
 use crate::util::base64::base64_decode;
 use crate::util::dirs::icons_dir;
@@ -19,11 +19,13 @@ use axum::response::IntoResponse;
 use axum::routing::{MethodRouter, get, post};
 use axum::{Json, Router};
 use chrono::DateTime;
+use futures::task::SpawnExt;
 use image::imageops::FilterType;
 use image::{DynamicImage, ImageFormat, ImageReader, Limits};
 use log::{debug, error, info};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use sqlx::query::Query;
 use sqlx::{Encode, FromRow, IntoArguments, Type, query};
 use std::fmt::format;
 use std::fs::File;
@@ -31,8 +33,6 @@ use std::io::{BufWriter, Cursor, Read, Write};
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
-use futures::task::SpawnExt;
-use sqlx::query::Query;
 use tokio::io::BufReader;
 use tokio::join;
 use tokio::sync::Mutex;
@@ -51,6 +51,31 @@ pub struct RecursiveQuery {
     pub recursive: Option<bool>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct PaginationQuery {
+    pub page: Option<u32>,
+    pub limit: Option<u32>,
+}
+
+pub struct PaginationSettings {
+    pub page: u32,
+    pub limit: u32,
+}
+
+impl PaginationQuery {
+    pub fn unwrap(self) -> PaginationSettings {
+        PaginationSettings {
+            page: self.page.unwrap_or(0),
+            limit: self.limit.unwrap_or(50).min(100),
+        }
+    }
+}
+
+impl Default for PaginationSettings {
+    fn default() -> Self {
+        Self { page: 0, limit: 50 }
+    }
+}
 
 #[async_trait]
 pub trait ApiList: ApiObject
@@ -67,8 +92,10 @@ where
         State(state): State<AppState>,
         UserAuth(user): UserAuth,
         recursive: axum::extract::Query<RecursiveQuery>,
+        pagination: axum::extract::Query<PaginationQuery>,
         axum::extract::Query(filters): axum::extract::Query<Vec<(String, String)>>,
     ) -> Result<impl IntoResponse, StatusCode> {
+        let pagination = pagination.0.unwrap();
 
         let group = user.group(state.database.clone(), None).await;
         let objects: Vec<Self> = {
@@ -183,6 +210,8 @@ where
 
                 query.user_group::<Self>(&user, &group);
 
+                query.pagination::<Self>(pagination);
+
                 query
                     .query_builder
                     .build_query_as()
@@ -200,18 +229,34 @@ where
             // blocking, because asynchronous implementation would result in more cache misses
             for object in objects.into_iter() {
                 state.database.cache.insert(object.clone()).await;
-                values.push(state.database
-                    .get_recursive::<Self>(
-                        object.id(),
-                        Some((&user, &group))).await);
+                values.push(
+                    state
+                        .database
+                        .get_recursive::<Self>(object.id(), Some((&user, &group)))
+                        .await,
+                );
             }
 
-            println!("returning {} values at {}ms", values.len(), start.elapsed().as_millis());
+            println!(
+                "returning {} values at {}ms",
+                values.len(),
+                start.elapsed().as_millis()
+            );
 
-            return Ok(Json(values.into_iter().filter_map(|value| value.ok()).collect::<Vec<_>>()));
+            return Ok(Json(
+                values
+                    .into_iter()
+                    .filter_map(|value| value.ok())
+                    .collect::<Vec<_>>(),
+            ));
         }
 
-        Ok(axum::Json(objects.into_iter().filter_map(|object| serde_json::to_value(object).ok()).collect::<Vec<_>>()))
+        Ok(axum::Json(
+            objects
+                .into_iter()
+                .filter_map(|object| serde_json::to_value(object).ok())
+                .collect::<Vec<_>>(),
+        ))
     }
 }
 
@@ -240,12 +285,13 @@ where
                 .map_err(handle_database_error)?
         } else {
             serde_json::to_value(
-            state
-                .database
-                .get_one::<Self>(id, Some((&user, &group)))
-                .await
-                .map_err(handle_database_error)?).unwrap()
-
+                state
+                    .database
+                    .get_one::<Self>(id, Some((&user, &group)))
+                    .await
+                    .map_err(handle_database_error)?,
+            )
+            .unwrap()
         }))
     }
 }
@@ -257,14 +303,18 @@ where
     Self: Serialize,
     Self: Clone,
     Self: for<'a> IntoArguments<'a, sqlx::Sqlite>,
+    Self: for<'r> FromRow<'r, sqlx::sqlite::SqliteRow>,
     Self: for<'a> IntoArguments<'a, sqlx::Postgres>,
+    Self: for<'r> FromRow<'r, sqlx::postgres::PgRow>,
+    Self: Unpin,
     Self: Cachable,
 {
     async fn api_create(
+        recursive: axum::extract::Query<RecursiveQuery>,
         State(state): State<AppState>,
         UserAuth(user): UserAuth,
         Json(data): Json<Self::JsonFrom>,
-    ) -> Result<Json<Self>, StatusCode> {
+    ) -> Result<impl IntoResponse, StatusCode> {
         let mut data = data;
         let group = user.group(state.database.clone(), None).await;
 
@@ -290,13 +340,23 @@ where
                 object.id()
             );
             object
-                .after_api_create(state, &mut data, &user)
+                .after_api_create(state.clone(), &mut data, &user)
                 .await
                 .map_err(handle_database_error)?;
             object
         };
 
-        Ok(axum::Json(object))
+        if recursive.recursive.unwrap_or(false) {
+            return Ok(axum::Json(
+                state
+                    .database
+                    .get_recursive::<Self>(object.id(), Some((&user, &group)))
+                    .await
+                    .map_err(handle_database_error)?,
+            ));
+        }
+
+        Ok(axum::Json(serde_json::to_value(object).unwrap()))
     }
 
     #[allow(unused)]
@@ -337,51 +397,59 @@ where
 {
     async fn api_update(
         Path(id): Path<Id>,
+        recursive: axum::extract::Query<RecursiveQuery>,
         State(state): State<AppState>,
         UserAuth(user): UserAuth,
         Json(data): axum::Json<Self::JsonUpdate>,
-    ) -> Result<axum::Json<Self>, StatusCode> {
+    ) -> Result<impl IntoResponse, StatusCode> {
         let mut data = data;
-        let object = {
-            let group = user.group(state.database.clone(), None).await;
+        let group = user.group(state.database.clone(), None).await;
 
-            let object = state
-                .database
-                .get_one::<Self>(id, Some((&user, &group)))
-                .await
-                .map_err(handle_database_error)?;
+        let object = state
+            .database
+            .get_one::<Self>(id, Some((&user, &group)))
+            .await
+            .map_err(handle_database_error)?;
 
-            debug!(
-                "running before update for /{}/{}",
-                Self::table_name(),
-                object.id()
-            );
-            object
-                .before_api_update(state.clone(), &mut data, &user)
-                .await
-                .map_err(handle_database_error)?;
+        debug!(
+            "running before update for /{}/{}",
+            Self::table_name(),
+            object.id()
+        );
+        object
+            .before_api_update(state.clone(), &mut data, &user)
+            .await
+            .map_err(handle_database_error)?;
 
-            let object = object.update_with_json(&data);
+        let object = object.update_with_json(&data);
 
-            let _ = state
-                .database
-                .update(&object, Some((&user, &group)))
-                .await
-                .map_err(handle_database_error)?;
+        let _ = state
+            .database
+            .update(&object, Some((&user, &group)))
+            .await
+            .map_err(handle_database_error)?;
 
-            debug!(
-                "running after update for /{}/{}",
-                Self::table_name(),
-                object.id()
-            );
-            object
-                .after_api_update(state, &mut data, &user)
-                .await
-                .map_err(handle_database_error)?;
-            object
-        };
+        debug!(
+            "running after update for /{}/{}",
+            Self::table_name(),
+            object.id()
+        );
+        object
+            .after_api_update(state.clone(), &mut data, &user)
+            .await
+            .map_err(handle_database_error)?;
 
-        Ok(axum::Json(object))
+        if recursive.recursive.unwrap_or(false) {
+            return Ok(axum::Json(
+                state
+                    .database
+                    .get_recursive::<Self>(object.id(), Some((&user, &group)))
+                    .await
+                    .map_err(handle_database_error)?,
+            ));
+        }
+
+        Ok(axum::Json(serde_json::to_value(object).unwrap()))
     }
     #[allow(unused)]
     /// runs before the database entry update
@@ -503,7 +571,10 @@ where
             .await
             .map_err(|_| StatusCode::NOT_FOUND)?;
 
-        let (bytes, image_format) = (file.bytes , ImageFormat::from_mime_type(file.content_type.essence_str()));
+        let (bytes, image_format) = (
+            file.bytes,
+            ImageFormat::from_mime_type(file.content_type.essence_str()),
+        );
         if image_format.is_none() {
             return Err(StatusCode::BAD_REQUEST);
         }
@@ -696,7 +767,7 @@ pub async fn user_register(
         })?;
     }
 
-    Ok(axum::Json(user))
+    Ok(StatusCode::CREATED)
 }
 
 //this in theory could be transformed into ApiCreate implementation, but it would require a fair amount of changes, and for now it's not causing any problems
@@ -748,9 +819,17 @@ pub async fn logout(
 
 #[allow(clippy::unused_async)]
 #[axum::debug_handler]
-pub async fn user_info(user: UserAuth, axum::extract::Query(recursive): axum::extract::Query<RecursiveQuery>, State(state): State<AppState>) -> Result<impl IntoResponse, StatusCode> {
-    Ok(axum::Json( if recursive.recursive.unwrap_or(false) {
-        state.database.get_recursive::<User>(user.0.id, None).await.unwrap()
+pub async fn user_info(
+    user: UserAuth,
+    axum::extract::Query(recursive): axum::extract::Query<RecursiveQuery>,
+    State(state): State<AppState>,
+) -> Result<impl IntoResponse, StatusCode> {
+    Ok(axum::Json(if recursive.recursive.unwrap_or(false) {
+        state
+            .database
+            .get_recursive::<User>(user.0.id, None)
+            .await
+            .unwrap()
     } else {
         serde_json::to_value(user.0).unwrap()
     }))

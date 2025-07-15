@@ -1,6 +1,8 @@
-use std::any::Any;
 use crate::api::filters::UserAuth;
-use crate::api::handlers::{ApiCreate, ApiGet, ApiList, ApiObject, ApiRemove, ApiUpdate, handle_database_error, RecursiveQuery};
+use crate::api::handlers::{
+    ApiCreate, ApiGet, ApiList, ApiObject, ApiRemove, ApiUpdate, RecursiveQuery,
+    handle_database_error,
+};
 use crate::api::serve::AppState;
 use crate::config::CONFIG;
 use crate::database::objects::{DbObject, FromJson, UpdateJson, User};
@@ -8,16 +10,18 @@ use crate::database::types::{Access, Column, Id};
 use crate::database::{Cachable, Database, DatabaseError, ValueType};
 use crate::minecraft::server::ServerConfigLimit;
 use async_trait::async_trait;
-use axum::{Json, Router};
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
+use axum::response::IntoResponse;
 use axum::routing::{MethodRouter, get};
+use axum::{Json, Router};
 use duplicate::duplicate_item;
+use once_cell::sync::Lazy;
 use serde::{Deserialize, Deserializer, Serialize};
 use sqlx::{Arguments, Error, FromRow, IntoArguments, Row};
+use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
-use axum::response::IntoResponse;
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub struct Group {
@@ -66,7 +70,7 @@ impl DbObject for Group {
         "groups"
     }
 
-    fn columns() -> Vec<Column> {
+    const COLUMNS: Lazy<Vec<Column>> = Lazy::new(|| {
         vec![
             Column::new("id", ValueType::Id).primary_key(),
             Column::new("name", ValueType::Text).not_null(),
@@ -85,7 +89,7 @@ impl DbObject for Group {
                 .not_null()
                 .default("FALSE"),
         ]
-    }
+    });
 
     fn id(&self) -> Id {
         self.id

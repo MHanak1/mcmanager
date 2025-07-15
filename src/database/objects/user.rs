@@ -1,7 +1,9 @@
-use std::any::Any;
 pub use self::{password::Password, session::Session};
 use crate::api::filters::UserAuth;
-use crate::api::handlers::{ApiCreate, ApiGet, ApiIcon, ApiList, ApiObject, ApiRemove, ApiUpdate, handle_database_error, RecursiveQuery};
+use crate::api::handlers::{
+    ApiCreate, ApiGet, ApiIcon, ApiList, ApiObject, ApiRemove, ApiUpdate, RecursiveQuery,
+    handle_database_error,
+};
 use crate::api::serve::AppState;
 use crate::config::CONFIG;
 use crate::database;
@@ -12,15 +14,17 @@ use crate::minecraft::server::ServerConfigLimit;
 use async_trait::async_trait;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
+use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use futures::future;
 use log::{error, info, warn};
+use once_cell::sync::Lazy;
 use serde::{Deserialize, Deserializer, Serialize};
 use sqlx::{Arguments, Encode, FromRow, IntoArguments};
+use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
-use axum::response::IntoResponse;
 use tokio::sync::Mutex;
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, FromRow)]
@@ -72,7 +76,7 @@ impl DbObject for User {
         "users"
     }
 
-    fn columns() -> Vec<Column> {
+    const COLUMNS: Lazy<Vec<Column>> = Lazy::new(|| {
         vec![
             Column::new("id", ValueType::Id).primary_key(),
             Column::new("username", ValueType::Text).not_null().unique(),
@@ -86,7 +90,8 @@ impl DbObject for User {
                 .not_null()
                 .default("true"),
         ]
-    }
+    });
+
     fn id(&self) -> Id {
         self.id
     }
@@ -322,15 +327,16 @@ impl User {
 }
 
 pub mod password {
-    use std::any::Any;
-    use crate::database::{Cachable, ValueType};
     use crate::database::objects::DbObject;
     use crate::database::types::{Access, Column, Id};
+    use crate::database::{Cachable, ValueType};
     use argon2::password_hash::rand_core::OsRng;
     use argon2::password_hash::{PasswordHashString, SaltString};
     use argon2::{Argon2, PasswordHasher};
     use duplicate::duplicate_item;
+    use once_cell::sync::Lazy;
     use sqlx::{Arguments, Error, FromRow, IntoArguments, Row};
+    use std::any::Any;
     use std::str::FromStr;
 
     /// `user_id`: unique [`Id`] of the user to whom the password belongs
@@ -376,14 +382,14 @@ pub mod password {
             "passwords"
         }
 
-        fn columns() -> Vec<Column> {
+        const COLUMNS: Lazy<Vec<Column>> = Lazy::new(|| {
             vec![
                 Column::new("user_id", ValueType::Id)
                     .primary_key()
                     .references("users(id)"),
                 Column::new("hash", ValueType::Text).not_null().hidden(),
             ]
-        }
+        });
 
         fn id(&self) -> Id {
             self.user_id
@@ -438,7 +444,6 @@ pub mod password {
 }
 
 pub mod session {
-    use std::any::Any;
     use crate::api::filters::UserAuth;
     use crate::api::handlers::{
         ApiCreate, ApiGet, ApiList, ApiObject, ApiRemove, handle_database_error,
@@ -454,8 +459,10 @@ pub mod session {
     use axum::routing::get;
     use chrono::{DateTime, Utc};
     use duplicate::duplicate_item;
+    use once_cell::sync::Lazy;
     use serde::{Deserialize, Serialize, Serializer};
     use sqlx::{Arguments, Error, FromRow, IntoArguments, Row};
+    use std::any::Any;
     use std::str::FromStr;
     use std::sync::Arc;
     use uuid::Uuid;
@@ -493,7 +500,7 @@ pub mod session {
             "sessions"
         }
 
-        fn columns() -> Vec<Column> {
+        const COLUMNS: Lazy<Vec<Column>> = Lazy::new(|| {
             vec![
                 Column::new("id", ValueType::Id).unique(),
                 Column::new("user_id", ValueType::Id).references("users(id)"),
@@ -505,7 +512,7 @@ pub mod session {
                     .not_null()
                     .default("true"),
             ]
-        }
+        });
 
         fn id(&self) -> Id {
             self.id
@@ -516,7 +523,7 @@ pub mod session {
         }
     }
 
-    impl Cachable for Session{
+    impl Cachable for Session {
         fn into_any(self: Box<Self>) -> Box<dyn Any> {
             self as Box<dyn Any>
         }

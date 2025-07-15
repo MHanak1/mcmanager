@@ -4,8 +4,8 @@ use crate::config;
 use crate::config::CONFIG;
 use crate::database::Database;
 use crate::database::objects::{Group, InviteLink, Mod, ModLoader, Session, User, Version, World};
-use crate::minecraft::server::{MinecraftServerCollection, Server};
 use crate::minecraft::proxy::{InternalVelocityServer, MinecraftProxy};
+use crate::minecraft::server::{MinecraftServerCollection, Server};
 use crate::util::dirs::icons_dir;
 use crate::{api, util};
 use axum::extract::{MatchedPath, Path, State};
@@ -45,7 +45,8 @@ pub async fn run(state: AppState, config: config::Config) -> Result<(), color_ey
     util::dirs::init_dirs().expect("Failed to initialize the data directory");
 
     let governor_conf = Arc::new(
-        GovernorConfigBuilder::default().key_extractor(tower_governor::key_extractor::SmartIpKeyExtractor)
+        GovernorConfigBuilder::default()
+            .key_extractor(tower_governor::key_extractor::SmartIpKeyExtractor)
             .per_millisecond((1000.0 / CONFIG.api_rate_limit) as u64)
             .burst_size((10.0 * CONFIG.api_rate_limit) as u32)
             .use_headers()

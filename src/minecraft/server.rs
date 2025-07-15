@@ -7,8 +7,10 @@ use async_trait::async_trait;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashMap;
 use std::fmt::Debug;
+use std::net::SocketAddr;
 use std::result;
 use std::sync::{Arc, LazyLock};
+use axum::extract::{ConnectInfo, WebSocketUpgrade};
 use tokio::sync::Mutex;
 
 pub type ServerMutex = Arc<Mutex<Box<dyn MinecraftServer>>>;
@@ -137,6 +139,13 @@ pub trait MinecraftServer: Send + Debug {
     async fn remove(&mut self) -> Result<()>;
     /// updates the status of the server. this should return false if the server is updated through somewhere else
     async fn refresh(&mut self) -> bool;
+    /*
+    async fn ws_handler(
+        &self,
+        ws: WebSocketUpgrade,
+        connect_info: ConnectInfo<SocketAddr>,
+    );
+     */
 }
 pub mod internal {
     use std::error::Error;
@@ -152,9 +161,14 @@ use crate::config::CONFIG;
     use std::fs;
     use std::fs::File;
     use std::io::{Read, Write};
+    use std::net::SocketAddr;
     use std::path::PathBuf;
     use std::sync::{LazyLock, Mutex};
     use std::time::Duration;
+    use axum::body::Bytes;
+    use axum::extract::{ConnectInfo, WebSocketUpgrade};
+    use axum::extract::ws::{Message, WebSocket};
+    use axum::response::IntoResponse;
     use color_eyre::eyre::{bail, ContextCompat};
     use subprocess::{Exec, ExitStatus, Popen};
     use crate::config::secrets::SECRETS;

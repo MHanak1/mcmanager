@@ -1,12 +1,18 @@
+use crate::api::handlers::PaginationSettings;
 use crate::database::objects::{DbObject, Group};
 use crate::database::objects::{
     InviteLink, Mod, ModLoader, Password, Session, User, Version, World,
 };
 use crate::database::types::{Id, Modifier};
 use crate::execute_on_enum;
+use async_recursion::async_recursion;
+use color_eyre::Context;
+use dyn_clone::DynClone;
+use futures::TryFutureExt;
 use log::{error, info};
-use moka::future::{Cache,};
+use moka::future::Cache;
 use serde::{Deserializer, Serialize};
+use serde_json::Value;
 use sqlx::{Encode, FromRow, IntoArguments, Pool, Postgres, Type};
 use std::any::Any;
 use std::collections::HashMap;
@@ -14,23 +20,17 @@ use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 use std::sync::Arc;
 use std::time::Duration;
-use color_eyre::{Context};
-use async_recursion::async_recursion;
-use dyn_clone::DynClone;
-use futures::TryFutureExt;
-use serde_json::Value;
 use tokio_stream::StreamExt;
 use uuid::Uuid;
 
 pub mod objects;
 pub mod types;
 
-pub trait Cachable: DynClone + Sync + Send + Any  {
+pub trait Cachable: DynClone + Sync + Send + Any {
     fn into_any(self: Box<Self>) -> Box<dyn Any>;
 }
 
 dyn_clone::clone_trait_object!(Cachable);
-
 
 #[derive(Clone)]
 pub struct DatabaseCache {
@@ -39,7 +39,7 @@ pub struct DatabaseCache {
 
 impl DatabaseCache {
     pub fn new() -> Self {
-        let mut caches =  HashMap::new();
+        let mut caches = HashMap::new();
 
         const CACHES_SIZE: u64 = 1000;
 
@@ -73,13 +73,15 @@ impl DatabaseCache {
             Err(_) => {
                 error!("Cache type mismatch");
                 None
-            },
+            }
         }
     }
 
     pub async fn insert<T: DbObject + Cachable + 'static>(&self, value: T) {
         let cache = self.get_cache(T::table_name());
-        cache.insert(value.id(), Box::new(value) as Box<dyn Cachable>).await;
+        cache
+            .insert(value.id(), Box::new(value) as Box<dyn Cachable>)
+            .await;
     }
 
     pub async fn insert_all<T: DbObject + Cachable + 'static>(&self, values: Vec<T>) {
@@ -89,7 +91,10 @@ impl DatabaseCache {
     }
 
     pub async fn remove<T: DbObject>(&self, id: Id) {
-        self.get_cache(T::table_name()).remove(&id).await.expect("cache not found");
+        self.get_cache(T::table_name())
+            .remove(&id)
+            .await
+            .expect("cache not found");
     }
 }
 
@@ -195,7 +200,7 @@ impl Database {
             + for<'a> IntoArguments<'a, sqlx::Postgres>
             + Any
             + Clone
-            + Cachable
+            + Cachable,
     >(
         &self,
         value: &T,
@@ -285,7 +290,7 @@ impl Database {
             + for<'r> FromRow<'r, sqlx::sqlite::SqliteRow>
             + for<'r> FromRow<'r, sqlx::postgres::PgRow>
             + Unpin
-            + Cachable
+            + Cachable,
     >(
         &self,
         id: Id,
@@ -322,37 +327,45 @@ impl Database {
     #[async_recursion]
     pub async fn get_recursive<
         T: DbObject
-        + Cachable
-        + for<'r> FromRow<'r, sqlx::sqlite::SqliteRow>
-        + for<'r> FromRow<'r, sqlx::postgres::PgRow>
-        + Serialize
-        + Unpin
+            + Cachable
+            + for<'r> FromRow<'r, sqlx::sqlite::SqliteRow>
+            + for<'r> FromRow<'r, sqlx::postgres::PgRow>
+            + Serialize
+            + Unpin,
     >(
         &self,
         id: Id,
         user: Option<(&User, &Group)>,
     ) -> Result<serde_json::Value, DatabaseError> {
         let start = tokio::time::Instant::now();
-        let object: T = self.get_one::<T>(id, user).map_err(|err| DatabaseError::InternalServerError(err.to_string())).await?;
-        let json = serde_json::to_value(object).map_err(|err| DatabaseError::InternalServerError(err.to_string()))?;
+        let object: T = self
+            .get_one::<T>(id, user)
+            .map_err(|err| DatabaseError::InternalServerError(err.to_string()))
+            .await?;
+        let json = serde_json::to_value(object)
+            .map_err(|err| DatabaseError::InternalServerError(err.to_string()))?;
 
         let mut map = serde_json::Map::new();
         if let Value::Object(object) = json {
             for (field, value) in object.into_iter() {
-                if let Ok((field, value)) = self.object_from_field::<T>(&field, &value, user).await {
-                    let field = field.strip_suffix("_id").map(|str| str.to_string()).unwrap_or(field);
+                if let Ok((field, value)) = self.object_from_field::<T>(&field, &value, user).await
+                {
+                    let field = field
+                        .strip_suffix("_id")
+                        .map(|str| str.to_string())
+                        .unwrap_or(field);
                     map.insert(field, value);
                 } else {
                     map.insert(field, value);
                 }
             }
 
-            Ok(serde_json::to_value(map).map_err(|err| DatabaseError::InternalServerError(err.to_string()))?)
+            Ok(serde_json::to_value(map)
+                .map_err(|err| DatabaseError::InternalServerError(err.to_string()))?)
         } else {
             Ok(json)
         }
     }
-
 
     pub async fn get_session(
         &self,
@@ -389,18 +402,27 @@ impl Database {
     }
 
     #[async_recursion]
-    async fn object_from_field<T: DbObject>(&self, field: &str, value: &Value, user: Option<(&User, &Group)>) -> Result<(String, Value), DatabaseError> {
+    async fn object_from_field<T: DbObject>(
+        &self,
+        field: &str,
+        value: &Value,
+        user: Option<(&User, &Group)>,
+    ) -> Result<(String, Value), DatabaseError> {
         if let Some(column) = T::get_column(field) {
-            if let Some(Modifier::References(references)) = column.modifiers.iter().find(|modifier| matches!(modifier, Modifier::References(_))) {
+            if let Some(Modifier::References(references)) = column
+                .modifiers
+                .iter()
+                .find(|modifier| matches!(modifier, Modifier::References(_)))
+            {
                 if let Some(references) = references.strip_suffix("(id)") {
                     let str = value.as_str();
                     if str.is_none() {
-                        return Ok((field.to_string(), value.clone()))
+                        return Ok((field.to_string(), value.clone()));
                     }
                     let str = str.unwrap();
                     let id = Id::from_string(str);
                     if id.is_err() {
-                        return Ok((field.to_string(), value.clone()))
+                        return Ok((field.to_string(), value.clone()));
                     }
                     let id = id.unwrap();
 
@@ -461,7 +483,7 @@ impl Database {
             + for<'r> FromRow<'r, sqlx::sqlite::SqliteRow>
             + for<'r> FromRow<'r, sqlx::postgres::PgRow>
             + Unpin
-            + Cachable
+            + Cachable,
     >(
         &self,
         user: Option<(&User, &Group)>,
@@ -691,7 +713,7 @@ where
             "SELECT {} FROM {}",
             T::columns()
                 .iter()
-                .map(|column| column.name.clone())
+                .map(|column| column.name.to_string())
                 .collect::<Vec<String>>()
                 .join(","),
             T::table_name(),
@@ -831,6 +853,14 @@ where
                 .push(format!(" WHERE {}", access.access_filter::<T>(user, group)));
             self.params += 1;
         }
+    }
+
+    pub fn pagination<T: DbObject>(&mut self, pagination: PaginationSettings) {
+        self.query_builder.push(format!(
+            " LIMIT {} OFFSET {}",
+            pagination.limit,
+            pagination.page * pagination.limit
+        ));
     }
 }
 

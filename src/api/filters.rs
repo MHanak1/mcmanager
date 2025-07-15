@@ -1,11 +1,10 @@
-use std::str::FromStr;
-use axum::body::Bytes;
 use crate::api::handlers::handle_database_error;
 use crate::api::serve::AppState;
 use crate::database::objects::{Session, User};
 use crate::database::{Database, DatabaseError};
-use axum::extract::{FromRequest, FromRequestParts, Multipart, Request};
+use axum::body::Bytes;
 use axum::extract::multipart::MultipartRejection;
+use axum::extract::{FromRequest, FromRequestParts, Multipart, Request};
 use axum::http::request::Parts;
 use futures::{TryFutureExt, TryStreamExt};
 use image::ImageFormat;
@@ -13,6 +12,7 @@ use log::debug;
 use mime::Mime;
 use reqwest::StatusCode;
 use sqlx::encode::IsNull::No;
+use std::str::FromStr;
 use uuid::Uuid;
 
 pub struct BearerToken(pub Uuid);
@@ -115,7 +115,9 @@ impl<S: std::marker::Send + std::marker::Sync> FromRequest<S> for FileUpload {
     type Rejection = StatusCode;
 
     async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
-        let mut multipart = Multipart::from_request(req, state).await.map_err(|_| StatusCode::BAD_REQUEST)?;
+        let mut multipart = Multipart::from_request(req, state)
+            .await
+            .map_err(|_| StatusCode::BAD_REQUEST)?;
 
         while let Some(field) = multipart.next_field().await.unwrap() {
             if let Some("file") = field.name() {
@@ -134,7 +136,7 @@ impl<S: std::marker::Send + std::marker::Sync> FromRequest<S> for FileUpload {
                 return Ok(Self {
                     bytes: field_bytes,
                     content_type,
-                })
+                });
             }
         }
 

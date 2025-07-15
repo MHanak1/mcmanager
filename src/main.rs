@@ -1,13 +1,13 @@
-use color_eyre::{Result};
+use color_eyre::Result;
 use futures::{SinkExt, TryFutureExt};
 use log::{error, info};
 use mcmanager::api::serve::AppState;
 use mcmanager::config::{CONFIG, DatabaseType};
 use mcmanager::database::objects::{Group, ModLoader, User, World};
-use mcmanager::database::types::Id;
-use mcmanager::database::{Database, DatabasePool, objects};
-use mcmanager::minecraft::server::{MinecraftServerCollection, ServerConfigLimit};
+use mcmanager::database::types::{Column, Id};
+use mcmanager::database::{Database, DatabasePool, ValueType, objects};
 use mcmanager::minecraft::proxy::{InfrarustServer, InternalVelocityServer, MinecraftProxy};
+use mcmanager::minecraft::server::{MinecraftServerCollection, ServerConfigLimit};
 use mcmanager::{bin, util};
 use serde::Deserialize;
 use sqlx::any::AnyPoolOptions;
@@ -29,7 +29,14 @@ async fn main() -> Result<()> {
     let secrets_path = util::dirs::base_dir().join("secrets.toml");
     if !secrets_path.exists() {
         let mut secrets_file = File::create(&secrets_path)?;
-        secrets_file.write_all(format!("api_secret = \"{}\"\nforwarding_secret = \"{}\"", Uuid::new_v4().as_simple().to_string(), Uuid::new_v4().as_simple().to_string()).as_bytes())?;
+        secrets_file.write_all(
+            format!(
+                "api_secret = \"{}\"\nforwarding_secret = \"{}\"",
+                Uuid::new_v4().as_simple().to_string(),
+                Uuid::new_v4().as_simple().to_string()
+            )
+            .as_bytes(),
+        )?;
         println!("secrets file written to {}", secrets_path.display());
     }
 
@@ -41,7 +48,6 @@ async fn main() -> Result<()> {
         println!("You can now edit the values in the config file and restart this executable.");
         return Ok(());
     }
-
 
     let pool: DatabasePool = match CONFIG.database.database_type {
         DatabaseType::Sqlite => {

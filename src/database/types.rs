@@ -4,6 +4,8 @@ use crate::database::objects::{DbObject, Group, User};
 use crate::util;
 use crate::util::base64::base64_encode;
 use color_eyre::Result;
+use color_eyre::eyre::eyre;
+use const_vec::ConstVec;
 use rand::TryRngCore;
 use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -11,14 +13,13 @@ use sqlx::{Column as SqlxColumn, ColumnIndex, Database, Decode, Encode, Row, Typ
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::str::FromStr;
-use color_eyre::eyre::eyre;
 use test_log::test;
 
 pub(crate) const ID_MAX_VALUE: i64 = 281_474_976_710_655;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Column {
-    pub name: String,
+    pub name: &'static str,
     pub data_type: ValueType,
     pub modifiers: Vec<Modifier>,
     pub nullable: bool,
@@ -26,9 +27,9 @@ pub struct Column {
 }
 
 impl Column {
-    pub fn new(name: &str, data_type: ValueType) -> Self {
+    pub const fn new(name: &'static str, data_type: ValueType) -> Self {
         Self {
-            name: name.to_string(),
+            name,
             data_type,
             modifiers: Vec::new(),
             nullable: true,
@@ -41,11 +42,11 @@ impl Column {
     }
 
     pub fn descriptor(&self, db_type: &DatabaseType) -> String {
-        let mut descriptor = self.data_type.descriptor(db_type);
+        let mut descriptor = self.data_type.descriptor(db_type).to_string();
         for modifier in &self.modifiers {
-            descriptor = modifier.apply_to(&descriptor);
+            descriptor = modifier.apply_to(&descriptor).to_string();
         }
-        descriptor
+        descriptor.to_string()
     }
 
     pub fn with_modifier(self, modifier: Modifier) -> Self {
@@ -68,12 +69,12 @@ impl Column {
         self.with_modifier(Modifier::Unique)
     }
 
-    pub fn references(self, value: &str) -> Self {
-        self.with_modifier(Modifier::References(value.to_string()))
+    pub fn references(self, value: &'static str) -> Self {
+        self.with_modifier(Modifier::References(value))
     }
 
-    pub fn default(self, value: &str) -> Self {
-        self.with_modifier(Modifier::Default(value.to_string()))
+    pub fn default(self, value: &'static str) -> Self {
+        self.with_modifier(Modifier::Default(value))
     }
 
     pub fn hidden(self) -> Self {
@@ -93,7 +94,7 @@ impl<T: Row> ColumnIndex<T> for Column {
             }
         }) {
             Some(column) => Ok(column.ordinal()),
-            None => Err(sqlx::Error::ColumnNotFound(self.name.clone())),
+            None => Err(sqlx::Error::ColumnNotFound(String::from(self.name))),
         }
     }
 }
@@ -103,8 +104,8 @@ pub enum Modifier {
     PrimaryKey,
     NotNull,
     Unique,
-    References(String),
-    Default(String),
+    References(&'static str),
+    Default(&'static str),
 }
 
 impl Modifier {
@@ -527,21 +528,21 @@ impl<'de> Deserialize<'de> for Token {
 }
 */
 impl ValueType {
-    pub fn descriptor(&self, db_type: &DatabaseType) -> String {
+    pub const fn descriptor(&self, db_type: &DatabaseType) -> &'static str {
         match self {
-            ValueType::Integer => "INTEGER".to_string(),
-            ValueType::Float => "REAL".to_string(),
-            ValueType::Text => "TEXT".to_string(),
-            ValueType::Boolean => "BOOLEAN".to_string(),
-            ValueType::Blob => "BLOB".to_string(),
-            ValueType::Id => "BIGINT".to_string(),
+            ValueType::Integer => "INTEGER",
+            ValueType::Float => "REAL",
+            ValueType::Text => "TEXT",
+            ValueType::Boolean => "BOOLEAN",
+            ValueType::Blob => "BLOB",
+            ValueType::Id => "BIGINT",
             ValueType::Token => match db_type {
-                DatabaseType::Postgres => "UUID".to_string(),
-                DatabaseType::Sqlite => "TEXT".to_string(),
+                DatabaseType::Postgres => "UUID",
+                DatabaseType::Sqlite => "TEXT",
             },
             ValueType::Datetime => match db_type {
-                DatabaseType::Postgres => "TIMESTAMPTZ".to_string(),
-                DatabaseType::Sqlite => "DATETIME".to_string(),
+                DatabaseType::Postgres => "TIMESTAMPTZ",
+                DatabaseType::Sqlite => "DATETIME",
             },
         }
     }

@@ -16,6 +16,7 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use log::{debug, error, info};
+use once_cell::sync::Lazy;
 use serde::{Deserialize, Deserializer, Serialize};
 use sqlx::{Any, Arguments, Encode, FromRow, IntoArguments};
 use std::collections::HashMap;
@@ -59,7 +60,7 @@ impl DbObject for World {
         "worlds"
     }
 
-    fn columns() -> Vec<Column> {
+    const COLUMNS: Lazy<Vec<Column>> = Lazy::new(|| {
         vec![
             Column::new("id", ValueType::Id).primary_key(),
             Column::new("owner_id", ValueType::Id)
@@ -75,7 +76,7 @@ impl DbObject for World {
                 .not_null()
                 .default("false"),
         ]
-    }
+    });
 
     fn id(&self) -> Id {
         self.id

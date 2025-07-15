@@ -1,13 +1,14 @@
-use std::any::Any;
 use crate::api::handlers::{ApiCreate, ApiGet, ApiList, ApiObject, ApiRemove, ApiUpdate};
 use crate::api::serve::AppState;
-use crate::database::{Cachable, ValueType};
 use crate::database::objects::{DbObject, FromJson, ModLoader, UpdateJson, User};
 use crate::database::types::{Access, Column, Id};
+use crate::database::{Cachable, ValueType};
 use axum::Router;
 use axum::routing::get;
+use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use sqlx::{Arguments, FromRow, IntoArguments};
+use std::any::Any;
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, FromRow)]
 #[allow(clippy::struct_field_names)]
@@ -36,7 +37,7 @@ impl DbObject for Version {
         "versions"
     }
 
-    fn columns() -> Vec<Column> {
+    const COLUMNS: Lazy<Vec<Column>> = Lazy::new(|| {
         vec![
             Column::new("id", ValueType::Id).primary_key(),
             Column::new("minecraft_version", ValueType::Text).not_null(),
@@ -44,7 +45,8 @@ impl DbObject for Version {
                 .not_null()
                 .references("mod_loaders(id)"),
         ]
-    }
+    });
+
     fn id(&self) -> Id {
         self.id
     }

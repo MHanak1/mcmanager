@@ -1,18 +1,18 @@
-use std::collections::HashMap;
-use std::fs;
 use crate::config::CONFIG;
+use crate::config::secrets::SECRETS;
 use crate::minecraft::server;
 use crate::minecraft::server::{MinecraftServerCollection, MinecraftServerStatus};
 use crate::util;
 use crate::util::dirs;
+use color_eyre::eyre::{ContextCompat, bail};
 use log::{error, info, warn};
+use std::collections::HashMap;
+use std::fs;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::time::Duration;
-use color_eyre::eyre::{bail, ContextCompat};
 use subprocess::{Exec, ExitStatus, Popen};
-use crate::config::secrets::SECRETS;
 
 pub trait MinecraftProxy {
     async fn start(&mut self) -> color_eyre::Result<()>;
@@ -31,13 +31,13 @@ pub struct InfrarustServer {
 
 impl InfrarustServer {
     pub fn new(servers: MinecraftServerCollection) -> color_eyre::Result<Self> {
-       Ok(Self{
-           status: MinecraftServerStatus::Exited(0),
-           servers,
-           path: util::dirs::infrarust_dir(),
-           process: None,
-           hosts: Default::default(),
-       })
+        Ok(Self {
+            status: MinecraftServerStatus::Exited(0),
+            servers,
+            path: util::dirs::infrarust_dir(),
+            process: None,
+            hosts: Default::default(),
+        })
     }
 
     async fn add_server(&mut self, hostname: String, address: String) -> color_eyre::Result<()> {
@@ -45,9 +45,12 @@ impl InfrarustServer {
         let mut file = File::create(self.path.join(format!("proxies/{}.yml", hostname)))?;
         file.write_all(
             include_str!("../resources/default_infrarust_server_config.yml")
-                .replace("$hostname", &format!("{}.{}", hostname, CONFIG.proxy.hostname))
+                .replace(
+                    "$hostname",
+                    &format!("{}.{}", hostname, CONFIG.proxy.hostname),
+                )
                 .replace("$address", &format!("{}", address))
-                .as_bytes()
+                .as_bytes(),
         )?;
         Ok(())
     }
@@ -66,9 +69,14 @@ impl MinecraftProxy for InfrarustServer {
     async fn start(&mut self) -> color_eyre::Result<()> {
         std::fs::create_dir_all(&self.path)?;
 
-        let executable_path = self.path.join(CONFIG.proxy.infrarust_executable_name.clone());
+        let executable_path = self
+            .path
+            .join(CONFIG.proxy.infrarust_executable_name.clone());
         if !executable_path.exists() {
-            bail!(format!("Infrarust executable {} not found", self.path.display()));
+            bail!(format!(
+                "Infrarust executable {} not found",
+                self.path.display()
+            ));
         }
 
         let config_path = self.path.join("config.yaml");
@@ -88,7 +96,6 @@ impl MinecraftProxy for InfrarustServer {
                 self.status = MinecraftServerStatus::Exited(1);
             })
             .expect("Failed to run infrarust");
-
 
         self.process = Some(command);
 
@@ -129,7 +136,10 @@ impl MinecraftProxy for InfrarustServer {
             warn!("no process to stop");
             let code = match self.status {
                 MinecraftServerStatus::Exited(code) => code,
-                MinecraftServerStatus::Running => { self.status = MinecraftServerStatus::Exited(1); 1 }
+                MinecraftServerStatus::Running => {
+                    self.status = MinecraftServerStatus::Exited(1);
+                    1
+                }
             };
             Ok(ExitStatus::Exited(code))
         }
@@ -159,7 +169,7 @@ impl MinecraftProxy for InfrarustServer {
             let server = server.lock().await;
             if let Some(port) = server.port() {
                 if let Some(hostname) = server.hostname() {
-                    let address =  format!("{}:{}", server.host(), port);
+                    let address = format!("{}:{}", server.host(), port);
                     if self.hosts.get(&hostname) != Some(&address) {
                         self.add_server(hostname.clone(), address.clone()).await?;
                     }
@@ -173,7 +183,6 @@ impl MinecraftProxy for InfrarustServer {
                 self.remove_server(hostname.clone()).await?;
             }
         }
-
 
         Ok(())
     }
@@ -231,7 +240,9 @@ impl InternalVelocityServer {
 impl MinecraftProxy for InternalVelocityServer {
     async fn start(&mut self) -> color_eyre::Result<()> {
         std::fs::create_dir_all(&self.path)?;
-        let jar_path = self.path.join(CONFIG.proxy.velocity_executable_name.clone());
+        let jar_path = self
+            .path
+            .join(CONFIG.proxy.velocity_executable_name.clone());
         if !jar_path.exists() {
             bail!("{} doesn't exist", jar_path.display());
         }

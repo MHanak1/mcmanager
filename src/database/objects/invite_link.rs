@@ -1,4 +1,3 @@
-use std::any::Any;
 use crate::api::handlers::{ApiCreate, ApiGet, ApiList, ApiObject, ApiRemove};
 use crate::api::serve::AppState;
 use crate::database::objects::{DbObject, FromJson, User};
@@ -8,8 +7,10 @@ use axum::Router;
 use axum::routing::get;
 use chrono::{DateTime, Utc};
 use duplicate::duplicate_item;
+use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use sqlx::{Arguments, FromRow, IntoArguments, Row};
+use std::any::Any;
 use std::fmt::Debug;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -44,7 +45,7 @@ impl DbObject for InviteLink {
         "invite_links"
     }
 
-    fn columns() -> Vec<Column> {
+    const COLUMNS: Lazy<Vec<Column>> = Lazy::new(|| {
         vec![
             Column::new("id", ValueType::Id).primary_key(),
             Column::new("invite_token", ValueType::Token)
@@ -54,14 +55,8 @@ impl DbObject for InviteLink {
                 .not_null()
                 .references("users(id)"),
             Column::new("created", ValueType::Datetime).not_null(),
-            /*
-            ("id", "UNSIGNED BIGINT PRIMARY KEY"),
-            ("invite_token", "TEXT NOT NULL UNIQUE"),
-            ("creator_id", "INTEGER NOT NULL REFERENCES users(id)"),
-            ("created", "DATETIME NOT NULL"),
-             */
         ]
-    }
+    });
 
     fn id(&self) -> Id {
         self.id

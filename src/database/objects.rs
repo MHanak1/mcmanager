@@ -1,5 +1,6 @@
 use crate::database::types::{Access, Column, Id};
 use crate::database::{Cachable, Database, DatabaseError, DatabaseType};
+use once_cell::sync::Lazy;
 use serde::de::DeserializeOwned;
 use sqlx::any::AnyRow;
 use sqlx::{Any, Encode, FromRow, IntoArguments, Row};
@@ -108,7 +109,12 @@ pub trait DbObject: Clone + Sync + Send {
     fn table_name() -> &'static str;
 
     /// a vector of [`Column`]s to be stored in the database
-    fn columns() -> Vec<Column>;
+    fn columns() -> Lazy<Vec<Column>> {
+        Self::COLUMNS
+    }
+
+    const COLUMNS: Lazy<Vec<Column>>;
+
     /// returns object's [`Id`]
     fn id(&self) -> Id;
     /// the index of the column with the [`Id`] of the object. default is 0

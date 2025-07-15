@@ -1,4 +1,3 @@
-use std::any::Any;
 use crate::api::handlers::{ApiCreate, ApiGet, ApiIcon, ApiList, ApiObject, ApiRemove, ApiUpdate};
 use crate::api::serve::AppState;
 use crate::database::objects::{DbObject, FromJson, ModLoader, UpdateJson, User};
@@ -8,8 +7,10 @@ use async_trait::async_trait;
 use axum::Router;
 use axum::http::StatusCode;
 use axum::routing::{get, post};
+use once_cell::sync::Lazy;
 use serde::{Deserialize, Deserializer, Serialize};
 use sqlx::{Arguments, FromRow, IntoArguments};
+use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -50,7 +51,7 @@ impl DbObject for Mod {
         "mods"
     }
 
-    fn columns() -> Vec<Column> {
+    const COLUMNS: Lazy<Vec<Column>> = Lazy::new(|| {
         vec![
             Column::new("id", ValueType::Id).primary_key(),
             Column::new("owner_id", ValueType::Id)
@@ -64,7 +65,7 @@ impl DbObject for Mod {
             Column::new("modrinth_id", ValueType::Text),
             Column::new("public", ValueType::Boolean).not_null(),
         ]
-    }
+    });
 
     fn id(&self) -> Id {
         self.id
