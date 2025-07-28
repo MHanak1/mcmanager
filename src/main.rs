@@ -43,7 +43,7 @@ async fn main() -> Result<()> {
     let config_path = util::dirs::base_dir().join("config.toml");
     if !config_path.exists() {
         let mut config_file = File::create(&config_path)?;
-        config_file.write_all(include_bytes!("resources/default_config.toml"))?;
+        config_file.write_all(include_bytes!("resources/configs/default_config.toml"))?;
         println!("Config file written to {}", config_path.display());
         println!("You can now edit the values in the config file and restart this executable.");
         return Ok(());
@@ -84,7 +84,7 @@ async fn main() -> Result<()> {
     if second_launch {
         util::dirs::init_dirs().expect("Failed to initialize the data directory");
 
-        println!(include_str!("resources/logo.txt"));
+        println!(include_str!("resources/icons/logo.txt"));
 
         {
             print!("Enter the username for the administrator account.\nUsername: ");
@@ -241,7 +241,7 @@ async fn main() -> Result<()> {
                 File::create(&util::dirs::base_dir().join("velocity_config.toml"))
                     .expect("failed to create the velocity config file");
             velocity_config_file
-                .write_all(include_bytes!("resources/velocity_config.toml"))
+                .write_all(include_bytes!("resources/configs/velocity_config.toml"))
                 .expect("failed to write default config file");
 
             // add some basic default values

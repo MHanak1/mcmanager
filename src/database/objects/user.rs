@@ -217,6 +217,10 @@ impl ApiObject for User {
                     .patch(Self::upload_icon)
                     .get(Self::get_icon),
             )
+            .route(
+                "/default/icon",
+                get(Self::default_icon)
+            )
     }
 }
 
@@ -315,7 +319,10 @@ impl ApiRemove for User {
     }
 }
 
-impl ApiIcon for User {}
+impl ApiIcon for User {
+    const DEFAULT_ICON_BYTES: &'static [u8] = include_bytes!("../../resources/icons/user_default.png");
+    const DEFAULT_ICON_MIME: &'static str = "image/png";
+}
 
 impl User {
     pub async fn group(&self, database: Database, user: Option<(&User, &Group)>) -> Group {

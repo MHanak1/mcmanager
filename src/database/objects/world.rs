@@ -22,6 +22,7 @@ use sqlx::{Any, Arguments, Encode, FromRow, IntoArguments};
 use std::collections::HashMap;
 use std::os::linux::raw::stat;
 use std::sync::Arc;
+use serde_json::json;
 use tokio::sync::Mutex;
 use tokio::task::id;
 
@@ -245,10 +246,18 @@ impl ApiObject for World {
             )
             .route("/{id}/status", get(Self::world_get_status))
             .route(
+                "/{id}/log",
+                    get(Self::get_server_log)
+            )
+            .route(
                 "/{id}/icon",
                 post(Self::upload_icon)
                     .patch(Self::upload_icon)
-                    .get(Self::get_icon),
+                    .get(Self::get_icon)
+            )
+            .route(
+                "/default/icon",
+                get(Self::default_icon)
             )
     }
 }
@@ -462,7 +471,10 @@ impl ApiRemove for World {
     }
 }
 
-impl ApiIcon for World {}
+impl ApiIcon for World {
+    const DEFAULT_ICON_BYTES: &'static [u8] = include_bytes!("../../resources/icons/world_default.png");
+    const DEFAULT_ICON_MIME: &'static str = "image/png";
+}
 
 impl World {
     pub async fn version(&self, database: Database, user: Option<(&User, &Group)>) -> Version {
@@ -678,5 +690,39 @@ impl World {
         })?;
 
         Ok(axum::Json(config))
+    }
+
+    async fn get_server_log(
+        id: Path<Id>,
+        state: State<AppState>,
+        user: UserAuth,
+    ) -> Result<impl IntoResponse, axum::http::StatusCode> {
+        let id = id.0;
+        let state = state.0;
+        let user = user.0;
+
+        let group = user.group(state.database.clone(), None).await;
+
+        let world = {
+            state
+                .database
+                .get_one::<Self>(id, Some((&user, &group)))
+                .await
+                .map_err(crate::api::handlers::handle_database_error)?
+        };
+
+        let server = state
+            .servers
+            .get_or_create_server(&world)
+            .await
+            .map_err(|err| {
+                error!("{err}");
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+
+        let mut server = server.lock().await;
+
+        Ok(axum::Json(json!({"log": server.latest_log().await.unwrap_or_default()})))
+
     }
 }

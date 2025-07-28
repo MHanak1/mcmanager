@@ -98,7 +98,7 @@ pub struct ProxyConfig {
 
 pub static CONFIG: Lazy<Config> = Lazy::new(|| {
     let mut config_builder = config::Config::builder().add_source(config::File::from_str(
-        &include_str!("resources/default_config.toml").replace("$default_group_id", "AAAAAAAA"),
+        &include_str!("resources/configs/default_config.toml").replace("$default_group_id", "AAAAAAAA"),
         config::FileFormat::Toml,
     ));
 

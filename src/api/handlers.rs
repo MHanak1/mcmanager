@@ -7,14 +7,14 @@ use crate::database::objects::{DbObject, FromJson, InviteLink, Session, UpdateJs
 use crate::database::types::Id;
 use crate::database::{Cachable, DatabasePool, QueryBuilder, ValueType, WhereOperand};
 pub(crate) use crate::database::{Database, DatabaseError};
-use crate::execute_on_enum;
+use crate::{execute_on_enum, util};
 use crate::util::base64::base64_decode;
 use crate::util::dirs::icons_dir;
 use async_trait::async_trait;
 use axum::body::Bytes;
 use axum::extract::{FromRequest, Multipart, Path, Request, State};
 use axum::http::header::ToStrError;
-use axum::http::{HeaderMap, StatusCode, header};
+use axum::http::{HeaderMap, StatusCode, header, HeaderName, HeaderValue};
 use axum::response::IntoResponse;
 use axum::routing::{MethodRouter, get, post};
 use axum::{Json, Router};
@@ -541,6 +541,7 @@ where
     }
 }
 
+#[async_trait]
 pub trait ApiIcon: ApiObject
 where
     Self: Sized + 'static,
@@ -632,13 +633,16 @@ where
         id: Path<Id>,
         _user: UserAuth, /*check if the user is authenticated, but do not check if they have access to the object, since it doesn't justify the extra DB lookups*/
     ) -> Result<impl IntoResponse, StatusCode> {
-        let mut path = icons_dir().join(Self::table_name());
-        let (path, is_gif) = if path.join(format!("{}.webp", id.to_string())).exists() {
-            (path.join(format!("{}.webp", id.to_string())), false)
-        } else if path.join(format!("{}.gif", id.to_string())).exists() {
-            (path.join(format!("{}.gif", id.to_string())), true)
+        let path = icons_dir().join(Self::table_name());
+        let (path, is_gif) = if path.join(format!("{}.webp", *id)).exists() {
+            (path.join(format!("{}.webp", *id)), false)
+        } else if path.join(format!("{}.gif", *id)).exists() {
+            (path.join(format!("{}.gif", *id)), true)
         } else {
-            return Err(StatusCode::NOT_FOUND);
+            return Ok((
+                StatusCode::SEE_OTHER,
+                [(header::LOCATION, format!("/api/{}/default/icon", Self::table_name()))]
+            ).into_response());
         };
 
         let file = tokio::fs::File::open(path)
@@ -652,7 +656,29 @@ where
 
         let header = [(header::CONTENT_TYPE, mime_type)];
 
-        Ok((header, body))
+        Ok((header, body).into_response())
+    }
+
+    const DEFAULT_ICON_BYTES: &'static [u8];
+    const DEFAULT_ICON_MIME: &'static str;
+    #[allow(clippy::unused_async)]
+    async fn default_icon(
+        _user: UserAuth, /*check if the user is authenticated, but do not check if they have access to the object, since it doesn't justify the extra DB lookups*/
+        header_map: HeaderMap
+    ) -> Result<impl IntoResponse, StatusCode> {
+        if let Some(date) = header_map.get(header::IF_MODIFIED_SINCE) {
+            if let Ok(date) = DateTime::parse_from_rfc2822(date.to_str().expect("invalid header value")) {
+                if date < *util::START_TIME {
+                    return Ok(StatusCode::NOT_MODIFIED.into_response());
+                }
+            }
+        }
+
+        let headers = (
+            [(header::CONTENT_TYPE, Self::DEFAULT_ICON_MIME)],
+            [(header::LAST_MODIFIED, util::START_TIME.to_rfc2822())]
+        );
+        Ok((headers, Self::DEFAULT_ICON_BYTES).into_response())
     }
 }
 

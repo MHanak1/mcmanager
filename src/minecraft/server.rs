@@ -134,6 +134,7 @@ pub trait MinecraftServer: Send + Debug {
     async fn update_world(&mut self, world: World) -> Result<()>;
     async fn config(&self) -> Result<HashMap<String, String>>;
     async fn set_config(&mut self, config: HashMap<String, String>) -> Result<()>;
+    async fn latest_log(&mut self) -> Result<String>;
     async fn status(&self) -> Result<MinecraftServerStatus>;
     /// fully removes the server and its files
     async fn remove(&mut self) -> Result<()>;
@@ -470,6 +471,10 @@ use crate::config::CONFIG;
             Ok(())
         }
 
+        async fn latest_log(&mut self) -> Result<String> {
+            self.read_file("logs/latest.log")
+        }
+
         async fn status(&self) -> Result<MinecraftServerStatus, color_eyre::eyre::Error> {
             Ok(self.status)
         }
@@ -612,6 +617,10 @@ pub mod external {
         }
 
         async fn set_config(&mut self, _config: HashMap<String, String>) -> Result<()> {
+            todo!()
+        }
+
+        async fn latest_log(&mut self) -> Result<String> {
             todo!()
         }
 

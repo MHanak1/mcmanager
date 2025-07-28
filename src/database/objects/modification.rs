@@ -202,6 +202,10 @@ impl ApiObject for Mod {
                     .patch(Self::upload_icon)
                     .get(Self::get_icon),
             )
+            .route(
+                "/default/icon",
+                get(Self::default_icon)
+            )
     }
 }
 
@@ -244,4 +248,7 @@ impl ApiUpdate for Mod {
     }
 }
 impl ApiRemove for Mod {}
-impl ApiIcon for Mod {}
+impl ApiIcon for Mod {
+    const DEFAULT_ICON_BYTES: &'static [u8] = include_bytes!("../../resources/icons/mod_default.png");
+    const DEFAULT_ICON_MIME: &'static str = "image/png";
+}

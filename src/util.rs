@@ -1,5 +1,9 @@
 use std::path::Path;
 use std::{fs, io};
+use chrono::{DateTime, Utc};
+use once_cell::sync::Lazy;
+use tokio::time::Instant;
+use crate::config::Config;
 
 pub mod dirs {
     use std::env;
@@ -111,6 +115,9 @@ macro_rules! execute_on_enum {
         }
     };
 }
+
+
+pub static START_TIME: Lazy<DateTime<Utc>> = Lazy::new(|| {Utc::now()});
 
 pub fn copy_dir_all(src: impl AsRef<Path>, dst: impl AsRef<Path>) -> io::Result<()> {
     fs::create_dir_all(&dst)?;

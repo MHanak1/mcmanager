@@ -44,7 +44,7 @@ impl InfrarustServer {
         self.hosts.insert(hostname.clone(), address.clone());
         let mut file = File::create(self.path.join(format!("proxies/{}.yml", hostname)))?;
         file.write_all(
-            include_str!("../resources/default_infrarust_server_config.yml")
+            include_str!("../resources/configs/default_infrarust_server_config.yml")
                 .replace(
                     "$hostname",
                     &format!("{}.{}", hostname, CONFIG.proxy.hostname),
@@ -82,7 +82,7 @@ impl MinecraftProxy for InfrarustServer {
         let config_path = self.path.join("config.yaml");
         if !config_path.exists() {
             let mut config_file = File::create(config_path)?;
-            config_file.write_all(include_bytes!("../resources/default_infrarust_config.yml"))?;
+            config_file.write_all(include_bytes!("../resources/configs/default_infrarust_config.yml"))?;
         }
         fs::create_dir_all(self.path.join("proxies"))?;
 
@@ -253,7 +253,7 @@ impl MinecraftProxy for InternalVelocityServer {
         let config_path = dirs::base_dir().join("velocity_config.toml");
         if !config_path.exists() {
             let mut file = File::create(&config_path)?;
-            file.write_all(include_bytes!("../resources/velocity_config.toml"))?;
+            file.write_all(include_bytes!("../resources/configs/velocity_config.toml"))?;
         }
 
         let config_path = dirs::velocity_dir().join("forwarding.secret");
