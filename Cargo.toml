@@ -53,6 +53,7 @@ async-recursion = "1.1.1"
 dyn-clone = "1.0.19"
 tokio-stream = "0.1.17"
 const-vec = "1.1.1"
+socketioxide = { version = "0.17.2", features = ["state", "tracing"] }
 
 [dev-dependencies]
 pretty_assertions = "1.4.1"

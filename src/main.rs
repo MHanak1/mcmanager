@@ -296,9 +296,14 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
+    let console_tickets = moka::future::CacheBuilder::new(10000) //10000 ought to be enough
+        .time_to_live(Duration::from_secs(30*60)) // 30 minute ttl ought to be enough
+        .build();
+
     let state = AppState {
         database,
         servers: MinecraftServerCollection::new(),
+        console_tickets
     };
 
     tokio::task::spawn({
@@ -307,7 +312,7 @@ async fn main() -> Result<()> {
             let mut interval = tokio::time::interval(Duration::from_millis(1000));
             loop {
                 interval.tick().await;
-                servers.refresh_servers().await;
+                servers.poll_servers().await;
             }
         }
     });
@@ -317,11 +322,11 @@ async fn main() -> Result<()> {
         async move {
             info!("starting velocity at {}", CONFIG.proxy.port);
             let mut proxy =
-                InfrarustServer::new(servers).expect("failed to create a velocity server");
+                InfrarustServer::new(servers).expect("failed to create an infrarust server");
             proxy
                 .start()
                 .await
-                .expect("failed to start a velocity server");
+                .expect("failed to start an infrarust server");
 
             let mut interval = tokio::time::interval(Duration::from_millis(1000));
             loop {

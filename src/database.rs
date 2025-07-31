@@ -59,10 +59,6 @@ impl DatabaseCache {
         caches.insert(Version::table_name(), Cache::new(CACHES_SIZE));
         caches.insert(World::table_name(), Cache::new(CACHES_SIZE));
 
-        for key in caches.keys() {
-            println!("{key}")
-        }
-
         Self {
             caches: Arc::new(caches),
         }

@@ -40,7 +40,7 @@ impl InfrarustServer {
         })
     }
 
-    async fn add_server(&mut self, hostname: String, address: String) -> color_eyre::Result<()> {
+    fn add_server(&mut self, hostname: String, address: String) -> color_eyre::Result<()> {
         self.hosts.insert(hostname.clone(), address.clone());
         let mut file = File::create(self.path.join(format!("proxies/{}.yml", hostname)))?;
         file.write_all(
@@ -67,6 +67,7 @@ impl InfrarustServer {
 
 impl MinecraftProxy for InfrarustServer {
     async fn start(&mut self) -> color_eyre::Result<()> {
+        //TODO: switch to an embedded infrarust server
         std::fs::create_dir_all(&self.path)?;
 
         let executable_path = self
@@ -165,13 +166,13 @@ impl MinecraftProxy for InfrarustServer {
         }
 
         let mut new_hosts = HashMap::new();
-        for server in self.servers.get_all_servers().await {
+        for server in self.servers.get_all_servers() {
             let server = server.lock().await;
             if let Some(port) = server.port() {
                 if let Some(hostname) = server.hostname() {
                     let address = format!("{}:{}", server.host(), port);
                     if self.hosts.get(&hostname) != Some(&address) {
-                        self.add_server(hostname.clone(), address.clone()).await?;
+                        self.add_server(hostname.clone(), address.clone())?;
                     }
                     new_hosts.insert(hostname, address);
                 }
@@ -342,7 +343,7 @@ impl MinecraftProxy for InternalVelocityServer {
         }
 
         let mut hosts = vec![];
-        for server in self.servers.get_all_servers().await {
+        for server in self.servers.get_all_servers() {
             let server = server.lock().await;
             //println!("{:?}", server.world());
             if let Some(port) = server.port() {

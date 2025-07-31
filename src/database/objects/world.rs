@@ -11,7 +11,7 @@ use crate::minecraft::server;
 use crate::minecraft::server::{MinecraftServerStatus, ServerConfigLimit};
 use async_trait::async_trait;
 use axum::Router;
-use axum::extract::{Path, State};
+use axum::extract::{Path, State, WebSocketUpgrade};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
@@ -23,6 +23,7 @@ use std::collections::HashMap;
 use std::os::linux::raw::stat;
 use std::sync::Arc;
 use serde_json::json;
+use socketioxide::extract::SocketRef;
 use tokio::sync::Mutex;
 use tokio::task::id;
 
@@ -512,7 +513,7 @@ impl World {
         }
 
         let server = state.servers.get_server(id);
-        let status = match server.await {
+        let status = match server {
             Some(server) => server.lock().await.status().await,
             None => Ok(MinecraftServerStatus::Exited(0)),
         }
@@ -725,4 +726,6 @@ impl World {
         Ok(axum::Json(json!({"log": server.latest_log().await.unwrap_or_default()})))
 
     }
+
+    async fn test() {}
 }

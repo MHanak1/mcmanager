@@ -7,31 +7,36 @@ use async_trait::async_trait;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashMap;
 use std::fmt::Debug;
-use std::net::SocketAddr;
 use std::result;
-use std::sync::{Arc, LazyLock};
-use axum::extract::{ConnectInfo, WebSocketUpgrade};
+use std::sync::{Arc, RwLock};
+use argon2::password_hash::McfHasher;
 use tokio::sync::Mutex;
 
 pub type ServerMutex = Arc<Mutex<Box<dyn MinecraftServer>>>;
 
 #[derive(Debug, Clone)]
 pub struct MinecraftServerCollection {
-    servers: Arc<Mutex<HashMap<Id, ServerMutex>>>,
+    servers: Arc<RwLock<HashMap<Id, ServerMutex>>>,
+}
+
+impl Default for MinecraftServerCollection {
+    fn default() -> Self {
+        Self {
+            servers: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
 }
 
 impl MinecraftServerCollection {
     pub fn new() -> Self {
-        Self {
-            servers: Arc::new(Mutex::new(HashMap::new())),
-        }
+        Self::default()
     }
 
-    pub async fn get_server(&self, id: Id) -> Option<ServerMutex> {
+    pub fn get_server(&self, id: Id) -> Option<ServerMutex> {
         let mut server = None;
         {
             // this should hopefully drop SERVERS, right?
-            server = self.servers.lock().await.get(&id).cloned()
+            server = self.servers.read().expect("poisoned mutex").get(&id).cloned()
         }
         server
     }
@@ -40,13 +45,13 @@ impl MinecraftServerCollection {
         &self,
         world: &World,
     ) -> Result<minecraft::server::ServerMutex> {
-        let mut server = self.get_server(world.id).await;
+        let mut server = self.get_server(world.id);
         match server {
             Some(server) => Ok(server),
             None => {
                 self.add_server(match CONFIG.minecraft_server_type {
                     ServerType::Internal => {
-                        Box::new(internal::InternalServer::new(world.clone()).map_err(|err| {
+                        Box::new(internal::InternalServer::new(world.clone()).await.map_err(|err| {
                             crate::database::DatabaseError::InternalServerError(err.to_string())
                         })?)
                     }
@@ -59,50 +64,43 @@ impl MinecraftServerCollection {
                             .to_string(),
                         world.clone(),
                     )),
-                })
-                .await;
-                server = self.get_server(world.id).await;
+                });
+                server = self.get_server(world.id);
                 assert!(server.is_some());
                 Ok(server.unwrap())
             }
         }
     }
 
-    pub async fn add_server(&self, server: Box<dyn MinecraftServer>) {
+    pub fn add_server(&self, server: Box<dyn MinecraftServer>) {
         self.servers
-            .lock()
-            .await
+            .write()
+            .expect("poisoned mutex")
             .insert(server.id(), Arc::new(Mutex::new(server)));
     }
 
-    pub async fn remove_server(&self, id: &Id) {
-        self.servers.lock().await.remove(id);
+    pub fn remove_server(&self, id: &Id) {
+        self.servers.write().expect("poisoned mutex").remove(id);
     }
 
-    pub async fn get_all_servers(&self) -> Vec<ServerMutex> {
-        let mut servers = Vec::new();
-        {
-            servers = self.servers.lock().await.values().cloned().collect()
-        }
-        servers
+    pub fn get_all_servers(&self) -> Vec<ServerMutex> {
+        self.servers.read().expect("poisoned mutex").values().cloned().collect()
     }
 
     pub async fn get_all_worlds(&self) -> Vec<World> {
         futures::future::join_all(
             self.get_all_servers()
-                .await
                 .into_iter()
                 .map(|server: ServerMutex| async move { server.lock().await.world() }),
         )
         .await
     }
 
-    pub async fn refresh_servers(&self) {
+    pub async fn poll_servers(&self) {
         futures::future::join_all(
             self.get_all_servers()
-                .await
                 .into_iter()
-                .map(|server: ServerMutex| async move { server.lock().await.refresh().await }),
+                .map(|server: ServerMutex| async move { server.lock().await.poll().await }),
         )
         .await;
     }
@@ -116,9 +114,21 @@ pub struct Server {
 }
 
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum MinecraftServerStatus {
     Running,
     Exited(u32),
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MCStdin {
+    Command(String),
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum McStdout {
+    Log{seq: usize, message: String},
+    Status(MinecraftServerStatus),
 }
 
 #[async_trait]
@@ -135,11 +145,13 @@ pub trait MinecraftServer: Send + Debug {
     async fn config(&self) -> Result<HashMap<String, String>>;
     async fn set_config(&mut self, config: HashMap<String, String>) -> Result<()>;
     async fn latest_log(&mut self) -> Result<String>;
+    async fn write_console(&mut self, data: String) -> Result<()>;
     async fn status(&self) -> Result<MinecraftServerStatus>;
     /// fully removes the server and its files
     async fn remove(&mut self) -> Result<()>;
     /// updates the status of the server. this should return false if the server is updated through somewhere else
-    async fn refresh(&mut self) -> bool;
+    async fn poll(&mut self) -> bool;
+    fn stdout(&self) -> tokio::sync::broadcast::Receiver<McStdout>;
     /*
     async fn ws_handler(
         &self,
@@ -153,29 +165,34 @@ pub mod internal {
 use crate::config::CONFIG;
     use crate::database::objects::World;
     use crate::database::types::Id;
-    use crate::minecraft::server::{MinecraftServer, MinecraftServerStatus};
+    use crate::minecraft::server::{MCStdin, McStdout, MinecraftServer, MinecraftServerStatus};
     use crate::util;
     use color_eyre::Result;
     use async_trait::async_trait;
-    use log::{debug, info, warn};
+    use log::{debug, error, info, warn};
     use std::collections::{HashMap, HashSet};
     use std::fs;
     use std::fs::File;
-    use std::io::{Read, Write};
+    use std::io::{BufRead, BufReader, Read, Write};
     use std::net::SocketAddr;
     use std::path::PathBuf;
-    use std::sync::{LazyLock, Mutex};
+    use std::sync::{Arc, LazyLock};
     use std::time::Duration;
     use axum::body::Bytes;
     use axum::extract::{ConnectInfo, WebSocketUpgrade};
     use axum::extract::ws::{Message, WebSocket};
     use axum::response::IntoResponse;
     use color_eyre::eyre::{bail, ContextCompat};
+    use futures::stream::SplitSink;
+    use futures::StreamExt;
+    use socketioxide::extract::{Data, SocketRef};
+    use socketioxide::SocketIo;
     use subprocess::{Exec, ExitStatus, Popen};
+    use tokio::sync::{RwLock, Mutex, broadcast, mpsc};
     use crate::config::secrets::SECRETS;
 
-    pub(crate) static TAKEN_LOCAL_PORTS: LazyLock<Mutex<HashSet<u16>>> =
-        LazyLock::new(|| Mutex::new(HashSet::new()));
+    pub(crate) static TAKEN_LOCAL_PORTS: LazyLock<std::sync::Mutex<HashSet<u16>>> =
+        LazyLock::new(|| std::sync::Mutex::new(HashSet::new()));
 
     fn get_free_local_port() -> Option<u16> {
         let servers = TAKEN_LOCAL_PORTS.lock().expect("couldn't get servers");
@@ -193,22 +210,37 @@ use crate::config::CONFIG;
         directory: PathBuf,
         port: Option<u16>,
         hostname: String,
-        process: Option<Popen>,
+        io: Arc<RwLock<InternalSeverIO>>,
+        stdin_tx: Option<mpsc::Sender<MCStdin>>,
+        stdout_tx: broadcast::Sender<McStdout>,
+
     }
+    #[derive(Default, Debug)]
+    pub struct InternalSeverIO {
+        process: Option<Arc<Mutex<Popen>>>,
+        output_task: Option<tokio::task::JoinHandle<()>>,
+        input_task: Option<tokio::task::JoinHandle<()>>,
+    }
+
     impl InternalServer {
-        pub fn new(world: World) -> Result<Self> {
+        pub async fn new(world: World) -> Result<Self> {
             let enabled = world.enabled;
+
+            let (stdout_tx, _) = broadcast::channel(128);
+
             let mut new = Self {
                 status: MinecraftServerStatus::Exited(0),
                 hostname: world.hostname.clone(),
                 directory: util::dirs::worlds_dir()
                     .join(format!("{}/{}", world.owner_id, world.id)),
                 port: None,
-                process: None,
                 world,
+                io: Default::default(),
+                stdin_tx: None,
+                stdout_tx,
             };
             if enabled {
-                new.start()?;
+                new.start().await?;
             }
             Ok(new)
         }
@@ -240,7 +272,7 @@ use crate::config::CONFIG;
             Ok(())
         }
 
-        fn start(&mut self) -> Result<()> {
+        async fn start(&mut self) -> Result<()> {
             let jar_path =
                 util::dirs::versions_dir().join(format!("{}.jar", self.world.version_id));
             if !jar_path.exists() {
@@ -251,7 +283,7 @@ use crate::config::CONFIG;
                 std::fs::create_dir_all(&self.directory)?;
             }
 
-            if self.process.is_some() {
+            if self.io.read().await.process.is_some() {
                 debug!("server already running");
                 return Ok(());
             }
@@ -284,7 +316,7 @@ use crate::config::CONFIG;
                 &format!("-Xmx{}m", self.world.allocated_memory),
             );
             //println!("{command}");
-            let command = Exec::shell(command)
+            let mut command = Exec::shell(command)
                 .cwd(self.directory.clone())
                 .stdin(subprocess::Redirection::Pipe)
                 .stdout(subprocess::Redirection::Pipe)
@@ -295,50 +327,91 @@ use crate::config::CONFIG;
                 })
                 .expect(":<");
 
-            self.process = Some(command);
+            let (stdin_tx, mut stdin_rx) = mpsc::channel(64);
+            self.stdin_tx = Some(stdin_tx);
+
+            let out_task = tokio::task::spawn({
+                let stdout_tx = self.stdout_tx.clone();
+                let stdout = command.stdout.take().unwrap();
+                async move {
+                    //output
+                    let reader = BufReader::new(stdout);
+                    for (seq, line) in reader.lines().enumerate() {
+                        let message = line.expect("invalid output line");
+                        let _ = stdout_tx.send(McStdout::Log{seq, message});
+                    }
+                }
+            });
+
+            let input_task = tokio::task::spawn_blocking({
+                let mut stdin = command.stdin.take().unwrap();
+                move || {
+                    while let Some(command) = stdin_rx.blocking_recv() {
+                        match command {
+                            MCStdin::Command(command) => {
+                                if let Err(err) = stdin.write_all(command.as_bytes()) {
+                                    error!("failed to write command: {err}");
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+
+
+
+            self.io.write().await.process = Some(Arc::new(Mutex::new(command)));
+            self.io.write().await.output_task = Some(out_task);
+            self.io.write().await.input_task = Some(input_task);
+
 
             self.status = MinecraftServerStatus::Running;
+            _ = self.stdout_tx.send(McStdout::Status(self.status));
 
             Ok(())
         }
 
-        fn stop(&mut self) -> Result<()> {
-            let stop_result = self.write_console(b"stop\n");
-            if let Some(mut process) = self.process.take() {
-                if stop_result.is_err() {
-                    let _ = process.kill();
-                }
-
-                let result = process.wait_timeout(Duration::from_secs(
-                    crate::config::CONFIG.world.stop_timeout,
-                ))?;
-                TAKEN_LOCAL_PORTS
-                    .lock()
-                    .expect("failed to lock local ports")
-                    .remove(&self.port.unwrap_or(0));
-                self.port = None;
-
-                match result {
-                    Some(status) => {
-                        info!("stopped server {} with status {:?}", self.id(), status);
-                        if let ExitStatus::Exited(code) = status {
-                            self.status = MinecraftServerStatus::Exited(code);
-                        } else {
-                            self.status = MinecraftServerStatus::Exited(1);
-                        }
-                        Ok(())
-                    }
-                    None => {
-                        process.terminate()?;
-                        warn!("stopped server {} after timeout period elapsed", self.id());
-                        self.status = MinecraftServerStatus::Exited(1);
-                        Ok(())
-                    }
-                }
+        async fn stop(&mut self) -> Result<()> {
+            let stop_result = self.write_console(String::from("stop\n")).await;
+            let process = if let Some(process) = self.io.read().await.process.clone() {
+                process
             } else {
-                debug!("Not stopping {}, because it's not running", self.world.id);
-                Ok(())
+                debug!("not stopping process as it is not running");
+                return Ok(());
+            };
+
+            if stop_result.is_err() {
+                let _ = process.lock().await.kill();
             }
+
+            let result = process.lock().await.wait_timeout(Duration::from_secs(
+                crate::config::CONFIG.world.stop_timeout,
+            ))?;
+
+            TAKEN_LOCAL_PORTS
+                .lock()
+                .expect("failed to lock local ports")
+                .remove(&self.port.unwrap_or(0));
+            self.port = None;
+
+            match result {
+                Some(status) => {
+                    info!("stopped server {} with status {:?}", self.id(), status);
+                    if let ExitStatus::Exited(code) = status {
+                        self.status = MinecraftServerStatus::Exited(code);
+                    } else {
+                        self.status = MinecraftServerStatus::Exited(1);
+                    }
+                }
+                None => {
+                    process.lock().await.terminate()?;
+                    warn!("stopped server {} after timeout period elapsed", self.id());
+                    self.status = MinecraftServerStatus::Exited(1);
+                }
+            }
+            let _ = self.stdout_tx.send(McStdout::Status(self.status));
+
+            Ok(())
         }
 
         /*
@@ -368,28 +441,6 @@ use crate::config::CONFIG;
         }
          */
 
-        fn write_console(&mut self, data: &[u8]) -> Result<()> {
-            match self.process {
-                Some(ref mut process) => match process.stdin {
-                    Some(ref mut stdin) => {
-                        stdin.write_all(data)?;
-                    }
-                    None => {
-                        bail!("Could not get process stdin");
-                    }
-                },
-                None => {
-                    match self.status {
-                        MinecraftServerStatus::Exited(_) => {}
-                        _ => {
-                            self.status = MinecraftServerStatus::Exited(1);
-                        }
-                    }
-                    bail!("Cannot write to console: server is not running");
-                }
-            }
-            Ok(())
-        }
 
         fn read_file(&self, path: &str) -> Result<String> {
             let mut output = String::new();
@@ -440,7 +491,7 @@ use crate::config::CONFIG;
             let old = self.world();
             if old.allocated_memory != world.allocated_memory || old.version_id != world.version_id
             {
-                self.stop()?;
+                self.stop().await?;
             }
 
             let enabled = world.enabled;
@@ -449,9 +500,9 @@ use crate::config::CONFIG;
             self.world = world;
 
             if enabled {
-                self.start()?;
+                self.start().await?;
             } else {
-                self.stop()?;
+                self.stop().await?;
             }
             Ok(())
         }
@@ -475,12 +526,49 @@ use crate::config::CONFIG;
             self.read_file("logs/latest.log")
         }
 
+        async fn write_console(&mut self, data: String) -> Result<()> {
+            if let Some(stdin_tx) = &self.stdin_tx {
+                stdin_tx.send(MCStdin::Command(data)).await?;
+                Ok(())
+            } else {
+                match self.status {
+                    MinecraftServerStatus::Exited(_) => {}
+                    _ => {
+                        self.status = MinecraftServerStatus::Exited(1);
+                    }
+                }
+                bail!("Cannot write to console: server is not running");
+            }
+            /*
+            match self.io.write().await.process {
+                Some(ref mut process) => match process.lock().await.stdin {
+                    Some(ref mut stdin) => {
+                        stdin.write_all(data)?;
+                    }
+                    None => {
+                        bail!("Could not get process stdin");
+                    }
+                },
+                None => {
+                    match self.status {
+                        MinecraftServerStatus::Exited(_) => {}
+                        _ => {
+                            self.status = MinecraftServerStatus::Exited(1);
+                        }
+                    }
+                    bail!("Cannot write to console: server is not running");
+                }
+            }
+            Ok(())
+             */
+        }
+
         async fn status(&self) -> Result<MinecraftServerStatus, color_eyre::eyre::Error> {
             Ok(self.status)
         }
 
         async fn remove(&mut self) -> Result<()> {
-            self.stop()?;
+            self.stop().await?;
             debug!("removing directory {}", self.directory.display());
             if self.directory.exists() {
                 std::fs::remove_dir_all(self.directory.clone())?;
@@ -488,53 +576,68 @@ use crate::config::CONFIG;
             Ok(())
         }
 
-        async fn refresh(&mut self) -> bool {
-            if let Some(process) = self.process.as_mut() {
-                if let Some(exit_status) = process.poll() {
-                    self.process = None;
-                    match exit_status {
-                        ExitStatus::Exited(code) => {
-                            self.status = MinecraftServerStatus::Exited(code);
-                        }
-                        _ => {
-                            self.status = MinecraftServerStatus::Exited(1);
-                        }
+        async fn poll(&mut self) -> bool {
+            let exit_status = if let Some(process) = &self.io.read().await.process.clone() {
+                process.lock().await.exit_status()
+            } else { None };
+            if let Some(exit_status) = exit_status {
+                self.io.write().await.process = None;
+
+                match exit_status {
+                    ExitStatus::Exited(code) => {
+                        self.status = MinecraftServerStatus::Exited(code);
                     }
-                    info!(
-                        "freed the port {} of {} because the server running on it has exited",
-                        self.port.unwrap_or(0),
-                        self.world.id
-                    );
-                    TAKEN_LOCAL_PORTS
-                        .lock()
-                        .expect("failed to lock local ports")
-                        .remove(&self.port.unwrap_or(0));
+                    _ => {
+                        self.status = MinecraftServerStatus::Exited(1);
+                    }
                 }
+                _ = self.stdout_tx.send(McStdout::Status(self.status));
+                info!(
+                    "freed the port {} of {} because the server running on it has exited",
+                    self.port.unwrap_or(0),
+                    self.world.id
+                );
+                TAKEN_LOCAL_PORTS
+                    .lock()
+                    .expect("failed to lock local ports")
+                    .remove(&self.port.unwrap_or(0));
             }
             true
         }
+
+        fn stdout(&self) -> broadcast::Receiver<McStdout> {
+            self.stdout_tx.subscribe()
+        }
+
     }
 
+    /*
     impl Drop for InternalServer {
         fn drop(&mut self) {
-            if let Some(mut process) = self.process.take() {
-                process.kill().expect("Failed to kill process");
+            if let Some(mut process) = self.io.write().process.clone() {
+                process.blocking_lock().kill().expect("Failed to kill process");
             }
         }
     }
+     */
 }
 
 pub mod external {
     use crate::config::CONFIG;
     use crate::database::objects::World;
     use crate::database::types::Id;
-    use crate::minecraft::server::{MinecraftServer, MinecraftServerStatus, Server};
+    use crate::minecraft::server::{MCStdin, McStdout, MinecraftServer, MinecraftServerStatus, Server};
     use color_eyre::{Result};
     use async_trait::async_trait;
     use log::debug;
     use reqwest::StatusCode;
     use std::collections::HashMap;
+    use std::net::SocketAddr;
+    use axum::extract::ws::WebSocket;
     use color_eyre::eyre::bail;
+    use socketioxide::extract::SocketRef;
+    use tokio::sync::broadcast::Receiver;
+    use tokio::sync::mpsc::Sender;
 
     #[derive(Debug)]
     pub struct MinimanagerServer {
@@ -624,6 +727,10 @@ pub mod external {
             todo!()
         }
 
+        async fn write_console(&mut self, data: String) -> Result<()> {
+            todo!()
+        }
+
         async fn status(&self) -> Result<MinecraftServerStatus, color_eyre::eyre::Error> {
             let server = self.server().await?;
             Ok(server.status)
@@ -650,8 +757,12 @@ pub mod external {
             )?)
         }
 
-        async fn refresh(&mut self) -> bool {
+        async fn poll(&mut self) -> bool {
             false
+        }
+
+        fn stdout(&self) -> Receiver<McStdout> {
+            todo!()
         }
     }
 }

@@ -20,7 +20,7 @@ use axum::routing::{MethodRouter, get, post};
 use axum::{Json, Router};
 use chrono::DateTime;
 use futures::task::SpawnExt;
-use image::imageops::FilterType;
+use image::imageops::{tile, FilterType};
 use image::{DynamicImage, ImageFormat, ImageReader, Limits};
 use log::{debug, error, info};
 use serde::{Deserialize, Serialize};
@@ -236,12 +236,6 @@ where
                         .await,
                 );
             }
-
-            println!(
-                "returning {} values at {}ms",
-                values.len(),
-                start.elapsed().as_millis()
-            );
 
             return Ok(Json(
                 values
@@ -893,6 +887,23 @@ pub async fn server_info() -> Result<impl IntoResponse, StatusCode> {
             port: CONFIG.proxy.port,
         },
     }))
+}
+
+#[allow(clippy::unused_async)]
+#[axum::debug_handler]
+pub async fn generate_console_ticket(
+    WithSession(session): WithSession,
+    State(state): State<AppState>,
+) -> Result<impl IntoResponse, StatusCode> {
+    #[derive(Serialize)]
+    struct Ticket {
+        ticket: Uuid
+    }
+    let ticket = Uuid::new_v4();
+    
+    state.console_tickets.insert(ticket, session.id).await;
+    
+    Ok(Json(Ticket {ticket}))
 }
 
 pub async fn get_username_valid(

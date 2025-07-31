@@ -25,6 +25,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
+use socketioxide::{SocketIo, SocketIoBuilder};
 use test_log::test;
 use tokio::sync::Mutex;
 use tokio_util::bytes::BufMut;
@@ -34,11 +35,16 @@ use tower_http::LatencyUnit;
 use tower_http::classify::ServerErrorsFailureClass;
 use tower_http::trace::{DefaultMakeSpan, DefaultOnFailure, DefaultOnResponse};
 use tracing::{Level, Span, info_span};
+use uuid::Uuid;
+use crate::api::socketio::console_socketio;
+use crate::database::types::Id;
 
 #[derive(Clone)]
 pub struct AppState {
     pub database: Database,
     pub servers: MinecraftServerCollection,
+    // i am not using a moka cache because it's a good idea, i'm doing so because of my laziness.
+    pub console_tickets: moka::future::Cache<Uuid, Id>
 }
 
 pub async fn run(state: AppState, config: config::Config) -> Result<(), color_eyre::eyre::Error> {
@@ -83,6 +89,13 @@ pub async fn run(state: AppState, config: config::Config) -> Result<(), color_ey
             get(api::handlers::get_hostname_valid),
         );
 
+    let console = Router::new()
+        .route(
+            "/ticket",
+            post(api::handlers::generate_console_ticket)
+        );
+
+
     /// GET /session - session info (not implemented)
     /// POST /session - login
     /// DELETE /session - logout
@@ -105,12 +118,17 @@ pub async fn run(state: AppState, config: config::Config) -> Result<(), color_ey
                 .delete(api::handlers::logout),
         );
 
+    let (socketio, io) = SocketIoBuilder::new().with_state(state.clone()).build_layer();
+
+    io.ns("/ws/console", console_socketio);
+
     let server = Router::new().route("/", get(api::handlers::server_info));
 
     let api = Router::new()
         .nest("/session", session)
         .nest("/server", server)
         .nest("/valid", check_free)
+        .nest("/console", console)
         .nest("/mods", Mod::routes())
         .nest("/versions", Version::routes())
         .nest("/mod_loaders", ModLoader::routes())
@@ -125,6 +143,7 @@ pub async fn run(state: AppState, config: config::Config) -> Result<(), color_ey
 
     let router = Router::new()
         .nest("/api", api)
+        .layer(socketio)
         .layer(GovernorLayer {
             config: governor_conf,
         })
