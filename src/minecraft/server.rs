@@ -11,6 +11,7 @@ use std::result;
 use std::sync::{Arc, RwLock};
 use argon2::password_hash::McfHasher;
 use tokio::sync::Mutex;
+use crate::database::objects::world::MinecraftServerStatusJson;
 
 pub type ServerMutex = Arc<Mutex<Box<dyn MinecraftServer>>>;
 
@@ -119,6 +120,22 @@ pub enum MinecraftServerStatus {
     Running,
     Exited(u32),
 }
+
+impl From<MinecraftServerStatus> for MinecraftServerStatusJson {
+    fn from(value: MinecraftServerStatus) -> MinecraftServerStatusJson {
+        match value { 
+            MinecraftServerStatus::Running => MinecraftServerStatusJson {
+                status: "running".to_string(),
+                code: 0,
+            },
+            MinecraftServerStatus::Exited(code) => MinecraftServerStatusJson {
+                status: "exited".to_string(),
+                code,
+            },
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum MCStdin {
@@ -128,7 +145,7 @@ pub enum MCStdin {
 #[serde(rename_all = "lowercase")]
 pub enum McStdout {
     Log{seq: usize, message: String},
-    Status(MinecraftServerStatus),
+    Status(MinecraftServerStatusJson),
 }
 
 #[async_trait]
@@ -190,6 +207,7 @@ use crate::config::CONFIG;
     use subprocess::{Exec, ExitStatus, Popen};
     use tokio::sync::{RwLock, Mutex, broadcast, mpsc};
     use crate::config::secrets::SECRETS;
+    use crate::database::objects::world::MinecraftServerStatusJson;
 
     pub(crate) static TAKEN_LOCAL_PORTS: LazyLock<std::sync::Mutex<HashSet<u16>>> =
         LazyLock::new(|| std::sync::Mutex::new(HashSet::new()));
@@ -366,7 +384,7 @@ use crate::config::CONFIG;
 
 
             self.status = MinecraftServerStatus::Running;
-            _ = self.stdout_tx.send(McStdout::Status(self.status));
+            _ = self.stdout_tx.send(McStdout::Status(MinecraftServerStatusJson::from(self.status)));
 
             Ok(())
         }
@@ -409,7 +427,7 @@ use crate::config::CONFIG;
                     self.status = MinecraftServerStatus::Exited(1);
                 }
             }
-            let _ = self.stdout_tx.send(McStdout::Status(self.status));
+            let _ = self.stdout_tx.send(McStdout::Status(MinecraftServerStatusJson::from(self.status)));
 
             Ok(())
         }
@@ -591,7 +609,7 @@ use crate::config::CONFIG;
                         self.status = MinecraftServerStatus::Exited(1);
                     }
                 }
-                _ = self.stdout_tx.send(McStdout::Status(self.status));
+                _ = self.stdout_tx.send(McStdout::Status(MinecraftServerStatusJson::from(self.status)));
                 info!(
                     "freed the port {} of {} because the server running on it has exited",
                     self.port.unwrap_or(0),

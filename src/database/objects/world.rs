@@ -477,6 +477,12 @@ impl ApiIcon for World {
     const DEFAULT_ICON_MIME: &'static str = "image/png";
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct MinecraftServerStatusJson {
+    pub(crate) status: String,
+    pub(crate) code: u32,
+}
+
 impl World {
     pub async fn version(&self, database: Database, user: Option<(&User, &Group)>) -> Version {
         database
@@ -493,6 +499,7 @@ impl World {
             .await
             .expect(&format!("couldn't find user with id {}", self.owner_id))
     }
+
     #[allow(clippy::needless_pass_by_value)]
     async fn world_get_status(
         id: Path<Id>,
@@ -522,24 +529,7 @@ impl World {
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
 
-        #[derive(Serialize)]
-        struct Status {
-            status: String,
-            code: u32,
-        }
-
-        let status = match status {
-            MinecraftServerStatus::Running => Status {
-                status: "running".to_string(),
-                code: 0,
-            },
-            MinecraftServerStatus::Exited(code) => Status {
-                status: "exited".to_string(),
-                code,
-            },
-        };
-
-        Ok(axum::Json(status))
+        Ok(axum::Json(MinecraftServerStatusJson::from(status)))
     }
 
     #[allow(clippy::needless_pass_by_value)]
