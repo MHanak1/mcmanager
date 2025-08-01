@@ -2,8 +2,6 @@ use std::path::Path;
 use std::{fs, io};
 use chrono::{DateTime, Utc};
 use once_cell::sync::Lazy;
-use tokio::time::Instant;
-use crate::config::Config;
 
 pub mod dirs {
     use std::env;

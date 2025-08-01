@@ -5,11 +5,9 @@ use crate::util;
 use crate::util::base64::base64_encode;
 use color_eyre::Result;
 use color_eyre::eyre::eyre;
-use const_vec::ConstVec;
-use rand::TryRngCore;
 use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use sqlx::{Column as SqlxColumn, ColumnIndex, Database, Decode, Encode, Row, Type};
+use sqlx::{Column as SqlxColumn, ColumnIndex, Row, Type};
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::str::FromStr;
@@ -38,7 +36,7 @@ impl Column {
     }
 
     pub fn name(&self) -> &str {
-        &self.name
+        self.name
     }
 
     pub fn descriptor(&self, db_type: &DatabaseType) -> String {
@@ -86,12 +84,8 @@ impl Column {
 
 impl<T: Row> ColumnIndex<T> for Column {
     fn index(&self, container: &T) -> std::result::Result<usize, sqlx::Error> {
-        match container.columns().iter().find_map(|column| {
-            if column.name() == self.name {
-                Some(column)
-            } else {
-                None
-            }
+        match container.columns().iter().find(|column| {
+            column.name() == self.name
         }) {
             Some(column) => Ok(column.ordinal()),
             None => Err(sqlx::Error::ColumnNotFound(String::from(self.name))),
@@ -158,7 +152,7 @@ impl Access {
     ///
     /// if the access level is [`Access::Owner`], the `object` must me [`Some`].
     #[allow(clippy::expect_fun_call)]
-    pub fn can_access<'a, T: DbObject + ?Sized>(
+    pub fn can_access<T: DbObject>(
         &self,
         object: Option<&T>,
         user: &User,
@@ -202,7 +196,7 @@ impl Access {
         }
     }
 
-    pub fn access_filter<'a, T: DbObject + ?Sized>(&self, user: &User, group: &Group) -> String {
+    pub fn access_filter<T: DbObject>(&self, user: &User, group: &Group) -> String {
         match self {
             Access::All => "TRUE".to_string(),
             Access::And(left, right) => {
@@ -218,7 +212,7 @@ impl Access {
                 } else if right == "TRUE" {
                     left
                 } else {
-                    format!("({} AND {})", left, right)
+                    format!("({left} AND {right})")
                 }
             }
             Access::Or(left, right) => {
@@ -233,7 +227,7 @@ impl Access {
                 } else if right == "FALSE" {
                     left
                 } else {
-                    format!("({} OR {})", left, right)
+                    format!("({left} OR {right})")
                 }
             }
             _ => {

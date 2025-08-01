@@ -1,19 +1,18 @@
 use crate::config::CONFIG;
-use crate::config::secrets::SECRETS;
-use crate::minecraft::server;
 use crate::minecraft::server::{MinecraftServerCollection, MinecraftServerStatus};
 use crate::util;
-use crate::util::dirs;
-use color_eyre::eyre::{ContextCompat, bail};
-use log::{error, info, warn};
+use color_eyre::eyre::bail;
+use log::{error, warn};
 use std::collections::HashMap;
 use std::fs;
 use std::fs::File;
-use std::io::{Read, Write};
+use std::io::{Write};
 use std::path::PathBuf;
 use std::time::Duration;
+use async_trait::async_trait;
 use subprocess::{Exec, ExitStatus, Popen};
 
+#[async_trait]
 pub trait MinecraftProxy {
     async fn start(&mut self) -> color_eyre::Result<()>;
     async fn stop(&mut self) -> color_eyre::Result<ExitStatus>;
@@ -36,28 +35,28 @@ impl InfrarustServer {
             servers,
             path: util::dirs::infrarust_dir(),
             process: None,
-            hosts: Default::default(),
+            hosts: HashMap::default(),
         })
     }
 
-    fn add_server(&mut self, hostname: String, address: String) -> color_eyre::Result<()> {
-        self.hosts.insert(hostname.clone(), address.clone());
-        let mut file = File::create(self.path.join(format!("proxies/{}.yml", hostname)))?;
+    fn add_server(&mut self, hostname: &str, address: &str) -> color_eyre::Result<()> {
+        self.hosts.insert(hostname.to_string(), address.to_string());
+        let mut file = File::create(self.path.join(format!("proxies/{hostname}.yml")))?;
         file.write_all(
             include_str!("../resources/configs/default_infrarust_server_config.yml")
                 .replace(
                     "$hostname",
                     &format!("{}.{}", hostname, CONFIG.proxy.hostname),
                 )
-                .replace("$address", &format!("{}", address))
+                .replace("$address", address)
                 .as_bytes(),
         )?;
         Ok(())
     }
 
-    async fn remove_server(&mut self, hostname: String) -> color_eyre::Result<()> {
-        self.hosts.remove(&hostname);
-        let path = self.path.join(format!("proxies/{}.yml", hostname));
+    fn remove_server(&mut self, hostname: &str) -> color_eyre::Result<()> {
+        self.hosts.remove(hostname);
+        let path = self.path.join(format!("proxies/{hostname}.yml"));
         if path.exists() {
             std::fs::remove_file(path)?;
         }
@@ -65,6 +64,7 @@ impl InfrarustServer {
     }
 }
 
+#[async_trait]
 impl MinecraftProxy for InfrarustServer {
     async fn start(&mut self) -> color_eyre::Result<()> {
         //TODO: switch to an embedded infrarust server
@@ -154,8 +154,7 @@ impl MinecraftProxy for InfrarustServer {
         if let Some(mut process) = self.process.take() {
             if let Some(exit_code) = process.poll() {
                 error!(
-                    "Infrarust process exited with code {:?}. Restarting it.",
-                    exit_code
+                    "Infrarust process exited with code {exit_code:?}. Restarting it."
                 );
                 self.start().await?;
             } else {
@@ -172,16 +171,16 @@ impl MinecraftProxy for InfrarustServer {
                 if let Some(hostname) = server.hostname() {
                     let address = format!("{}:{}", server.host(), port);
                     if self.hosts.get(&hostname) != Some(&address) {
-                        self.add_server(hostname.clone(), address.clone())?;
+                        self.add_server(&hostname, &address)?;
                     }
                     new_hosts.insert(hostname, address);
                 }
             }
         }
 
-        for (hostname, address) in self.hosts.clone() {
+        for (hostname, _) in self.hosts.clone() {
             if !new_hosts.contains_key(hostname.as_str()) {
-                self.remove_server(hostname.clone()).await?;
+                self.remove_server(&hostname)?;
             }
         }
 

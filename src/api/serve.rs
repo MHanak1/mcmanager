@@ -1,38 +1,24 @@
-use crate::api::filters;
 use crate::api::handlers::ApiObject;
 use crate::config;
 use crate::config::CONFIG;
 use crate::database::Database;
 use crate::database::objects::{Group, InviteLink, Mod, ModLoader, Session, User, Version, World};
-use crate::minecraft::server::{MinecraftServerCollection, Server};
+use crate::minecraft::server::MinecraftServerCollection;
 use crate::{api, util};
-use axum::extract::{MatchedPath, Path, State};
-use axum::http::Request;
-use axum::response::Response;
-use axum::routing::{MethodRouter, delete, get, post};
-use axum::{Router, ServiceExt};
-use log::{debug, error, info};
+use axum::routing::{get, post};
+use axum::{Router};
+use log::{debug, info};
 use reqwest::StatusCode;
-use sqlx::Encode;
-use sqlx::any::AnyPoolOptions;
-use sqlx::sqlite::SqlitePoolOptions;
-use static_dir::static_dir;
-use std::io::Write;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::str::FromStr;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
-use socketioxide::{SocketIo, SocketIoBuilder};
-use test_log::test;
-use tokio::sync::Mutex;
-use tokio_util::bytes::BufMut;
+use socketioxide::SocketIoBuilder;
 use tower_governor::GovernorLayer;
 use tower_governor::governor::GovernorConfigBuilder;
 use tower_http::LatencyUnit;
-use tower_http::classify::ServerErrorsFailureClass;
-use tower_http::trace::{DefaultMakeSpan, DefaultOnFailure, DefaultOnResponse};
-use tracing::{Level, Span, info_span};
+use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse};
+use tracing::Level;
 use uuid::Uuid;
 use crate::api::socketio::console_socketio;
 use crate::database::types::Id;
@@ -94,13 +80,13 @@ pub async fn run(state: AppState, config: config::Config) -> Result<(), color_ey
         );
 
 
-    /// GET /session - session info (not implemented)
-    /// POST /session - login
-    /// DELETE /session - logout
-    /// GET /session/user - get logged-in user info
-    /// POST /session/user - create new user
-    /// PATCH /session/user - change username/password (not implemented)
-    /// DELETE /session/user - delete account (not implemented)
+    // GET /session - session info (not implemented)
+    // POST /session - login
+    // DELETE /session - logout
+    // GET /session/user - get logged-in user info
+    // POST /session/user - create new user
+    // PATCH /session/user - change username/password (not implemented)
+    // DELETE /session/user - delete account (not implemented)
     let session = Router::new()
         .route(
             "/user",
@@ -149,7 +135,7 @@ pub async fn run(state: AppState, config: config::Config) -> Result<(), color_ey
 
     let addr = format!("{}:{}", config.listen_address, config.listen_port);
 
-    info!("listening on {}", addr);
+    info!("listening on {addr}");
     let listener = tokio::net::TcpListener::bind(addr).await?;
 
     axum::serve(

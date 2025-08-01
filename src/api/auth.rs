@@ -1,11 +1,9 @@
 use crate::api::serve::AppState;
-use crate::database::objects::{DbObject, Password, Session, User};
+use crate::database::objects::{Password, Session, User};
 use crate::database::types::Id;
-use crate::database::{Database, DatabaseError};
-use argon2::password_hash::{Salt, SaltString};
-use argon2::{PasswordHash, PasswordHasher, PasswordVerifier};
+use crate::database::DatabaseError;
+use argon2::PasswordVerifier;
 use log::debug;
-use std::sync::Arc;
 use uuid::Uuid;
 
 pub async fn try_user_auth(
@@ -17,8 +15,6 @@ pub async fn try_user_auth(
         .database
         .get_where("username", username.to_string(), None)
         .await;
-
-    let argon2 = argon2::Argon2::default();
 
     //here we hash a random password, so no matter if provided username is correct or not it will take roughly the same time
     if user.is_err() {

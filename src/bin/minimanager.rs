@@ -1,12 +1,7 @@
-use axum::Router;
-use axum::http::StatusCode;
 use color_eyre::Result;
-use log::info;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::str::FromStr;
-use std::{io::Write, thread};
 
 #[tokio::main]
+#[allow(unused)]
 async fn main() -> Result<()> {
     todo!()
     /*

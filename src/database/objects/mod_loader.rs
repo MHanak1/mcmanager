@@ -2,7 +2,7 @@ use crate::api::handlers::{ApiCreate, ApiGet, ApiList, ApiObject, ApiRemove, Api
 use crate::api::serve::AppState;
 use crate::database::objects::{DbObject, FromJson, UpdateJson, User};
 use crate::database::types::{Access, Column, Id};
-use crate::database::{Cachable, Database, ValueType};
+use crate::database::{Cachable, ValueType};
 use axum::Router;
 use axum::routing::get;
 use once_cell::sync::Lazy;
@@ -10,7 +10,6 @@ use serde::{Deserialize, Serialize};
 use sqlx::{Arguments, FromRow, IntoArguments};
 use std::any::Any;
 use std::fmt::Debug;
-use std::sync::Arc;
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, FromRow)]
 pub struct ModLoader {

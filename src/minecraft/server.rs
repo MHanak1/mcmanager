@@ -9,7 +9,6 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::result;
 use std::sync::{Arc, RwLock};
-use argon2::password_hash::McfHasher;
 use image::DynamicImage;
 use tokio::sync::Mutex;
 use crate::database::objects::world::MinecraftServerStatusJson;
@@ -35,12 +34,7 @@ impl MinecraftServerCollection {
     }
 
     pub fn get_server(&self, id: Id) -> Option<ServerMutex> {
-        let mut server = None;
-        {
-            // this should hopefully drop SERVERS, right?
-            server = self.servers.read().expect("poisoned mutex").get(&id).cloned()
-        }
-        server
+        self.servers.read().expect("poisoned mutex").get(&id).cloned()
     }
 
     pub async fn get_or_create_server(
@@ -180,39 +174,27 @@ pub trait MinecraftServer: Send + Debug {
      */
 }
 pub mod internal {
-    use std::error::Error;
+    
 use crate::config::CONFIG;
     use crate::database::objects::World;
     use crate::database::types::Id;
     use crate::minecraft::server::{MCStdin, McStdout, MinecraftServer, MinecraftServerStatus};
     use crate::util;
-    use color_eyre::Result;
     use async_trait::async_trait;
     use log::{debug, error, info, warn};
     use std::collections::{HashMap, HashSet};
     use std::fs;
     use std::fs::File;
     use std::io::{BufRead, BufReader, BufWriter, Read, Write};
-    use std::net::SocketAddr;
     use std::path::PathBuf;
     use std::sync::{Arc, LazyLock};
     use std::time::Duration;
-    use axum::body::Bytes;
-    use axum::extract::{ConnectInfo, WebSocketUpgrade};
-    use axum::extract::ws::{Message, WebSocket};
-    use axum::http::StatusCode;
-    use axum::response::IntoResponse;
     use color_eyre::eyre::{bail, ContextCompat};
-    use futures::stream::SplitSink;
-    use futures::StreamExt;
+    use color_eyre::Result;
     use image::{DynamicImage, ImageFormat};
     use image::imageops::FilterType;
-    use socketioxide::extract::{Data, SocketRef};
-    use socketioxide::SocketIo;
     use subprocess::{Exec, ExitStatus, Popen};
-    use tokio::io::AsyncWriteExt;
     use tokio::sync::{RwLock, Mutex, broadcast, mpsc};
-    use crate::config::secrets::SECRETS;
     use crate::database::objects::world::MinecraftServerStatusJson;
 
     pub(crate) static TAKEN_LOCAL_PORTS: LazyLock<std::sync::Mutex<HashSet<u16>>> =
@@ -259,7 +241,7 @@ use crate::config::CONFIG;
                     .join(format!("{}/{}", world.owner_id, world.id)),
                 port: None,
                 world,
-                io: Default::default(),
+                io: Arc::default(),
                 stdin_tx: None,
                 stdout_tx,
             };
@@ -551,7 +533,7 @@ use crate::config::CONFIG;
 
 
             let image_file =
-                std::fs::File::create(&self.directory.join("server-icon.png"))?;
+                std::fs::File::create(self.directory.join("server-icon.png"))?;
             let mut writer = BufWriter::new(image_file);
             image.write_to(&mut writer, ImageFormat::Png)?;
 
@@ -662,19 +644,19 @@ pub mod external {
     use crate::config::CONFIG;
     use crate::database::objects::World;
     use crate::database::types::Id;
-    use crate::minecraft::server::{MCStdin, McStdout, MinecraftServer, MinecraftServerStatus, Server};
+    use crate::minecraft::server::{McStdout, MinecraftServer, MinecraftServerStatus, Server};
     use color_eyre::{Result};
     use async_trait::async_trait;
     use log::debug;
-    use reqwest::StatusCode;
+    
     use std::collections::HashMap;
-    use std::net::SocketAddr;
-    use axum::extract::ws::WebSocket;
+    
+    
     use color_eyre::eyre::bail;
     use image::DynamicImage;
-    use socketioxide::extract::SocketRef;
+    
     use tokio::sync::broadcast::Receiver;
-    use tokio::sync::mpsc::Sender;
+    
 
     #[derive(Debug)]
     pub struct MinimanagerServer {
@@ -699,7 +681,7 @@ pub mod external {
             let client = reqwest::Client::new();
             Ok(serde_json::from_str(
                 &client
-                    .post(format!("{}api/worlds", CONFIG.remote.host.to_string()))
+                    .post(format!("{}api/worlds", CONFIG.remote.host))
                     .header(
                         "Authorization",
                         format!("Bearer {}", crate::config::secrets::SECRETS.api_secret),
@@ -738,7 +720,7 @@ pub mod external {
         async fn update_world(&mut self, world: World) -> Result<()> {
             self.hostname = world.hostname.clone();
             self.world = world;
-            let client = reqwest::Client::new();
+            //let client = reqwest::Client::new();
             let server = self.server().await;
 
             match server {
@@ -760,7 +742,7 @@ pub mod external {
             todo!()
         }
 
-        async fn set_icon(&mut self, image: DynamicImage) -> Result<()> {
+        async fn set_icon(&mut self, _image: DynamicImage) -> Result<()> {
             todo!()
         }
 
@@ -768,7 +750,7 @@ pub mod external {
             todo!()
         }
 
-        async fn write_console(&mut self, data: String) -> Result<()> {
+        async fn write_console(&mut self, _data: String) -> Result<()> {
             todo!()
         }
 
@@ -784,7 +766,7 @@ pub mod external {
                 &client
                     .post(format!(
                         "{}api/worlds/remove",
-                        CONFIG.remote.host.to_string()
+                        CONFIG.remote.host
                     ))
                     .header(
                         "Authorization",

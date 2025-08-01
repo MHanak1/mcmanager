@@ -1,31 +1,23 @@
 pub use self::{password::Password, session::Session};
-use crate::api::filters::UserAuth;
 use crate::api::handlers::{
-    ApiCreate, ApiGet, ApiIcon, ApiList, ApiObject, ApiRemove, ApiUpdate, RecursiveQuery,
-    handle_database_error,
+    ApiCreate, ApiGet, ApiIcon, ApiList, ApiObject, ApiRemove, ApiUpdate,
 };
 use crate::api::serve::AppState;
 use crate::config::CONFIG;
 use crate::database;
-use crate::database::objects::{DbObject, FromJson, Group, Mod, ModLoader, UpdateJson, World};
+use crate::database::objects::{DbObject, FromJson, Group, Mod, UpdateJson, World};
 use crate::database::types::{Access, Column, Id};
 use crate::database::{Cachable, Database, DatabaseError, ValueType};
-use crate::minecraft::server::ServerConfigLimit;
 use async_trait::async_trait;
-use axum::extract::{DefaultBodyLimit, Path, State};
-use axum::http::StatusCode;
-use axum::response::IntoResponse;
+use axum::extract::DefaultBodyLimit;
 use axum::routing::{get, post};
-use axum::{Json, Router};
+use axum::Router;
 use futures::future;
 use log::{error, info, warn};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Deserializer, Serialize};
-use sqlx::{Arguments, Encode, FromRow, IntoArguments};
+use sqlx::{Arguments, FromRow, IntoArguments};
 use std::any::Any;
-use std::collections::HashMap;
-use std::sync::Arc;
-use tokio::sync::Mutex;
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, FromRow)]
 pub struct User {
@@ -329,7 +321,7 @@ impl User {
         database
             .get_one::<Group>(self.group_id, user)
             .await
-            .expect(&format!("couldn't find group with id {}", self.group_id))
+            .unwrap_or_else(|_| panic!("couldn't find group with id {}", self.group_id))
     }
 }
 
@@ -435,7 +427,7 @@ pub mod password {
     }
 
     #[duplicate_item(Row; [sqlx::sqlite::SqliteRow]; [sqlx::postgres::PgRow])]
-    impl<'a> FromRow<'_, Row> for Password {
+    impl FromRow<'_, Row> for Password {
         fn from_row(row: &'_ Row) -> Result<Self, Error> {
             Ok(Self {
                 user_id: row.get(0),
@@ -451,18 +443,18 @@ pub mod password {
 }
 
 pub mod session {
-    use crate::api::filters::UserAuth;
+    
     use crate::api::handlers::{
-        ApiCreate, ApiGet, ApiList, ApiObject, ApiRemove, handle_database_error,
+        ApiCreate, ApiGet, ApiList, ApiObject, ApiRemove,
     };
     use crate::api::serve::AppState;
-    use crate::database::objects::{DbObject, FromJson, Password, User};
+    use crate::database::objects::{DbObject, FromJson, User};
     use crate::database::types::{Access, Column, Id};
-    use crate::database::{Cachable, Database, ValueType};
-    use async_trait::async_trait;
+    use crate::database::{Cachable, ValueType};
+    
     use axum::Router;
-    use axum::extract::{Path, State};
-    use axum::http::StatusCode;
+    
+    
     use axum::routing::get;
     use chrono::{DateTime, Utc};
     use duplicate::duplicate_item;
@@ -470,8 +462,8 @@ pub mod session {
     use serde::{Deserialize, Serialize, Serializer};
     use sqlx::{Arguments, Error, FromRow, IntoArguments, Row};
     use std::any::Any;
-    use std::str::FromStr;
-    use std::sync::Arc;
+    
+    
     use uuid::Uuid;
 
     /// `user_id`: unique [`Id`] of the user who created the session

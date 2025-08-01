@@ -1,32 +1,25 @@
-use crate::api::filters;
 use crate::api::filters::UserAuth;
 use crate::api::handlers::{ApiCreate, ApiGet, ApiIcon, ApiList, ApiObject, ApiRemove, ApiUpdate};
 use crate::api::serve::AppState;
 use crate::config::CONFIG;
 use crate::database::objects::group::Group;
-use crate::database::objects::{DbObject, FromJson, ModLoader, UpdateJson, User, Version};
+use crate::database::objects::{DbObject, FromJson, UpdateJson, User, Version};
 use crate::database::types::{Access, Column, Id};
 use crate::database::{Cachable, Database, DatabaseError, ValueType};
-use crate::minecraft::server;
 use crate::minecraft::server::{MinecraftServerStatus, ServerConfigLimit};
 use async_trait::async_trait;
 use axum::Router;
-use axum::extract::{DefaultBodyLimit, Path, State, WebSocketUpgrade};
+use axum::extract::{DefaultBodyLimit, Path, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use log::{debug, error, info};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Deserializer, Serialize};
-use sqlx::{Any, Arguments, Encode, FromRow, IntoArguments};
+use sqlx::{Arguments, FromRow, IntoArguments};
 use std::collections::HashMap;
-use std::os::linux::raw::stat;
-use std::sync::Arc;
 use image::DynamicImage;
 use serde_json::json;
-use socketioxide::extract::SocketRef;
-use tokio::sync::Mutex;
-use tokio::task::id;
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, FromRow)]
 pub struct World {
@@ -277,13 +270,13 @@ impl ApiCreate for World {
         let group = user.group(state.database.clone(), None).await;
         let user_worlds: Vec<World> = state
             .database
-            .get_all_where("owner_id", user.id, Some((&user, &group)))
+            .get_all_where("owner_id", user.id, Some((user, &group)))
             .await?;
         let group = user.group(state.database.clone(), None).await;
 
         //enforce the world limit
         if let Some(world_limit) = group.world_limit {
-            if user_worlds.iter().count() >= world_limit as usize {
+            if user_worlds.len() >= world_limit as usize {
                 return Err(DatabaseError::Unauthorized);
             }
         }
@@ -305,7 +298,7 @@ impl ApiCreate for World {
         );
 
         //enforce memory limit
-        if let Some(mut allocated_memory) = json.allocated_memory {
+        if let Some(allocated_memory) = json.allocated_memory {
             if allocated_memory < CONFIG.world.minimum_memory {
                 return Err(DatabaseError::Unauthorized);
             }
@@ -342,7 +335,7 @@ impl ApiUpdate for World {
         let group = user.group(state.database.clone(), None).await;
         let user_worlds: Vec<World> = state
             .database
-            .get_all_where("owner_id", user.id, Some((&user, &group)))
+            .get_all_where("owner_id", user.id, Some((user, &group)))
             .await?;
 
         //enforce the active world limit
@@ -458,7 +451,7 @@ impl ApiRemove for World {
     async fn before_api_delete(
         &self,
         app_state: AppState,
-        user: &User,
+        _user: &User,
     ) -> Result<(), DatabaseError> {
         info!("removing world {}", self.id);
         match app_state.servers.get_or_create_server(self).await {
@@ -478,7 +471,7 @@ impl ApiIcon for World {
     const DEFAULT_ICON_BYTES: &'static [u8] = include_bytes!("../../resources/icons/world_default.png");
     const DEFAULT_ICON_MIME: &'static str = "image/png";
 
-    async fn after_icon_update(&self, state: AppState, user: &User, image: &DynamicImage) -> Result<(), DatabaseError> {
+    async fn after_icon_update(&self, state: AppState, _user: &User, image: &DynamicImage) -> Result<(), DatabaseError> {
         let server = state.servers.get_or_create_server(self).await.map_err(|err| DatabaseError::InternalServerError(err.to_string()))?;
         server.lock().await.set_icon(image.clone()).await.map_err(|err| DatabaseError::InternalServerError(err.to_string()))?;
         Ok(())
@@ -496,16 +489,14 @@ impl World {
         database
             .get_one(self.version_id, user)
             .await
-            .expect(&format!(
-                "couldn't find version with id {}",
-                self.version_id
-            ))
+            .unwrap_or_else(|_| panic!("couldn't find version with id {}",
+                self.version_id))
     }
     pub async fn owner(&self, database: Database, user: Option<(&User, &Group)>) -> User {
         database
             .get_one::<User>(self.owner_id, user)
             .await
-            .expect(&format!("couldn't find user with id {}", self.owner_id))
+            .unwrap_or_else(|_| panic!("couldn't find user with id {}", self.owner_id))
     }
 
     #[allow(clippy::needless_pass_by_value)]
@@ -724,6 +715,4 @@ impl World {
         Ok(axum::Json(json!({"log": server.latest_log().await.unwrap_or_default()})))
 
     }
-
-    async fn test() {}
 }

@@ -1,62 +1,49 @@
-use crate::api::filters::{BearerToken, FileUpload, UserAuth, WithSession};
+use crate::api::filters::{FileUpload, UserAuth, WithSession};
 use crate::api::serve::AppState;
-use crate::api::{auth, filters};
+use crate::api::auth;
 use crate::config::CONFIG;
-use crate::database::DatabaseError::SqlxError;
-use crate::database::objects::{DbObject, FromJson, InviteLink, Session, UpdateJson, User, World};
+use crate::database::objects::{DbObject, FromJson, InviteLink, UpdateJson, User, World};
 use crate::database::types::Id;
 use crate::database::{Cachable, DatabasePool, QueryBuilder, ValueType, WhereOperand};
-pub(crate) use crate::database::{Database, DatabaseError};
+pub(crate) use crate::database::DatabaseError;
 use crate::{execute_on_enum, util};
 use crate::util::base64::base64_decode;
 use crate::util::dirs::icons_dir;
 use async_trait::async_trait;
 use axum::body::Bytes;
-use axum::extract::{FromRequest, Multipart, Path, Request, State};
-use axum::http::header::ToStrError;
-use axum::http::{HeaderMap, StatusCode, header, HeaderName, HeaderValue};
+use axum::extract::{Path, State};
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::IntoResponse;
-use axum::routing::{MethodRouter, get, post};
 use axum::{Json, Router};
 use chrono::DateTime;
-use futures::task::SpawnExt;
-use image::imageops::{tile, FilterType};
+use image::imageops::FilterType;
 use image::{DynamicImage, ImageFormat, ImageReader, Limits};
-use log::{debug, error, info};
+use log::{debug, error};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
-use sqlx::query::Query;
-use sqlx::{Encode, FromRow, IntoArguments, Type, query};
-use std::fmt::format;
-use std::fs::File;
-use std::io::{BufWriter, Cursor, Read, Write};
+use serde_json::json;
+use sqlx::{FromRow, IntoArguments};
+use std::io::{BufWriter, Cursor, Write};
 use std::path::PathBuf;
 use std::str::FromStr;
-use std::sync::Arc;
-use tokio::io::BufReader;
-use tokio::join;
-use tokio::sync::Mutex;
-use tokio::task::JoinSet;
-use tokio::time::Instant;
-use tokio_stream::StreamExt;
 use tokio_util::io::ReaderStream;
-use uuid::{Error, Uuid};
+use uuid::Uuid;
 
 pub trait ApiObject: DbObject {
     fn routes() -> Router<AppState>;
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Copy, Deserialize)]
 pub struct RecursiveQuery {
     pub recursive: Option<bool>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Copy,  Deserialize)]
 pub struct PaginationQuery {
     pub page: Option<u32>,
     pub limit: Option<u32>,
 }
 
+#[derive(Debug, Clone, Copy)]
 pub struct PaginationSettings {
     pub page: u32,
     pub limit: u32,
@@ -120,7 +107,7 @@ where
 
                     if let Some(column) = Self::get_column(&column) {
                         if !column.hidden {
-                            if value.to_ascii_lowercase() == "null" && column.nullable {
+                            if value.eq_ignore_ascii_case("null") && column.nullable {
                                 match filter_type {
                                     WhereOperand::Equal => {
                                         query.where_null(column.name());
@@ -223,7 +210,6 @@ where
         };
 
         if recursive.recursive.unwrap_or(false) {
-            let start = Instant::now();
             let mut values = Vec::new();
 
             // blocking, because asynchronous implementation would result in more cache misses
@@ -549,8 +535,7 @@ where
         state: State<AppState>,
         id: Path<Id>,
         user: UserAuth,
-        headers: HeaderMap,
-        mut file: FileUpload,
+        file: FileUpload,
     ) -> Result<impl IntoResponse, StatusCode> {
         let state = state.0;
         let id = id.0;
@@ -583,14 +568,14 @@ where
 
         let gif_path = crate::util::dirs::icons_dir()
             .join(Self::table_name())
-            .join(format!("{}.gif", id));
+            .join(format!("{id}.gif"));
         let webp_path = crate::util::dirs::icons_dir()
             .join(Self::table_name())
-            .join(format!("{}.webp", id));
+            .join(format!("{id}.webp"));
 
         if is_gif {
             // i think this is to verify if the image is valid
-            let _ = bytes_to_image(bytes.clone(), image_format)?;
+            let _ = bytes_to_image(&bytes, image_format)?;
 
             let image_file =
                 std::fs::File::create(&gif_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -605,7 +590,7 @@ where
                 .write_all(bytes.as_ref())
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         } else {
-            let image = bytes_to_image(bytes, image_format)?;
+            let image = bytes_to_image(&bytes, image_format)?;
             let image = crop_image_to_square(&image);
 
             let after_icon_update_future = self_.after_icon_update(state.clone(), &user, &image);
@@ -707,11 +692,6 @@ pub(crate) fn handle_database_error(err: DatabaseError) -> StatusCode {
     }
 }
 
-#[derive(Serialize)]
-struct TokenReply {
-    token: String,
-}
-
 #[derive(Debug, Clone, Deserialize)]
 pub struct Login {
     pub username: String,
@@ -784,7 +764,7 @@ pub async fn user_register(
         return Err(StatusCode::CONFLICT);
     }
 
-    let user = state
+    let _ = state
         .database
         .create_user(&credentials.username, &credentials.password)
         .await
@@ -825,7 +805,7 @@ pub async fn user_auth(
             header::SET_COOKIE,
             format!(
                 "session-token={}; Path=/api; HttpOnly; Max-Age=1209600; charset=UTF-8",
-                session.token.as_simple().to_string()
+                session.token.as_simple()
             ),
         )],
         axum::Json(json!({"token": session.token.as_simple().to_string()})),
@@ -967,8 +947,8 @@ pub async fn get_hostname_valid(
     }
 }
 
-fn bytes_to_image(bytes: Bytes, format: ImageFormat) -> Result<DynamicImage, StatusCode> {
-    let mut reader = ImageReader::new(Cursor::new(bytes.as_ref()));
+fn bytes_to_image(bytes: &Bytes, format: ImageFormat) -> Result<DynamicImage, StatusCode> {
+    let mut reader = ImageReader::new(Cursor::new(bytes));
 
     let mut limits = Limits::default();
     limits.max_image_width = Some(4000);
@@ -978,7 +958,7 @@ fn bytes_to_image(bytes: Bytes, format: ImageFormat) -> Result<DynamicImage, Sta
 
     let mut file =
         std::fs::File::create(PathBuf::from_str("/home/mhanak/uploaded.png").unwrap()).unwrap();
-    file.write_all(bytes.as_ref()).unwrap();
+    file.write_all(bytes).unwrap();
 
     reader.limits(limits);
     let image = reader.decode().map_err(|err| {

@@ -1,10 +1,7 @@
 use std::sync::{Arc};
-use std::thread::spawn;
-use color_eyre::eyre;
-use log::{debug, error, info};
+use log::{debug, error};
 use serde::{Deserialize, Serialize};
 use socketioxide::extract::{Data, SocketRef, State};
-use socketioxide::SocketError;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 use crate::api::serve::AppState;

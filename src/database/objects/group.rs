@@ -1,27 +1,21 @@
-use crate::api::filters::UserAuth;
 use crate::api::handlers::{
-    ApiCreate, ApiGet, ApiList, ApiObject, ApiRemove, ApiUpdate, RecursiveQuery,
-    handle_database_error,
+    ApiCreate, ApiGet, ApiList, ApiObject, ApiRemove, ApiUpdate,
 };
 use crate::api::serve::AppState;
 use crate::config::CONFIG;
 use crate::database::objects::{DbObject, FromJson, UpdateJson, User};
 use crate::database::types::{Access, Column, Id};
-use crate::database::{Cachable, Database, DatabaseError, ValueType};
+use crate::database::{Cachable, DatabaseError, ValueType};
 use crate::minecraft::server::ServerConfigLimit;
 use async_trait::async_trait;
-use axum::extract::{Path, State};
-use axum::http::StatusCode;
-use axum::response::IntoResponse;
-use axum::routing::{MethodRouter, get};
-use axum::{Json, Router};
+use axum::routing::get;
+use axum::Router;
 use duplicate::duplicate_item;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Deserializer, Serialize};
 use sqlx::{Arguments, Error, FromRow, IntoArguments, Row};
 use std::any::Any;
 use std::collections::HashMap;
-use std::sync::Arc;
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub struct Group {
@@ -103,7 +97,7 @@ impl Cachable for Group {
 }
 
 #[duplicate_item(Row; [sqlx::sqlite::SqliteRow]; [sqlx::postgres::PgRow])]
-impl<'a> FromRow<'_, Row> for Group {
+impl FromRow<'_, Row> for Group {
     fn from_row(row: &'_ Row) -> Result<Self, Error> {
         Ok(Self {
             id: row.try_get("id")?,
@@ -355,8 +349,8 @@ impl ApiUpdate for Group {}
 impl ApiRemove for Group {
     async fn before_api_delete(
         &self,
-        database: AppState,
-        user: &User,
+        _database: AppState,
+        _user: &User,
     ) -> Result<(), DatabaseError> {
         if self.id == CONFIG.user_defaults.group_id {
             Err(DatabaseError::Conflict)

@@ -1,17 +1,12 @@
 use crate::api::handlers::handle_database_error;
 use crate::api::serve::AppState;
 use crate::database::objects::{Session, User};
-use crate::database::{Database, DatabaseError};
 use axum::body::Bytes;
-use axum::extract::multipart::MultipartRejection;
 use axum::extract::{FromRequest, FromRequestParts, Multipart, Request};
 use axum::http::request::Parts;
-use futures::{TryFutureExt, TryStreamExt};
-use image::ImageFormat;
 use log::debug;
 use mime::Mime;
 use reqwest::StatusCode;
-use sqlx::encode::IsNull::No;
 use std::str::FromStr;
 use uuid::Uuid;
 
@@ -26,20 +21,19 @@ impl<S: Sync + std::marker::Send> FromRequestParts<S> for BearerToken {
             if let Ok(header) = header.to_str() {
                 if header[0..7] == *"Bearer " {
                     if let Ok(token) = Uuid::parse_str(&header[7..]) {
-                        debug!("found session token in header: {}", token);
+                        debug!("found session token in header: {token}");
                         return Ok(BearerToken(token));
                     }
                 }
             }
         }
 
-        if let Ok(cookies) = axum_extra::extract::CookieJar::from_request_parts(parts, state).await
-        {
-            if let Some(cookie) = cookies.get("session-token") {
-                if let Ok(token) = Uuid::parse_str(cookie.value()) {
-                    debug!("found session token in cookie: {}", token);
-                    return Ok(BearerToken(token));
-                }
+        let cookies = axum_extra::extract::CookieJar::from_request_parts(parts, state).await.unwrap();
+
+        if let Some(cookie) = cookies.get("session-token") {
+            if let Ok(token) = Uuid::parse_str(cookie.value()) {
+                debug!("found session token in cookie: {token}");
+                return Ok(BearerToken(token));
             }
         }
 
@@ -70,7 +64,7 @@ impl FromRequestParts<AppState> for WithSession {
                 Ok(Self(session))
             }
             Err(err) => {
-                debug!("error getting session: {}", err);
+                debug!("error getting session: {err}");
                 Err(StatusCode::UNAUTHORIZED)
             }
         }
@@ -99,7 +93,7 @@ impl FromRequestParts<AppState> for UserAuth {
                 Ok(Self(user))
             }
             Err(err) => {
-                debug!("error getting user: {}", err);
+                debug!("error getting user: {err}");
                 Err(StatusCode::UNAUTHORIZED)
             }
         }

@@ -1,12 +1,7 @@
 use crate::database::types::{Access, Column, Id};
-use crate::database::{Cachable, Database, DatabaseError, DatabaseType};
+use crate::database::{Database, DatabaseError, DatabaseType};
 use once_cell::sync::Lazy;
 use serde::de::DeserializeOwned;
-use sqlx::any::AnyRow;
-use sqlx::{Any, Encode, FromRow, IntoArguments, Row};
-use std::fmt::Debug;
-use std::os::fd::FromRawFd;
-use std::sync::Arc;
 
 pub mod group;
 pub mod invite_link;
@@ -113,6 +108,7 @@ pub trait DbObject: Clone + Sync + Send {
         Self::COLUMNS
     }
 
+    #[allow(clippy::declare_interior_mutable_const)]
     const COLUMNS: Lazy<Vec<Column>>;
 
     /// returns object's [`Id`]

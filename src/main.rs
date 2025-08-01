@@ -1,25 +1,20 @@
 use color_eyre::Result;
-use futures::{SinkExt, TryFutureExt};
 use log::{error, info};
 use mcmanager::api::serve::AppState;
 use mcmanager::config::{CONFIG, DatabaseType};
-use mcmanager::database::objects::{Group, ModLoader, User, World};
-use mcmanager::database::types::{Column, Id};
-use mcmanager::database::{Database, DatabasePool, ValueType, objects};
+use mcmanager::database::objects::{Group, ModLoader, User};
+use mcmanager::database::{Database, DatabasePool};
 use mcmanager::minecraft::proxy::{InfrarustServer, MinecraftProxy};
 use mcmanager::minecraft::server::{MinecraftServerCollection, ServerConfigLimit};
-use mcmanager::{bin, util};
-use serde::Deserialize;
-use sqlx::any::AnyPoolOptions;
-use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+use mcmanager::util;
+use sqlx::postgres::PgPoolOptions;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
-use sqlx::{PgPool, SqliteConnection, SqlitePool};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Read, Write};
-use std::path::Path;
 use std::time::Duration;
 use uuid::Uuid;
+use mcmanager::database::types::Id;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -32,8 +27,8 @@ async fn main() -> Result<()> {
         secrets_file.write_all(
             format!(
                 "api_secret = \"{}\"\nforwarding_secret = \"{}\"",
-                Uuid::new_v4().as_simple().to_string(),
-                Uuid::new_v4().as_simple().to_string()
+                Uuid::new_v4().as_simple(),
+                Uuid::new_v4().as_simple()
             )
             .as_bytes(),
         )?;
@@ -124,7 +119,7 @@ async fn main() -> Result<()> {
                 );
                 config_limits.insert(String::from("max-players"), ServerConfigLimit::LessThan(20));
                 Group {
-                    id: Default::default(),
+                    id: Id::default(),
                     name: "User".to_string(),
                     total_memory_limit: None,
                     per_world_memory_limit: Some(2048),
@@ -136,7 +131,7 @@ async fn main() -> Result<()> {
                         String::from("server-port"),
                     ],
                     config_whitelist: vec![
-                        String::from(""),
+                        String::new(),
                         String::from("allow-flight"),
                         String::from("allow-nether"),
                         String::from("broadcast-console-to-ops"),
@@ -186,7 +181,7 @@ async fn main() -> Result<()> {
 
             let admin_group = {
                 Group {
-                    id: Default::default(),
+                    id: Id::default(),
                     name: "Admin".to_string(),
                     total_memory_limit: None,
                     per_world_memory_limit: None,
@@ -213,7 +208,7 @@ async fn main() -> Result<()> {
             database
                 .create_user_from(
                     User {
-                        id: Default::default(),
+                        id: Id::default(),
                         username: String::from(username.trim()),
                         group_id: admin_group.id,
                         total_memory_usage: 0,
@@ -241,7 +236,7 @@ async fn main() -> Result<()> {
             database
                 .insert(
                     &ModLoader {
-                        id: Default::default(),
+                        id: Id::default(),
                         name: "Vanilla".to_string(),
                         can_load_mods: false,
                     },
@@ -251,7 +246,7 @@ async fn main() -> Result<()> {
             database
                 .insert(
                     &ModLoader {
-                        id: Default::default(),
+                        id: Id::default(),
                         name: "Fabric".to_string(),
                         can_load_mods: true,
                     },
@@ -261,7 +256,7 @@ async fn main() -> Result<()> {
             database
                 .insert(
                     &ModLoader {
-                        id: Default::default(),
+                        id: Id::default(),
                         name: "Forge".to_string(),
                         can_load_mods: true,
                     },

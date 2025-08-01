@@ -6,12 +6,11 @@ use crate::database::objects::{
 use crate::database::types::{Id, Modifier};
 use crate::execute_on_enum;
 use async_recursion::async_recursion;
-use color_eyre::Context;
 use dyn_clone::DynClone;
 use futures::TryFutureExt;
-use log::{debug, error, info};
+use log::{debug, error};
 use moka::future::Cache;
-use serde::{Deserializer, Serialize};
+use serde::Serialize;
 use serde_json::Value;
 use sqlx::{Encode, FromRow, IntoArguments, Pool, Postgres, Type};
 use std::any::Any;
@@ -20,7 +19,6 @@ use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio_stream::StreamExt;
 use uuid::Uuid;
 
 pub mod objects;
@@ -32,9 +30,10 @@ pub trait Cachable: DynClone + Sync + Send + Any {
 
 dyn_clone::clone_trait_object!(Cachable);
 
+type StdCache = Cache<Id, Box<dyn Cachable>>;
 #[derive(Clone)]
 pub struct DatabaseCache {
-    pub caches: Arc<HashMap<&'static str, Cache<Id, Box<dyn Cachable>>>>,
+    pub caches: Arc<HashMap<&'static str, StdCache>>,
 }
 
 impl Default for DatabaseCache {
@@ -69,7 +68,7 @@ impl DatabaseCache {
     }
 
     pub async fn get<T: DbObject + 'static>(&self, id: Id) -> Option<T> {
-        let cache = self.get_cache(&T::table_name());
+        let cache = self.get_cache(T::table_name());
         let value = cache.get(&id).await?;
 
         let value = value.into_any().downcast::<T>();
@@ -333,19 +332,19 @@ impl Database {
     }
 
     #[async_recursion]
-    pub async fn get_recursive<
-        T: DbObject
-            + Cachable
-            + for<'r> FromRow<'r, sqlx::sqlite::SqliteRow>
-            + for<'r> FromRow<'r, sqlx::postgres::PgRow>
-            + Serialize
-            + Unpin,
-    >(
+    pub async fn get_recursive<T>(
         &self,
         id: Id,
         user: Option<(&User, &Group)>,
-    ) -> Result<serde_json::Value, DatabaseError> {
-        let start = tokio::time::Instant::now();
+    ) -> Result<serde_json::Value, DatabaseError>
+    where
+        T: DbObject
+        + Cachable
+        + for<'r> FromRow<'r, sqlx::sqlite::SqliteRow>
+        + for<'r> FromRow<'r, sqlx::postgres::PgRow>
+        + Serialize
+        + Unpin,
+    {
         let object: T = self
             .get_one::<T>(id, user)
             .map_err(|err| DatabaseError::InternalServerError(err.to_string()))
@@ -410,12 +409,14 @@ impl Database {
     }
 
     #[async_recursion]
-    async fn object_from_field<T: DbObject>(
+    async fn object_from_field<T>(
         &self,
         field: &str,
         value: &Value,
         user: Option<(&User, &Group)>,
-    ) -> Result<(String, Value), DatabaseError> {
+    ) -> Result<(String, Value), DatabaseError>
+    where T: DbObject
+    {
         if let Some(column) = T::get_column(field) {
             if let Some(Modifier::References(references)) = column
                 .modifiers
@@ -594,6 +595,7 @@ pub trait DbType {
 }
 
 impl DatabasePool {
+    #[allow(unused)]
     fn db_type(&self) -> DatabaseType {
         match self {
             DatabasePool::Postgres(_) => DatabaseType::Postgres,
@@ -638,6 +640,7 @@ impl DbType for Pool<Postgres> {
     }
 }
 
+#[derive(Copy, Clone)]
 pub enum QueryType {
     Insert,
     Select,
@@ -645,6 +648,7 @@ pub enum QueryType {
     Delete,
 }
 
+#[derive(Copy, Clone)]
 pub enum WhereOperand {
     Equal,
     NotEqual,
@@ -775,11 +779,11 @@ where
     ) {
         if self.params > 0 {
             self.query_builder
-                .push(format!(" AND {} {} ", column, operator.to_string()));
+                .push(format!(" AND {column} {operator} "));
             self.params += 1;
         } else {
             self.query_builder
-                .push(format!(" WHERE {} {} ", column, operator.to_string()));
+                .push(format!(" WHERE {column} {operator} "));
             self.params += 1;
         }
         self.query_builder.push_bind(value);
@@ -823,11 +827,11 @@ where
 
     pub fn where_null(&mut self, column: &str) {
         if self.params > 0 {
-            self.query_builder.push(format!(" AND {} IS NULL ", column));
+            self.query_builder.push(format!(" AND {column} IS NULL "));
             self.params += 1;
         } else {
             self.query_builder
-                .push(format!(" WHERE {} IS NULL ", column));
+                .push(format!(" WHERE {column} IS NULL "));
             self.params += 1;
         }
     }
@@ -835,11 +839,11 @@ where
     pub fn where_not_null(&mut self, column: &str) {
         if self.params > 0 {
             self.query_builder
-                .push(format!(" AND {} IS NOT NULL ", column));
+                .push(format!(" AND {column} IS NOT NULL "));
             self.params += 1;
         } else {
             self.query_builder
-                .push(format!(" WHERE {} IS NOT NULL ", column));
+                .push(format!(" WHERE {column} IS NOT NULL "));
             self.params += 1;
         }
     }
