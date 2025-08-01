@@ -6,7 +6,7 @@ use mcmanager::config::{CONFIG, DatabaseType};
 use mcmanager::database::objects::{Group, ModLoader, User, World};
 use mcmanager::database::types::{Column, Id};
 use mcmanager::database::{Database, DatabasePool, ValueType, objects};
-use mcmanager::minecraft::proxy::{InfrarustServer, InternalVelocityServer, MinecraftProxy};
+use mcmanager::minecraft::proxy::{InfrarustServer, MinecraftProxy};
 use mcmanager::minecraft::server::{MinecraftServerCollection, ServerConfigLimit};
 use mcmanager::{bin, util};
 use serde::Deserialize;
@@ -237,13 +237,6 @@ async fn main() -> Result<()> {
                 )
                 .expect("failed to write to the config file");
 
-            let mut velocity_config_file =
-                File::create(&util::dirs::base_dir().join("velocity_config.toml"))
-                    .expect("failed to create the velocity config file");
-            velocity_config_file
-                .write_all(include_bytes!("resources/configs/velocity_config.toml"))
-                .expect("failed to write default config file");
-
             // add some basic default values
             database
                 .insert(
@@ -277,21 +270,6 @@ async fn main() -> Result<()> {
                 .await?;
         }
 
-        {
-            println!("would you like to download the latest version of velocity? [Y/n]");
-            let mut input = String::new();
-            std::io::stdin()
-                .read_line(&mut input)
-                .expect("Failed to read line");
-            input = input.trim().to_ascii_lowercase();
-            if input == "y" || input == "yes" || input.is_empty() {
-                if let Err(err) = try_download_velocity().await {
-                    error!("Could not download velocity: {}", err);
-                } else {
-                    println!("Successfully downloaded velocity");
-                }
-            }
-        }
         println!("MCManager set up successfully. You can now restart this executable.");
         return Ok(());
     }
@@ -320,7 +298,7 @@ async fn main() -> Result<()> {
     tokio::task::spawn({
         let servers = state.servers.clone();
         async move {
-            info!("starting velocity at {}", CONFIG.proxy.port);
+            info!("starting minecraft proxy at {}", CONFIG.proxy.port);
             let mut proxy =
                 InfrarustServer::new(servers).expect("failed to create an infrarust server");
             proxy
@@ -332,107 +310,12 @@ async fn main() -> Result<()> {
             loop {
                 interval.tick().await;
                 if let Err(err) = proxy.update().await {
-                    error!("failed to update velocity server: {err}");
+                    error!("failed to update the infrarust server: {err}");
                 }
             }
         }
     });
 
     mcmanager::api::serve::run(state, CONFIG.clone()).await?;
-    Ok(())
-}
-
-async fn try_download_velocity() -> Result<()> {
-    let client = reqwest::Client::new();
-    #[derive(Debug, Deserialize)]
-    struct Velocity {
-        project_id: String,
-        project_name: String,
-        version_groups: Vec<String>,
-        versions: Vec<String>,
-    }
-
-    let velocity: Velocity = serde_json::from_str(
-        &client
-            .get("https://api.papermc.io/v2/projects/velocity/")
-            .send()
-            .await?
-            .text()
-            .await?,
-    )?;
-    let version = velocity.versions.last().unwrap();
-
-    info!("found the velocity version: {}", version);
-
-    #[derive(Debug, Deserialize)]
-    struct Builds {
-        project_id: String,
-        project_name: String,
-        version: String,
-        builds: Vec<Build>,
-    }
-    #[derive(Debug, Deserialize)]
-    struct Build {
-        build: i32,
-        time: String,
-        channel: String,
-        promoted: bool,
-        changes: Vec<Changes>,
-        downloads: Downloads,
-    }
-
-    #[derive(Debug, Deserialize)]
-    struct Changes {
-        commit: String,
-        summary: String,
-        message: String,
-    }
-
-    #[derive(Debug, Deserialize)]
-    struct Downloads {
-        application: Application,
-    }
-
-    #[derive(Debug, Deserialize)]
-    struct Application {
-        name: String,
-        sha256: String,
-    }
-
-    let velocity: Builds = serde_json::from_str(
-        &client
-            .get(
-                format!(
-                    "https://api.papermc.io/v2/projects/velocity/versions/{}/builds",
-                    version
-                )
-                .as_str(),
-            )
-            .send()
-            .await?
-            .text()
-            .await?,
-    )?;
-    let build = velocity.builds.last().unwrap();
-
-    info!(
-        "Downloading the latest version of velocity: {}",
-        build.downloads.application.name
-    );
-
-    let response = reqwest::get(format!(
-        "https://api.papermc.io/v2/projects/velocity/versions/{}/builds/{}/downloads/{}",
-        version, build.build, build.downloads.application.name
-    ))
-    .await?;
-    let dir = util::dirs::velocity_dir().join("velocity.jar");
-    let mut dest = File::create(&dir)?;
-    let content = response.bytes().await?;
-    dest.write_all(&content)?;
-    info!(
-        "Successfully downloaded the latest version of velocity to {}",
-        dir.display()
-    );
-
     Ok(())
 }

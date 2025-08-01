@@ -12,7 +12,7 @@ use crate::database::types::{Access, Column, Id};
 use crate::database::{Cachable, Database, DatabaseError, ValueType};
 use crate::minecraft::server::ServerConfigLimit;
 use async_trait::async_trait;
-use axum::extract::{Path, State};
+use axum::extract::{DefaultBodyLimit, Path, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
@@ -216,7 +216,7 @@ impl ApiObject for User {
                 post(Self::upload_icon)
                     .patch(Self::upload_icon)
                     .get(Self::get_icon),
-            )
+            ).layer(DefaultBodyLimit::max(8*1024*1024))
             .route(
                 "/default/icon",
                 get(Self::default_icon)

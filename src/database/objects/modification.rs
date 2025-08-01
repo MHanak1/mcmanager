@@ -13,6 +13,7 @@ use sqlx::{Arguments, FromRow, IntoArguments};
 use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
+use axum::extract::DefaultBodyLimit;
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, FromRow)]
 pub struct Mod {
@@ -201,7 +202,7 @@ impl ApiObject for Mod {
                 post(Self::upload_icon)
                     .patch(Self::upload_icon)
                     .get(Self::get_icon),
-            )
+            ).layer(DefaultBodyLimit::max(8*1024*1024))
             .route(
                 "/default/icon",
                 get(Self::default_icon)

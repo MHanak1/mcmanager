@@ -1,11 +1,3 @@
-use crate::config::secrets::SECRETS;
-use crate::database::DatabaseError;
-use crate::database::objects::World;
-use crate::database::types::Id;
-use crate::minecraft::server;
-use crate::minecraft::server::MinecraftServerStatus;
-use crate::minecraft::server::internal::InternalServer;
-use crate::{api, config::Config, util::dirs};
 use axum::Router;
 use axum::http::StatusCode;
 use color_eyre::Result;
@@ -16,7 +8,7 @@ use std::{io::Write, thread};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    Ok(())
+    todo!()
     /*
     env_logger::init();
 

@@ -10,6 +10,7 @@ use std::fmt::Debug;
 use std::result;
 use std::sync::{Arc, RwLock};
 use argon2::password_hash::McfHasher;
+use image::DynamicImage;
 use tokio::sync::Mutex;
 use crate::database::objects::world::MinecraftServerStatusJson;
 
@@ -161,6 +162,7 @@ pub trait MinecraftServer: Send + Debug {
     async fn update_world(&mut self, world: World) -> Result<()>;
     async fn config(&self) -> Result<HashMap<String, String>>;
     async fn set_config(&mut self, config: HashMap<String, String>) -> Result<()>;
+    async fn set_icon(&mut self, image: DynamicImage) -> Result<()>;
     async fn latest_log(&mut self) -> Result<String>;
     async fn write_console(&mut self, data: String) -> Result<()>;
     async fn status(&self) -> Result<MinecraftServerStatus>;
@@ -190,7 +192,7 @@ use crate::config::CONFIG;
     use std::collections::{HashMap, HashSet};
     use std::fs;
     use std::fs::File;
-    use std::io::{BufRead, BufReader, Read, Write};
+    use std::io::{BufRead, BufReader, BufWriter, Read, Write};
     use std::net::SocketAddr;
     use std::path::PathBuf;
     use std::sync::{Arc, LazyLock};
@@ -198,13 +200,17 @@ use crate::config::CONFIG;
     use axum::body::Bytes;
     use axum::extract::{ConnectInfo, WebSocketUpgrade};
     use axum::extract::ws::{Message, WebSocket};
+    use axum::http::StatusCode;
     use axum::response::IntoResponse;
     use color_eyre::eyre::{bail, ContextCompat};
     use futures::stream::SplitSink;
     use futures::StreamExt;
+    use image::{DynamicImage, ImageFormat};
+    use image::imageops::FilterType;
     use socketioxide::extract::{Data, SocketRef};
     use socketioxide::SocketIo;
     use subprocess::{Exec, ExitStatus, Popen};
+    use tokio::io::AsyncWriteExt;
     use tokio::sync::{RwLock, Mutex, broadcast, mpsc};
     use crate::config::secrets::SECRETS;
     use crate::database::objects::world::MinecraftServerStatusJson;
@@ -540,6 +546,18 @@ use crate::config::CONFIG;
             Ok(())
         }
 
+        async fn set_icon(&mut self, image: DynamicImage) -> Result<()> {
+            let image = image.resize(64, 64, FilterType::CatmullRom);
+
+
+            let image_file =
+                std::fs::File::create(&self.directory.join("server-icon.png"))?;
+            let mut writer = BufWriter::new(image_file);
+            image.write_to(&mut writer, ImageFormat::Png)?;
+
+            Ok(())
+        }
+
         async fn latest_log(&mut self) -> Result<String> {
             self.read_file("logs/latest.log")
         }
@@ -653,6 +671,7 @@ pub mod external {
     use std::net::SocketAddr;
     use axum::extract::ws::WebSocket;
     use color_eyre::eyre::bail;
+    use image::DynamicImage;
     use socketioxide::extract::SocketRef;
     use tokio::sync::broadcast::Receiver;
     use tokio::sync::mpsc::Sender;
@@ -738,6 +757,10 @@ pub mod external {
         }
 
         async fn set_config(&mut self, _config: HashMap<String, String>) -> Result<()> {
+            todo!()
+        }
+
+        async fn set_icon(&mut self, image: DynamicImage) -> Result<()> {
             todo!()
         }
 

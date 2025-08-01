@@ -60,7 +60,6 @@ pub enum ServerType {
 #[serde(rename_all = "snake_case")]
 pub enum ProxyType {
     Infrarust,
-    Velocity,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -91,8 +90,6 @@ pub struct WorldDefaults {
 pub struct ProxyConfig {
     pub port: u16,
     pub hostname: String,
-    pub proxy: ProxyType,
-    pub velocity_executable_name: String,
     pub infrarust_executable_name: String,
 }
 

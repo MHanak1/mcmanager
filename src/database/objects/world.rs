@@ -11,7 +11,7 @@ use crate::minecraft::server;
 use crate::minecraft::server::{MinecraftServerStatus, ServerConfigLimit};
 use async_trait::async_trait;
 use axum::Router;
-use axum::extract::{Path, State, WebSocketUpgrade};
+use axum::extract::{DefaultBodyLimit, Path, State, WebSocketUpgrade};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
@@ -22,6 +22,7 @@ use sqlx::{Any, Arguments, Encode, FromRow, IntoArguments};
 use std::collections::HashMap;
 use std::os::linux::raw::stat;
 use std::sync::Arc;
+use image::DynamicImage;
 use serde_json::json;
 use socketioxide::extract::SocketRef;
 use tokio::sync::Mutex;
@@ -255,7 +256,7 @@ impl ApiObject for World {
                 post(Self::upload_icon)
                     .patch(Self::upload_icon)
                     .get(Self::get_icon)
-            )
+            ).layer(DefaultBodyLimit::max(8*1024*1024))
             .route(
                 "/default/icon",
                 get(Self::default_icon)
@@ -472,9 +473,16 @@ impl ApiRemove for World {
     }
 }
 
+#[async_trait]
 impl ApiIcon for World {
     const DEFAULT_ICON_BYTES: &'static [u8] = include_bytes!("../../resources/icons/world_default.png");
     const DEFAULT_ICON_MIME: &'static str = "image/png";
+
+    async fn after_icon_update(&self, state: AppState, user: &User, image: &DynamicImage) -> Result<(), DatabaseError> {
+        let server = state.servers.get_or_create_server(self).await.map_err(|err| DatabaseError::InternalServerError(err.to_string()))?;
+        server.lock().await.set_icon(image.clone()).await.map_err(|err| DatabaseError::InternalServerError(err.to_string()))?;
+        Ok(())
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

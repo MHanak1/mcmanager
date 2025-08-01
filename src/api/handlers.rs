@@ -557,7 +557,7 @@ where
         let user = user.0;
 
         //check if the asset exists and the user has access to it
-        let _ = state
+        let self_ = state
             .database
             .get_one::<Self>(
                 id,
@@ -589,7 +589,9 @@ where
             .join(format!("{}.webp", id));
 
         if is_gif {
+            // i think this is to verify if the image is valid
             let _ = bytes_to_image(bytes.clone(), image_format)?;
+
             let image_file =
                 std::fs::File::create(&gif_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             let mut writer = BufWriter::new(image_file);
@@ -604,6 +606,9 @@ where
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         } else {
             let image = bytes_to_image(bytes, image_format)?;
+            let image = crop_image_to_square(&image);
+
+            let after_icon_update_future = self_.after_icon_update(state.clone(), &user, &image);
 
             let image = image.resize(256, 256, FilterType::CatmullRom);
 
@@ -618,9 +623,16 @@ where
             image
                 .write_to(&mut writer, ImageFormat::WebP)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+            after_icon_update_future.await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         }
 
         Ok(StatusCode::OK)
+    }
+
+    #[allow(unused)]
+    async fn after_icon_update(&self, state: AppState, user: &User, image: &DynamicImage) -> Result<(), DatabaseError> {
+        Ok(())
     }
 
     async fn get_icon(
@@ -959,8 +971,8 @@ fn bytes_to_image(bytes: Bytes, format: ImageFormat) -> Result<DynamicImage, Sta
     let mut reader = ImageReader::new(Cursor::new(bytes.as_ref()));
 
     let mut limits = Limits::default();
-    limits.max_image_width = Some(2048);
-    limits.max_image_height = Some(2048);
+    limits.max_image_width = Some(4000);
+    limits.max_image_height = Some(4000);
 
     reader.set_format(format);
 
@@ -975,4 +987,15 @@ fn bytes_to_image(bytes: Bytes, format: ImageFormat) -> Result<DynamicImage, Sta
     })?;
 
     Ok(image)
+}
+
+fn crop_image_to_square(image: &DynamicImage) -> DynamicImage {
+    let delta = image.width().abs_diff(image.height());
+    if image.width() > image.height() {
+        image.crop_imm(delta / 2, 0, image.height(), image.height())
+    } else {
+        image.crop_imm(0, delta / 2, image.width(), image.width())
+    }
+
+
 }

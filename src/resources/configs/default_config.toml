@@ -38,19 +38,13 @@ host = "http://localhost:3031"
 # on which port the proxy should run. it should usually be the default minecraft port so 25565
 port = 25565
 hostname = "example.net" # under what domain is the server running on. the servers will be avaliable at server_name.example.net. THIS MUST BE SET CORRECTLY. OTHERWISE THE PROXY WILL NOT FORWARD CORRECTLY
-proxy = "infrarust" # which proxy to use. ifrarust is recommended
 
 infrarust_executable_name = "infrarust"
-velocity_executable_name = "velocity.jar"
-
-[velocity]
-# what is the velocity executable called. it should be placed in the data/velocity directory. for now you will have download it yourself.
-
 
 [world]
 # how long should mcmanager wait for the server to gracefully shut down before killing it
 stop_timeout = 15
-# in what range should ports be assigned to servers. it can overlap with the velocity port as this one will be skipped
+# in what range should ports be assigned to servers. it can overlap with the proxy port as this one will be skipped
 port_range = [24000, 25000]
 # what command should be used to launch the minecraft server.
 # you can also use this to run the servers in something like firejail
