@@ -1,7 +1,7 @@
 <p align="center">
-    <img alt="MCManager" src="https://raw.githubusercontent.com/MHanak1/mcmanager/refs/heads/master/src/resources/logo.png"/>
+    <img alt="MCManager" src="https://raw.githubusercontent.com/MHanak1/mcmanager/refs/heads/master/src/resources/icons/logo.png"/>
 </p>
-MCManager is a Minecraft server manager with support for small and large deployments alike.
+MCManager is a Minecraft server manager written in Rust with support for small and large deployments alike.
 
 ## Why? 
 
@@ -22,6 +22,7 @@ The MCManager uses [Infrarust](https://infrarust.dev/) to proxy traffic to users
     - [ ] Remotely
     - [ ] Through Kubernetes
 - [x] Proxy traffic through Infrarust
+- [x] A web frontend
 - [x] Websocket server console
 - [ ] Forge and NeoForge compatibility
 - [ ] Mod and plugin support
