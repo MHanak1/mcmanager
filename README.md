@@ -20,7 +20,7 @@ The MCManager uses [Infrarust](https://infrarust.dev/) to proxy traffic to users
 - [x] Run servers
     - [x] Locally
     - [ ] Remotely
-    - [ ] Through Kubernetes
+    - [ ] Through Docker and Kubernetes
 - [x] Proxy traffic through Infrarust
 - [x] A web frontend
 - [x] Websocket server console
@@ -38,9 +38,11 @@ The MCManager uses [Infrarust](https://infrarust.dev/) to proxy traffic to users
 
 MCManager should in theory be compatible with all versions from 1.7.10 onwards, but at the moment the older versions don't appear to work
 
-\* At this point the project is *not* ready for a large-scale deployment
-
 ## Hosting
+#### Requirements
+* A Linux-based server (currently, Windows should work, but it will not be supported in the future)
+* A domain (example.com) pointing to the server (can be proxied by services like cloudflare)
+* a wildcard domain (*.example.com) pointing to the server (can _not_ be proxied by services like cloudflare)
 
 #### Backend
 
@@ -55,24 +57,35 @@ cp ./target/release/mcmanager ./
 after you run those, you should be able to run the `mcmanager` executable. after prompting for the username and password for the administrator account it should generate several files and folders in the working directory:
 ```
 /data
-    /database.db # sqlite database if using sqlite
-    /icons # world, user and mod icons
-    /versions # server .jar files
-    /worlds # server files, if running locally
+    /database.db  # sqlite database if using sqlite
+    /icons        # world, user and mod icons
+    /versions     # server .jar files
+    /worlds       # server files, if running locally
 /infrarust
-    /infrarust # the infrarust executable, this will be embedded in later versions
-config.toml # the configuration file. for more detail see https://github.com/MHanak1/mcmanager/blob/master/src/resources/configs/default_config.toml
+    /infrarust    # the infrarust executable, this will be embedded in later versions
+config.toml       # the configuration file
 ```
 
 #### Frontend
-i don't have much time to write, so install npm or pnpm, go to the `mcmanager/mcmanager-frontend` folder, and run
+
+to run the fontend, you will need to have `NodeJS` installed, along with a package manager (`npm`, `pnpm`, or whatever you prefer). After you install it, in the repository folder run
+
 ```
-[p]npm run build
+cd mcmanager-frontend
+npm i
+npm run build
 ```
-and this will generate the static html in the `dist` subfolder
+this will generate the static page files in the `dist` subfolder, which can later be served to the client
+
 #### HTTP Proxy
 
-example nginx configuration (todo: write things here i dunno)
+to actually serve this project, you will need a reverse proxy. i use nginx, so i recommend it, but any reverse proxy with static file serving and websocket functionality will do. you need to configure it to do the following:
+
+* proxy `/api` to the backend
+* proxy `/socket.io` to the backend
+* serve the frontend's `dist` directory like you would a normal Vue single-page app. you can read more about it [here](https://cli.vuejs.org/guide/deployment.html)
+
+example nginx configuration
 ```conf
 server {
     listen       80;
@@ -106,4 +119,23 @@ server {
         root   /usr/share/nginx/html;
     }
 }
+```
+
+## Configuration
+before you start using MCManager, you might want to tweak the configuration. primarily, you have to **set the correct domain** in the config file, otherwise the minecraft proxy will not work. 
+## Project Structure
+```
+/mcmanager-frontend # frontend
+/src
+  /api              # API and Socket.IO handlers.
+  /bin              # contains the (currently broken) minimanager binary
+  /database         # objects and data types stored in the database
+  /minecraft        # minecraft server handling
+  /resources
+    /config         # default configs
+    /icons          # default icons
+  api.rs            # the API server
+  config.rs         # config handling
+  database.rs       # database handling and abstraction
+  main.rs           # the main executable
 ```
