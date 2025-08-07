@@ -10,7 +10,7 @@ MCManager is a self-hosted alternative to services like Aternos or Minehut. It's
 ## How?
 
 The MCManager uses [Infrarust](https://infrarust.dev/) to proxy traffic to users' servers, based on the hostname. Those servers can be run in several ways:
-* **Internaly** - The Minecraft servers are run as the API server's subprocesses. while this requires almost no setup, it's not very scalable and not at all secure. This should only be used when all users can be trusted.
+* **Internally** - The Minecraft servers are run as the API server's subprocesses. while this requires almost no setup, it's not very scalable and not at all secure. This should only be used when all users can be trusted.
 * **Remotely** (NOT IMPLEMENTEED) - The Minecraft servers can be launched on a separate machine. this slightly more secure, but not much different than internal servers.
 * **Containerized** (NOT IMPLEMENTED) - The Minecraft servers can be launched on Kubernetes containers separate for each user. This is the best (if not only) option for larger deployments. It is both scalable, and generally secure.
 
