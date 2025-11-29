@@ -3,6 +3,10 @@
 </p>
 MCManager is a Minecraft server manager written in Rust with support for small and large deployments alike.
 
+## Project Status
+
+The project is currently on hiatus, due to school my chronic lack of spare time. It is usable, although a lot of administration functionality is not implemented in the web UI and requires the usage of manual API requests. 
+
 ## Why? 
 
 MCManager is a self-hosted alternative to services like Aternos or Minehut. It's meant to provide their convenience, while giving the control of a self-hosted solution. 
