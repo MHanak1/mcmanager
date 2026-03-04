@@ -1,0 +1,38 @@
+[package]
+name = "mcmanager"
+version = "0.2.0"
+edition = "2024"
+
+[lints.clippy]
+uninlined_format_args = "warn"
+unused_async = "warn"
+if_not_else = "warn"
+default_trait_access = "warn"
+manual_string_new = "warn"
+manual_find = "warn"
+needless_pass_by_value = "warn"
+unwrap_used = "warn"
+
+[dependencies]
+arc-swap = "1.8.2"
+clap = { version = "4.5.60", features = ["derive"] }
+color-eyre = "0.6.5"
+config = "0.15.19"
+log = "0.4.29"
+notify = "8.2.0"
+notify-debouncer-full = "0.7.0"
+pretty_assertions = "1.4.1"
+ron = "0.12.0"
+sea-orm = { version = "2.0.0-rc", features = [ "sqlx-sqlite", "sqlx-postgres", "runtime-tokio", "macros", "seaography", "with-chrono", "with-uuid"] }
+serde = "1.0.228"
+serde_ini = "0.2.0"
+serde_json = "1.0.149"
+serde_json5 = "0.2.1"
+serde_with = { version = "3.17.0", features = ["macros"] }
+serde_yaml = "0.9.34"
+smart-default = "0.7.1"
+tokio = { version = "1.50.0", features = ["macros"] }
+toml = "1.0.3"
+tracing = "0.1.44"
+tracing-subscriber = { version =  "0.3.22", features = ["env-filter"]}
+validator = "0.20.0"
