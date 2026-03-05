@@ -1,7 +1,6 @@
 use ::serde::Deserialize;
 use ::serde::Serialize;
 use arc_swap::ArcSwap;
-use arc_swap::ArcSwapOption;
 use color_eyre::Result;
 use color_eyre::eyre::ContextCompat;
 use color_eyre::eyre::bail;
@@ -15,8 +14,6 @@ use std::sync::Arc;
 use std::sync::mpsc;
 use std::time::Duration;
 use tokio::sync::watch;
-use tokio::sync::watch::Sender;
-use tokio::task::JoinHandle;
 use tracing::warn;
 use tracing::{debug, error, info};
 
@@ -90,37 +87,28 @@ impl ConfigValues {
 #[allow(unused)]
 #[derive(Clone)]
 pub struct Config {
-    pub config: Arc<ArcSwap<ConfigValues>>,
-    pub state: Arc<ConfigState>,
-}
-
-impl Config {
-    pub fn new() -> Result<Self> {
-        let config = Arc::new(ArcSwap::from_pointee(ConfigValues::new()?));
-        let state = Arc::new(ConfigState::new(config.clone()));
-        Ok(Self { config, state })
-    }
+    pub values: Arc<ArcSwap<ConfigValues>>,
+    /// This value updates whenever config changes, and emits what the config changed from.
+    pub changed_from: watch::Receiver<Arc<ConfigValues>>,
 }
 
 pub const FILE_EXTENSIONS: [&str; 6] = ["toml", "json", "yaml", "yml", "ron", "json5"]; //a bad, not good way to do this
 
-#[allow(unused)]
-pub struct ConfigState {
-    task: JoinHandle<()>,
-    pub config_changed: watch::Sender<ConfigValues>,
-    pub previous_config: Arc<ArcSwapOption<ConfigValues>>,
-}
+impl Config {
+    pub fn new() -> Result<Self> {
+        let values = Arc::new(ArcSwap::from_pointee(ConfigValues::new()?));
+        let changed_from = Self::spawn_watcher(values.clone());
 
-impl ConfigState {
-    fn new(config: Arc<ArcSwap<ConfigValues>>) -> Self {
-        let (config_changed, _): (Sender<ConfigValues>, _) =
-            watch::channel((*config.load_full()).clone());
-        let previous_config = Arc::new(ArcSwapOption::from_pointee(None));
+        Ok(Self {
+            values,
+            changed_from,
+        })
+    }
 
-        let task = tokio::task::spawn({
-            let config_changed = config_changed.clone();
-            let previous_config: Arc<ArcSwapOption<ConfigValues>> = previous_config.clone();
+    fn spawn_watcher(config: Arc<ArcSwap<ConfigValues>>) -> watch::Receiver<Arc<ConfigValues>> {
+        let (config_changed_tx, config_change_rx) = watch::channel(config.load_full()).clone();
 
+        tokio::task::spawn({
             async move {
                 // Create a channel to receive the events.
                 let (tx, rx) = mpsc::channel();
@@ -154,28 +142,29 @@ impl ConfigState {
                                             notify::EventKind::Modify(_) | notify::EventKind::Remove(_),
                                         ..
                                     } => {
-                                        info!("Config changed, refreshing.");
                                         match ConfigValues::new() {
                                             Err(err) => {
                                                 error!("Unable to deserialise config: {}", err);
                                             }
                                             Ok(new_config) => {
                                                 if **config.load() != new_config {
+                                                    info!("Config changed, refreshing.");
                                                     debug!("New config: {new_config:?}");
                                                     //previous_config.store(Arc::new(Some(
                                                     //    config.swap(Arc::new(new_config)).as_ref(),
                                                     //)));
-                                                    previous_config.store(Some(Arc::new(
-                                                        (*config
-                                                            .swap(Arc::new(new_config.clone())))
-                                                        .clone(),
-                                                    )));
+                                                    let previous_config =
+                                                        config.swap(Arc::new(new_config));
 
-                                                    println!("notifying");
-                                                    config_changed
-                                                        .send(new_config)
-                                                        .expect("dunno man");
+                                                    config_changed_tx
+                                                        .send(previous_config)
+                                                        .expect("Failed to propagate config");
                                                     break 'events;
+                                                }
+                                                {
+                                                    debug!(
+                                                        "Config written to, but it was not changed"
+                                                    )
                                                 }
                                             }
                                         }
@@ -191,50 +180,46 @@ impl ConfigState {
             }
         });
 
-        Self {
-            task,
-            config_changed,
-            previous_config,
-        }
-    }
-}
-
-pub fn generate_config_file(path: impl AsRef<Path>) -> Result<()> {
-    if path.as_ref().exists() {
-        // not *the* best way to do it, but certainly a way.
-        warn!("Can not create a config file. File already exists");
-        return Ok(());
+        config_change_rx
     }
 
-    let extension = path
-        .as_ref()
-        .extension()
-        .context("Cannot generate a config file. Config file name missing extension.")?;
-
-    let config = match extension
-        .to_str()
-        .context("Could not convert config file extension to str")?
-    {
-        "toml" => toml::to_string_pretty(&ConfigValues::default())?,
-        "json" => serde_json::to_string_pretty(&ConfigValues::default())?,
-        "json5" => serde_json5::to_string(&ConfigValues::default())?,
-        "yaml" | "yml" => serde_yaml::to_string(&ConfigValues::default())?,
-        "ron" => {
-            ron::ser::to_string_pretty(&ConfigValues::default(), ron::ser::PrettyConfig::new())?
+    pub fn generate_config_file(path: impl AsRef<Path>) -> Result<()> {
+        if path.as_ref().exists() {
+            // not *the* best way to do it, but certainly a way.
+            warn!("Can not create a config file. File already exists");
+            return Ok(());
         }
-        _ => {
-            bail!(
-                "extension {} not supported. Allowed config file types are {}",
-                extension.display(),
-                FILE_EXTENSIONS.join(", "),
-            );
-        }
-    };
 
-    if let Some(parent) = path.as_ref().parent() {
-        std::fs::create_dir_all(parent)?;
+        let extension = path
+            .as_ref()
+            .extension()
+            .context("Cannot generate a config file. Config file name missing extension.")?;
+
+        let config = match extension
+            .to_str()
+            .context("Could not convert config file extension to str")?
+        {
+            "toml" => toml::to_string_pretty(&ConfigValues::default())?,
+            "json" => serde_json::to_string_pretty(&ConfigValues::default())?,
+            "json5" => serde_json5::to_string(&ConfigValues::default())?,
+            "yaml" | "yml" => serde_yaml::to_string(&ConfigValues::default())?,
+            "ron" => {
+                ron::ser::to_string_pretty(&ConfigValues::default(), ron::ser::PrettyConfig::new())?
+            }
+            _ => {
+                bail!(
+                    "extension {} not supported. Allowed config file types are {}",
+                    extension.display(),
+                    FILE_EXTENSIONS.join(", "),
+                );
+            }
+        };
+
+        if let Some(parent) = path.as_ref().parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let mut file = std::fs::File::create(path)?;
+        file.write_all(config.as_bytes())?;
+        Ok(())
     }
-    let mut file = std::fs::File::create(path)?;
-    file.write_all(config.as_bytes())?;
-    Ok(())
 }

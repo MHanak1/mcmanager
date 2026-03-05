@@ -1,11 +1,9 @@
-use std::{sync::Arc, time::Duration};
-
-use pretty_assertions::{assert_eq, assert_ne};
+use std::sync::Arc;
 
 use color_eyre::eyre::Result;
 use sea_orm::{ConnectOptions, Database, DatabaseConnection};
 use tokio::task::JoinHandle;
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 
 use crate::app::{self, config::Config, paths::DATA_DIR};
 
@@ -19,7 +17,7 @@ pub struct State {
 impl State {
     pub async fn new() -> Result<Self> {
         let config = Config::new()?;
-        let dbconfig = &config.config.load().database.clone();
+        let dbconfig = &config.values.load().database.clone();
         let database = Self::create_database(dbconfig).await?;
         let config_change_handler = None;
 
@@ -32,12 +30,12 @@ impl State {
         state.config_change_handler = Some(Arc::new(tokio::spawn({
             let state = state.clone();
             async move {
-                let mut config_changed = state.config.state.config_changed.subscribe();
+                let mut config_changed = state.config.changed_from.clone();
 
                 loop {
-                    println!("Printuje");
+                    println!("State czeka na zmiany configu");
                     config_changed.changed().await.expect("dunno man");
-                    println!("Nie printuje");
+                    println!("State widzi zmiany configu");
 
                     let _ = state.handle_config_change().await.inspect_err(|err| {
                         error!("An error occured while handling config change: {err}")
@@ -50,41 +48,24 @@ impl State {
     }
 
     pub async fn handle_config_change(&self) -> Result<()> {
-        println!("{:?}", self.config.config.load().database,);
-        println!(
-            "{:?}",
-            self.config
-                .state
-                .previous_config
-                .load()
-                .clone()
-                .unwrap()
-                .database
-        );
-        assert_eq!(
-            self.config.config.load().database,
-            self.config
-                .state
-                .previous_config
-                .load()
-                .clone()
-                .unwrap()
-                .database
-        );
+        let config = self.config.values.load_full();
+        let previous_config = (*self.config.changed_from.clone().borrow_and_update()).clone();
+
+        if config.database != previous_config.database {
+            warn!("Changing database config on the fly not supported. Ignoring.")
+        }
 
         Ok(())
     }
 
     pub async fn create_database(config: &app::config::Database) -> Result<DatabaseConnection> {
         let url = if config.connection == "sqlite" {
-            String::from(format!(
-                "sqlite://{}/database.sqlite?mode=rwc",
-                DATA_DIR.display()
-            ))
+            format!("sqlite://{}/database.sqlite?mode=rwc", DATA_DIR.display())
         } else {
             config.connection.clone()
         };
         debug!("Connecting to database at: {}", url);
+
         let mut opt = ConnectOptions::new(url);
         opt.max_connections(config.max_connections)
             .min_connections(config.min_connections)
