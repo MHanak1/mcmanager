@@ -31,13 +31,13 @@ async fn main() -> Result<()> {
     }
 
     let state = State::new().await?;
+    //This doesn't work
+    //state.watch_for_config_changes();
 
     let mut config_changed = state.config.changed_from.clone();
     loop {
         //time::sleep(Duration::from_hours(1)).await;
-        println!("Main czeka na zmiany configu");
         config_changed.changed().await.expect("dunno man");
-        println!("Main widzi zmiany configu");
     }
     //Ok(())
 }

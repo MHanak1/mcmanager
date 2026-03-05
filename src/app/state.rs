@@ -1,8 +1,5 @@
-use std::sync::Arc;
-
 use color_eyre::eyre::Result;
 use sea_orm::{ConnectOptions, Database, DatabaseConnection};
-use tokio::task::JoinHandle;
 use tracing::{debug, error, warn};
 
 use crate::app::{self, config::Config, paths::DATA_DIR};
@@ -11,7 +8,6 @@ use crate::app::{self, config::Config, paths::DATA_DIR};
 pub struct State {
     pub database: DatabaseConnection,
     pub config: Config,
-    config_change_handler: Option<Arc<JoinHandle<()>>>,
 }
 
 impl State {
@@ -19,32 +15,32 @@ impl State {
         let config = Config::new()?;
         let dbconfig = &config.values.load().database.clone();
         let database = Self::create_database(dbconfig).await?;
-        let config_change_handler = None;
 
-        let mut state = Self {
-            config,
-            database,
-            config_change_handler,
-        };
+        let state = Self { config, database };
+        state.watch_for_config_changes();
+        state.watch_for_config_changes(); // i hate tokio
+        // for some f-ing reason one thread will never work. if we have two tasks, one of them is guaranteed to work
 
-        state.config_change_handler = Some(Arc::new(tokio::spawn({
-            let state = state.clone();
+        Ok(state)
+    }
+
+    fn watch_for_config_changes(&self) {
+        tokio::spawn({
+            let state = self.clone();
             async move {
                 let mut config_changed = state.config.changed_from.clone();
 
                 loop {
-                    println!("State czeka na zmiany configu");
-                    config_changed.changed().await.expect("dunno man");
-                    println!("State widzi zmiany configu");
+                    //use tokio::time;
+                    //time::sleep(Duration::from_secs(1)).await; //this works
+                    config_changed.changed().await.expect("dunno man"); //this doesn't
 
                     let _ = state.handle_config_change().await.inspect_err(|err| {
                         error!("An error occured while handling config change: {err}")
                     });
                 }
             }
-        })));
-
-        Ok(state)
+        });
     }
 
     pub async fn handle_config_change(&self) -> Result<()> {
