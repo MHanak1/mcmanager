@@ -6,32 +6,40 @@ use color_eyre::eyre::ContextCompat;
 use color_eyre::eyre::bail;
 use notify::RecursiveMode;
 use notify_debouncer_full::new_debouncer;
+use regex::Regex;
 use serde_with::serde_as;
 use smart_default::SmartDefault;
 use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::LazyLock;
 use std::sync::mpsc;
 use std::time::Duration;
 use tokio::sync::watch;
-use tokio::task;
 use tracing::warn;
 use tracing::{debug, error, info};
+use validator::Validate;
 
 use crate::app::paths::CONFIG;
 use crate::app::paths::config_files;
 
-#[derive(Serialize, Deserialize, SmartDefault, Debug, Clone, PartialEq)]
+static RE_DATABASE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^(sqlite|((sqlite|postgres|mysql)(:\/\/.+)?))$").expect("Invalid Regex")
+});
+
+#[derive(Serialize, Deserialize, SmartDefault, Debug, Clone, PartialEq, Validate)]
 #[allow(unused)]
 pub struct ConfigValues {
+    #[validate(nested)]
     pub database: Database,
 }
 
 #[serde_as]
-#[derive(Serialize, Deserialize, SmartDefault, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, SmartDefault, Debug, Clone, PartialEq, Validate)]
 #[allow(unused)]
 pub struct Database {
     #[default = "sqlite"]
+    #[validate(regex(path = *RE_DATABASE))]
     pub connection: String,
 
     #[default = 100]
@@ -58,6 +66,10 @@ pub struct Database {
 
     #[default = true]
     pub sqlx_logging: bool,
+
+    #[default = false]
+    /// Allow for hot reloading of the database connection. This is generally not the best idea.
+    pub allow_config_reload_not_recommended: bool,
 }
 
 impl ConfigValues {
@@ -81,14 +93,18 @@ impl ConfigValues {
             debug!("Using config file {}", path.display());
         }
 
-        Ok(config.build()?.try_deserialize()?)
+        let config: ConfigValues = config.build()?.try_deserialize()?;
+
+        config.validate()?;
+
+        Ok(config)
     }
 }
 
 #[allow(unused)]
 #[derive(Clone)]
 pub struct Config {
-    pub values: Arc<ArcSwap<ConfigValues>>,
+    values: Arc<ArcSwap<ConfigValues>>,
     /// This value updates whenever config changes, and emits what the config changed from.
     pub changed_from: watch::Receiver<Arc<ConfigValues>>,
 }
@@ -104,6 +120,10 @@ impl Config {
             values,
             changed_from,
         })
+    }
+
+    pub fn get(&self) -> Arc<ConfigValues> {
+        self.values.load_full()
     }
 
     fn spawn_watcher(config: Arc<ArcSwap<ConfigValues>>) -> watch::Receiver<Arc<ConfigValues>> {
@@ -137,40 +157,39 @@ impl Config {
                     match rx.recv() {
                         Ok(Ok(events)) => {
                             'events: for event in events {
-                                match event.event {
-                                    notify::Event {
-                                        kind:
-                                            notify::EventKind::Modify(_) | notify::EventKind::Remove(_),
-                                        ..
-                                    } => {
-                                        match ConfigValues::new() {
-                                            Err(err) => {
-                                                error!("Unable to deserialise config: {}", err);
-                                            }
-                                            Ok(new_config) => {
-                                                if **config.load() != new_config {
-                                                    info!("Config changed, refreshing.");
-                                                    debug!("New config: {new_config:?}");
-                                                    //previous_config.store(Arc::new(Some(
-                                                    //    config.swap(Arc::new(new_config)).as_ref(),
-                                                    //)));
-                                                    let previous_config =
-                                                        config.swap(Arc::new(new_config));
+                                if let notify::Event {
+                                    kind:
+                                        notify::EventKind::Modify(_) | notify::EventKind::Remove(_),
+                                    ..
+                                } = event.event
+                                {
+                                    match ConfigValues::new() {
+                                        Err(err) => {
+                                            error!("Unable to deserialise config: {}", err);
+                                        }
+                                        Ok(new_config) => {
+                                            if **config.load() == new_config {
+                                                debug!("Config written to, but it was not changed")
+                                            } else {
+                                                info!("Config changed, refreshing.");
+                                                debug!("New config: {new_config:?}");
+                                                //previous_config.store(Arc::new(Some(
+                                                //    config.swap(Arc::new(new_config)).as_ref(),
+                                                //)));
+                                                let previous_config =
+                                                    config.swap(Arc::new(new_config));
 
-                                                    config_changed_tx
-                                                        .send(previous_config)
-                                                        .expect("Failed to propagate config");
-                                                    break 'events;
-                                                }
+                                                if let Err(err) =
+                                                    config_changed_tx.send(previous_config)
                                                 {
-                                                    debug!(
-                                                        "Config written to, but it was not changed"
-                                                    )
+                                                    error!(
+                                                        "Failed when notifying about config change: {err}"
+                                                    );
                                                 }
+                                                break 'events;
                                             }
                                         }
                                     }
-                                    _ => {}
                                 }
                             }
                         }

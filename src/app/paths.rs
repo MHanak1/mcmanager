@@ -40,10 +40,11 @@ pub static CONFIG: LazyLock<PathBuf> = LazyLock::new(|| {
 pub fn config_files() -> Vec<PathBuf> {
     if CONFIG.is_dir() {
         let mut paths = vec![];
-        for path in std::fs::read_dir(&*CONFIG).expect("Failed to read config dir") {
-            if let Ok(path) = path {
-                paths.push(path.path());
-            }
+        for path in std::fs::read_dir(&*CONFIG)
+            .expect("Failed to read config dir")
+            .flatten()
+        {
+            paths.push(path.path());
         }
         paths
     } else {

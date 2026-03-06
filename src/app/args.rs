@@ -27,4 +27,4 @@ pub struct Args {
 }
 
 /// The name of the config file to be used, which may or may not include the file extension
-pub static ARGS: LazyLock<Args> = LazyLock::new(|| Args::parse());
+pub static ARGS: LazyLock<Args> = LazyLock::new(Args::parse);

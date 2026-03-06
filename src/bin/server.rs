@@ -1,11 +1,8 @@
-use std::time::Duration;
-
 use clap::Parser;
 use color_eyre::eyre::Result;
 use mcmanager::app::config::Config;
 use mcmanager::app::state::State;
 use mcmanager::app::{args::ARGS, paths::CONFIG};
-use tokio::time;
 use tracing::error;
 use tracing_subscriber::prelude::*;
 
@@ -34,7 +31,7 @@ async fn main() -> Result<()> {
     //This doesn't work
     //state.watch_for_config_changes();
 
-    let mut config_changed = state.config.changed_from.clone();
+    let mut config_changed = state.config().changed_from.clone();
     loop {
         //time::sleep(Duration::from_hours(1)).await;
         config_changed.changed().await.expect("dunno man");
