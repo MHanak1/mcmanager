@@ -1,0 +1,6 @@
+[build]
+rustflags = ["--cfg", "tokio_unstable"]
+
+[env]
+MCM_WORKING_DIR = { value = "run", relative = true }
+

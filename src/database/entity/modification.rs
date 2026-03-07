@@ -13,8 +13,14 @@ pub enum ExternalSource {
 pub struct Model {
     #[sea_orm(primary_key)]
     pub id: Uuid,
+
     #[sea_orm(unique, indexed)]
+    pub slug: String,
+
+    #[sea_orm(default_value = "")]
     pub name: String,
+
+    #[sea_orm(default_value = "")]
     pub description: String,
 
     pub source_user_id: Option<Uuid>,

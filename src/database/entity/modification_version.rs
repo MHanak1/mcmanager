@@ -3,14 +3,20 @@ use uuid::Uuid;
 
 #[sea_orm::model]
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
-#[sea_orm(table_name = "loader")]
+#[sea_orm(table_name = "modification_version")]
 pub struct Model {
     #[sea_orm(primary_key)]
     pub id: Uuid,
-    #[sea_orm(unique, indexed)]
-    pub name: String,
-    /// If the mod loader actually can load mods (Generally false for Vanilla)
-    pub can_load_mods: bool,
+
+    pub modification_id: Uuid,
+
+    #[sea_orm(belongs_to, from = "modification_id", to = "id")]
+    pub modification: HasOne<super::modification::Entity>,
+
+    pub version_id: Uuid,
+
+    #[sea_orm(belongs_to, from = "version_id", to = "id")]
+    pub version: HasOne<super::version::Entity>,
 }
 
 impl ActiveModelBehavior for ActiveModel {

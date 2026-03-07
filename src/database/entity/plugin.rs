@@ -3,27 +3,22 @@ use uuid::Uuid;
 
 #[sea_orm::model]
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
-#[sea_orm(table_name = "user")]
+#[sea_orm(table_name = "plugin")]
 pub struct Model {
     #[sea_orm(primary_key)]
     pub id: Uuid,
 
-    pub username: String,
+    #[sea_orm(unique, indexed)]
+    pub slug: String,
 
-    pub group_id: Uuid,
+    #[sea_orm(default_value = "")]
+    pub name: String,
 
-    #[sea_orm(belongs_to, from = "group_id", to = "id")]
-    pub group: HasOne<super::group::Entity>,
-
-    #[sea_orm(has_one)]
-    pub password: HasOne<super::password::Entity>,
+    #[sea_orm(default_value = "")]
+    pub description: String,
 
     #[sea_orm(has_many)]
-    pub invite_links: HasMany<super::invite_link::Entity>,
-
-    pub total_memory_usage: i64,
-
-    pub enabled: bool,
+    pub versions: HasMany<super::plugin_version::Entity>,
 }
 
 impl ActiveModelBehavior for ActiveModel {

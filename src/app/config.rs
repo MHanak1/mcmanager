@@ -13,8 +13,8 @@ use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::LazyLock;
-use std::sync::mpsc;
 use std::time::Duration;
+use tokio::sync::mpsc;
 use tokio::sync::watch;
 use tracing::warn;
 use tracing::{debug, error, info};
@@ -24,7 +24,7 @@ use crate::app::paths::CONFIG;
 use crate::app::paths::config_files;
 
 static RE_DATABASE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^(sqlite|((sqlite|postgres|mysql)(:\/\/.+)?))$").expect("Invalid Regex")
+    Regex::new(r"^(sqlite|((sqlite|postgres|mysql)(:.+)?))$").expect("Invalid Regex")
 });
 
 #[derive(Serialize, Deserialize, SmartDefault, Debug, Clone, PartialEq, Validate)]
@@ -80,9 +80,9 @@ impl ConfigValues {
                 .expect("Failed to serialise the default config"),
             config::FileFormat::Json,
         ));
-        config = config.add_source(config::Environment::with_prefix("MCM"));
 
-        for path in config_files().iter() {
+        let files = config_files();
+        for path in files.iter() {
             config = config.add_source(
                 config::File::with_name(
                     path.to_str()
@@ -92,6 +92,15 @@ impl ConfigValues {
             );
             debug!("Using config file {}", path.display());
         }
+
+        if files.len() == 1 && !files.get(0).unwrap().is_file() {
+            warn!(
+                "Comfig file not found at {} not found. You can generate a config using the --gen-config parameter",
+                files.get(0).unwrap().display()
+            )
+        }
+
+        config = config.add_source(config::Environment::with_prefix("MCM").separator("_"));
 
         let config: ConfigValues = config.build()?.try_deserialize()?;
 
@@ -129,15 +138,20 @@ impl Config {
     fn spawn_watcher(config: Arc<ArcSwap<ConfigValues>>) -> watch::Receiver<Arc<ConfigValues>> {
         let (config_changed_tx, config_change_rx) = watch::channel(config.load_full()).clone();
 
+        /* */
         tokio::task::spawn({
             async move {
                 // Create a channel to receive the events.
-                let (tx, rx) = mpsc::channel();
+                let (tx, mut rx) = mpsc::channel(16);
 
                 // Automatically select the best implementation for your platform.
                 // You can also access each implementation directly e.g. INotifyWatcher.
-                let mut watcher = new_debouncer(Duration::from_secs(1), None, tx)
-                    .expect("Failed to set up config file watcher");
+                let mut watcher = new_debouncer(Duration::from_secs(1), None, move |events| {
+                    if let Err(err) = tx.try_send(events) {
+                        error!("Watch channel send error: {:?}", err);
+                    }
+                })
+                .expect("Failed to set up config file watcher");
 
                 if CONFIG.exists() {
                     match watcher.watch(&*CONFIG, RecursiveMode::NonRecursive) {
@@ -154,8 +168,8 @@ impl Config {
                     }
                 }
                 loop {
-                    match rx.recv() {
-                        Ok(Ok(events)) => {
+                    while let Some(events) = rx.recv().await {
+                        if let Ok(events) = events {
                             'events: for event in events {
                                 if let notify::Event {
                                     kind:
@@ -193,8 +207,6 @@ impl Config {
                                 }
                             }
                         }
-                        Err(err) => error!("Unable to deserialise config: {}", err),
-                        _ => {}
                     }
                 }
             }
@@ -205,9 +217,10 @@ impl Config {
 
     pub fn generate_config_file(path: impl AsRef<Path>) -> Result<()> {
         if path.as_ref().exists() {
-            // not *the* best way to do it, but certainly a way.
-            warn!("Can not create a config file. File already exists");
-            return Ok(());
+            bail!(
+                "Can not create a config file. File already exists ({})",
+                path.as_ref().display()
+            );
         }
 
         let extension = path

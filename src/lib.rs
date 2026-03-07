@@ -1,3 +1,4 @@
 pub mod api;
 pub mod app;
-pub mod entity;
+pub mod database;
+pub mod util;

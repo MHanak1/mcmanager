@@ -11,20 +11,23 @@ default_trait_access = "warn"
 manual_string_new = "warn"
 manual_find = "warn"
 needless_pass_by_value = "warn"
-unwrap_used = "warn"
 
 [dependencies]
+any_ascii = "0.3.3"
 arc-swap = "1.8.2"
 argon2 = "0.5.3"
 async-trait = "0.1.89"
 clap = { version = "4.5.60", features = ["derive"] }
 color-eyre = "0.6.5"
 config = "0.15.19"
+console-subscriber = "0.5.0"
+dialoguer = "0.12.0"
 log = "0.4.29"
 notify = "8.2.0"
 notify-debouncer-full = "0.7.0"
 pretty_assertions = "1.4.1"
 regex = "1.12.3"
+requestty = "0.6.3"
 ron = "0.12.0"
 serde = "1.0.228"
 serde_ini = "0.2.0"
@@ -41,7 +44,7 @@ uuid = { version = "1.22.0", features = ["v4", "v7"] }
 validator = { version = "0.20.0", features = ["derive"] }
 
 [dependencies.sea-orm]
-version = "2.0.0-rc"
+version = "2.0.0-rc.36"
 features = [
     "sqlx-sqlite",
     "sqlx-mysql",

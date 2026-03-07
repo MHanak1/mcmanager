@@ -18,6 +18,7 @@ pub struct Model {
 
     pub created: DateTime,
 
+    #[sea_orm(default_value = true)]
     pub expires: bool,
 }
 

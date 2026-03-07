@@ -20,9 +20,11 @@ pub struct Args {
     pub config: Option<PathBuf>,
 
     #[arg(long)]
+    /// Base directory. defaults to working directory.
     pub working_dir: Option<PathBuf>,
 
     #[arg(long)]
+    /// Directory for the database and uploaded data. Defaults to [working_dir]/data/
     pub data_dir: Option<PathBuf>,
 }
 

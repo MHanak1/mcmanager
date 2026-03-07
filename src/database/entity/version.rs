@@ -1,29 +1,27 @@
 use sea_orm::entity::prelude::*;
 use uuid::Uuid;
 
+use crate::database::Loader;
+
 #[sea_orm::model]
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
-#[sea_orm(table_name = "password")]
+#[sea_orm(table_name = "version")]
 pub struct Model {
     #[sea_orm(primary_key)]
     pub id: Uuid,
 
-    pub token: uuid::Uuid,
+    #[sea_orm(unique, indexed)]
+    pub slug: String,
 
-    #[sea_orm(uniqie)]
-    pub creator_id: Uuid,
+    pub minecraft_version: String,
 
-    #[sea_orm(belongs_to, from = "creator_id", to = "id")]
-    pub creator: HasOne<super::user::Entity>,
-
-    pub created: DateTime,
+    pub loader: Loader,
 }
 
 impl ActiveModelBehavior for ActiveModel {
     fn new() -> Self {
         Self {
             id: sea_orm::Set(Uuid::now_v7()),
-            token: sea_orm::Set(Uuid::new_v4()),
             ..ActiveModelTrait::default()
         }
     }

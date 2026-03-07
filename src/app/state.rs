@@ -2,10 +2,11 @@ use std::sync::Arc;
 
 use arc_swap::ArcSwap;
 use color_eyre::eyre::Result;
-use sea_orm::{ConnectOptions, Database, DatabaseConnection};
-use tracing::{debug, error, info, warn};
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
+use serde_json::json;
+use tracing::{error, info, warn};
 
-use crate::app::{self, config::Config, paths::DATA_DIR};
+use crate::{app::config::Config, database};
 
 #[derive(Clone)]
 pub struct State {
@@ -18,13 +19,21 @@ impl State {
         let config = Config::new()?;
         let dbconfig = &config.get().database.clone();
         let database = Arc::new(ArcSwap::from_pointee(
-            Self::create_database(dbconfig).await?,
+            crate::database::create_database(dbconfig).await?,
         ));
 
         let state = Self { config, database };
         state.watch_for_config_changes();
-        state.watch_for_config_changes(); // i hate tokio
-        // for some f-ing reason one task will never work. if we have two tasks, one of them is guaranteed to work
+
+        if !database::Data::find()
+            .filter(database::data::Column::Key.eq("completed_setup"))
+            .one(&state.database())
+            .await?
+            .map(|value| value.value == json!(true))
+            .unwrap_or(false)
+        {
+            database::first_launch(&state).await?;
+        }
 
         Ok(state)
     }
@@ -71,7 +80,7 @@ impl State {
                         warn!(
                             "Hot-reloading the database config is not recommended. Here be dragons!"
                         );
-                        match Self::create_database(&config.database).await {
+                        match database::create_database(&config.database).await {
                             Ok(new_database) => {
                                 state.database.store(Arc::new(new_database));
                             }
@@ -89,30 +98,5 @@ impl State {
         let _ = tokio::join!(db_reload);
 
         Ok(())
-    }
-
-    pub async fn create_database(config: &app::config::Database) -> Result<DatabaseConnection> {
-        let url = if config.connection == "sqlite" {
-            format!("sqlite://{}/database.sqlite?mode=rwc", DATA_DIR.display())
-        } else {
-            config.connection.clone()
-        };
-        debug!("Connecting to database at: {}", url);
-
-        let mut opt = ConnectOptions::new(url);
-        opt.max_connections(config.max_connections)
-            .min_connections(config.min_connections)
-            .connect_timeout(config.connect_timeout)
-            .acquire_timeout(config.acquire_timeout)
-            .idle_timeout(config.idle_timeout)
-            .max_lifetime(config.max_lifetime)
-            .sqlx_logging_level(log::LevelFilter::Debug);
-
-        let db = Database::connect(opt).await?;
-        db.get_schema_registry("mcmanager::entity::*")
-            .sync(&db)
-            .await?;
-
-        Ok(db)
     }
 }

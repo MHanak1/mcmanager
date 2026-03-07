@@ -1,9 +1,10 @@
 use clap::Parser;
-use color_eyre::eyre::Result;
+use color_eyre::eyre::{Ok, Result};
 use mcmanager::app::config::Config;
 use mcmanager::app::state::State;
 use mcmanager::app::{args::ARGS, paths::CONFIG};
-use tracing::error;
+use sea_orm::EntityTrait;
+use tracing::info;
 use tracing_subscriber::prelude::*;
 
 #[tokio::main]
@@ -23,13 +24,26 @@ async fn main() -> Result<()> {
 
     mcmanager::app::paths::create_dirs()?;
     if ARGS.gen_config {
-        let _ = Config::generate_config_file(&*CONFIG)
-            .inspect_err(|err| error!("Could not create config: {err}"));
+        Config::generate_config_file(&*CONFIG)?;
+        info!(
+            "Successfully written the config file to: {}",
+            CONFIG.display()
+        );
+        return Ok(());
     }
 
     let state = State::new().await?;
     //This doesn't work
     //state.watch_for_config_changes();
+
+    //mcmanager::database::first_launch(&state).await?;
+
+    println!(
+        "{:#?}",
+        mcmanager::database::Group::find()
+            .one(&state.database())
+            .await?
+    );
 
     let mut config_changed = state.config().changed_from.clone();
     loop {
