@@ -14,6 +14,7 @@ pub struct Model {
     #[sea_orm(belongs_to, from = "user_id", to = "id")]
     pub user: HasOne<super::user::Entity>,
 
+    #[seaography(ignore)]
     pub token: Uuid,
 
     pub created: DateTime,

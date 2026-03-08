@@ -32,6 +32,10 @@ static RE_DATABASE: LazyLock<Regex> = LazyLock::new(|| {
 pub struct ConfigValues {
     #[validate(nested)]
     pub database: Database,
+    #[validate(nested)]
+    pub graphql: GraphQL,
+    #[validate(nested)]
+    pub api: Api,
 }
 
 #[serde_as]
@@ -70,6 +74,25 @@ pub struct Database {
     #[default = false]
     /// Allow for hot reloading of the database connection. This is generally not the best idea.
     pub allow_config_reload_not_recommended: bool,
+}
+
+#[derive(Serialize, Deserialize, SmartDefault, Debug, Clone, PartialEq, Validate)]
+#[allow(unused)]
+pub struct Api {
+    #[default(String::from("0.0.0.0:3000"))]
+    pub bind: String,
+}
+
+#[derive(Serialize, Deserialize, SmartDefault, Debug, Clone, PartialEq, Validate)]
+pub struct GraphQL {
+    #[default(String::from("/api/graphql"))]
+    pub endpoint: String,
+    #[default(Some(10))]
+    pub depth: Option<usize>,
+    #[default(Some(100))]
+    pub complexity: Option<usize>,
+    #[default = false]
+    pub playground: bool,
 }
 
 impl ConfigValues {
@@ -138,7 +161,6 @@ impl Config {
     fn spawn_watcher(config: Arc<ArcSwap<ConfigValues>>) -> watch::Receiver<Arc<ConfigValues>> {
         let (config_changed_tx, config_change_rx) = watch::channel(config.load_full()).clone();
 
-        /* */
         tokio::task::spawn({
             async move {
                 // Create a channel to receive the events.

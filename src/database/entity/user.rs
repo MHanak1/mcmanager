@@ -22,9 +22,6 @@ pub struct Model {
     #[sea_orm(belongs_to, from = "group_id", to = "id")]
     pub group: HasOne<super::group::Entity>,
 
-    #[sea_orm(has_one)]
-    pub password: HasOne<super::password::Entity>,
-
     #[sea_orm(has_many)]
     pub invite_links: HasMany<super::invite_link::Entity>,
 
@@ -56,7 +53,7 @@ pub struct PartialUser {
     #[validate(length(min = 1), regex(path = *crate::util::RE_SLUG))]
     pub slug: String,
 
-    #[validate(length(min = 3, max = 32), regex(path = *crate::util::RE_USERNAME))]
+    #[validate(length(min = 3, max = 32))]
     pub username: String,
 
     pub group_id: Uuid,

@@ -1,9 +1,8 @@
 use clap::Parser;
 use color_eyre::eyre::{Ok, Result};
 use mcmanager::app::config::Config;
-use mcmanager::app::state::State;
+use mcmanager::app::state::AppState;
 use mcmanager::app::{args::ARGS, paths::CONFIG};
-use sea_orm::EntityTrait;
 use tracing::info;
 use tracing_subscriber::prelude::*;
 
@@ -23,6 +22,7 @@ async fn main() -> Result<()> {
     //tracing_subscriber::fmt().init();
 
     mcmanager::app::paths::create_dirs()?;
+
     if ARGS.gen_config {
         Config::generate_config_file(&*CONFIG)?;
         info!(
@@ -32,23 +32,10 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-    let state = State::new().await?;
-    //This doesn't work
-    //state.watch_for_config_changes();
+    let state = AppState::new().await?;
 
-    //mcmanager::database::first_launch(&state).await?;
+    tokio::signal::ctrl_c().await?;
+    state.graceful_shutdown(0).await?;
 
-    println!(
-        "{:#?}",
-        mcmanager::database::Group::find()
-            .one(&state.database())
-            .await?
-    );
-
-    let mut config_changed = state.config().changed_from.clone();
-    loop {
-        //time::sleep(Duration::from_hours(1)).await;
-        config_changed.changed().await.expect("dunno man");
-    }
-    //Ok(())
+    Ok(())
 }

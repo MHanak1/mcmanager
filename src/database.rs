@@ -11,13 +11,13 @@ use tracing::{debug, info};
 use validator::Validate;
 
 use crate::app::paths::DATA_DIR;
-use crate::app::state::State;
+use crate::app::state::AppState;
 use crate::{app, util};
 
 pub mod entity;
-pub mod loader;
+pub mod enums;
 pub use entity::*;
-pub use loader::*;
+pub use enums::*;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, FromJsonQueryResult, Default)]
 pub struct StringVec(pub Vec<String>);
@@ -55,7 +55,7 @@ pub async fn create_database(config: &app::config::Database) -> Result<DatabaseC
     Ok(db)
 }
 
-pub async fn first_launch(state: &State) -> Result<()> {
+pub async fn first_launch(state: &AppState) -> Result<()> {
     let transaction = state.database().begin().await?;
 
     let selected_loaders = requestty::prompt_one(

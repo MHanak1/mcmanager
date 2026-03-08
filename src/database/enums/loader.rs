@@ -1,9 +1,14 @@
-use std::fmt::Display;
+use sea_orm::{DeriveActiveEnum, EnumIter, prelude::StringLen};
+use strum::Display;
 
-use sea_orm::FromJsonQueryResult;
-use serde::{Deserialize, Serialize};
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, FromJsonQueryResult)]
+#[derive(
+    EnumIter, DeriveActiveEnum, PartialEq, Display, Copy, Clone, Debug, Eq, PartialOrd, Ord,
+)]
+#[sea_orm(
+    rs_type = "String",
+    db_type = "String(StringLen::None)",
+    rename_all = "lowercase"
+)]
 pub enum Loader {
     Vanilla,
     Fabric,
@@ -43,18 +48,6 @@ impl Loader {
             Self::Forge => &Some("forge"),
             Self::NeoForge => &Some("neoforge"),
             Self::Quilt => &Some("quilt"),
-        }
-    }
-}
-
-impl Display for Loader {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Vanilla => write!(f, "Vanilla"),
-            Self::Fabric => write!(f, "Fabric"),
-            Self::Forge => write!(f, "Forge"),
-            Self::NeoForge => write!(f, "NeoForge"),
-            Self::Quilt => write!(f, "Quilt"),
         }
     }
 }

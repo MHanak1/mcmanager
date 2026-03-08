@@ -19,6 +19,9 @@ pub struct Model {
     #[sea_orm(default_value = "")]
     pub name: String,
 
+    #[sea_orm(has_many)]
+    pub users: HasMany<super::user::Entity>,
+
     #[sea_orm(default_value = "{}")]
     pub limits: Limits,
 

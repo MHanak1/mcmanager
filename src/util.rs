@@ -8,9 +8,6 @@ use regex::Regex;
 pub static RE_SLUG: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^[a-z1-9-]+$").expect("Invalid Regex"));
 
-pub static RE_USERNAME: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^[A-z1-9-]+$").expect("Invalid Regex"));
-
 pub fn sanitise_slug(input: &str) -> String {
     let input = any_ascii(input);
     let input = input.to_lowercase();
@@ -51,10 +48,6 @@ pub fn validate_username(username: &str) -> Result<()> {
 
     if username.len() > 32 {
         bail!("The password must be at most 64 characters long");
-    }
-
-    if !RE_USERNAME.is_match(username) {
-        bail!("Username contains invalid characters");
     }
 
     Ok(())
