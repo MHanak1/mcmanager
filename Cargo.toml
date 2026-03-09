@@ -16,10 +16,11 @@ needless_pass_by_value = "warn"
 any_ascii = "0.3.3"
 arc-swap = "1.8.2"
 argon2 = "0.5.3"
-async-graphql = "7.2.1"
-async-graphql-axum = "7.2.1"
+async-graphql = "7.0.19"
+async-graphql-axum = "7.0.19"
 async-trait = "0.1.89"
 axum = "0.8.8"
+chrono = "0.4.44"
 clap = { version = "4.5.60", features = ["derive"] }
 color-eyre = "0.6.5"
 config = "0.15.19"
@@ -51,7 +52,7 @@ uuid = { version = "1.22.0", features = ["v4", "v7"] }
 validator = { version = "0.20.0", features = ["derive"] }
 
 [dependencies.sea-orm]
-version = "~2.0.0-rc"
+version = "2.0.0-rc.36"
 features = [
     "sqlx-sqlite",
     "sqlx-mysql",
@@ -62,12 +63,17 @@ features = [
     "schema-sync",
     "entity-registry",
     "with-chrono",
-    "with-uuid"
+    "with-uuid",
 ]
 
 [dependencies.seaography]
-version = "~2.0.0-rc"
+version = "2.0.0-rc.8"
 features = [
     "with-chrono",
-    "with-uuid"
+    "with-uuid",
+    "with-json",
+    "field-snake-case",
+    "field-pluralize",
+    "schema-meta",
+    "macros",
 ]

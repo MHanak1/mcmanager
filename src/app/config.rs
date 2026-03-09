@@ -31,11 +31,20 @@ static RE_DATABASE: LazyLock<Regex> = LazyLock::new(|| {
 #[allow(unused)]
 pub struct ConfigValues {
     #[validate(nested)]
+    pub app: App,
+    #[validate(nested)]
     pub database: Database,
     #[validate(nested)]
     pub graphql: GraphQL,
     #[validate(nested)]
     pub api: Api,
+}
+
+#[derive(Serialize, Deserialize, SmartDefault, Debug, Clone, PartialEq, Validate)]
+#[allow(unused)]
+pub struct App {
+    #[default = false]
+    pub require_invite_for_account_creation: bool,
 }
 
 #[serde_as]
@@ -116,10 +125,10 @@ impl ConfigValues {
             debug!("Using config file {}", path.display());
         }
 
-        if files.len() == 1 && !files.get(0).unwrap().is_file() {
+        if files.len() == 1 && !files.first().unwrap().is_file() {
             warn!(
                 "Comfig file not found at {} not found. You can generate a config using the --gen-config parameter",
-                files.get(0).unwrap().display()
+                files.first().unwrap().display()
             )
         }
 

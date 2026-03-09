@@ -1,12 +1,10 @@
 use std::{process::exit, sync::Arc};
 
 use arc_swap::ArcSwap;
-use axum::{Router, routing::get, routing::post};
 use color_eyre::eyre::Result;
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 use serde_json::json;
-use tokio::{sync::Notify, task::JoinHandle};
-use tower_http::trace::TraceLayer;
+use tokio::sync::Notify;
 use tracing::{error, info, warn};
 
 use crate::{api, app::config::Config, database};
@@ -15,8 +13,10 @@ use crate::{api, app::config::Config, database};
 pub struct AppState {
     database: Arc<ArcSwap<DatabaseConnection>>,
     config: Config,
-    api_shutdown: Arc<tokio::sync::Notify>,
-    api_shutdown_complete: Arc<tokio::sync::Notify>,
+
+    // == Signals (yes i did godot, fight me) ==
+    pub api_shutdown: Arc<tokio::sync::Notify>,
+    pub api_shutdown_complete: Arc<tokio::sync::Notify>,
 }
 
 impl AppState {
@@ -36,7 +36,7 @@ impl AppState {
             api_shutdown_complete,
         };
         state.watch_for_config_changes();
-        state.spawn_api();
+        api::serve(state.clone());
 
         if !database::Data::find()
             .filter(database::data::Column::Key.eq("completed_setup"))
@@ -64,39 +64,6 @@ impl AppState {
         self.api_shutdown.notify_waiters();
         self.api_shutdown_complete.notified().await;
         exit(code)
-    }
-
-    fn spawn_api(&self) -> JoinHandle<Result<()>> {
-        tokio::spawn({
-            let state = self.clone();
-            async move {
-                let router = Router::new()
-                    .route(
-                        &state.config().get().graphql.endpoint,
-                        post(api::graphql::graphql_handler),
-                    )
-                    .route(
-                        &state.config().get().graphql.endpoint,
-                        get(api::graphql::graphql_playground),
-                    )
-                    .with_state(state.clone())
-                    .layer(TraceLayer::new_for_http());
-
-                let listener = tokio::net::TcpListener::bind(&state.config().get().api.bind)
-                    .await
-                    .unwrap();
-
-                info!("API Listening on {}", listener.local_addr()?);
-
-                let result = axum::serve(listener, router)
-                    .with_graceful_shutdown(state.api_shutdown.clone().notified_owned())
-                    .await;
-
-                state.api_shutdown_complete.notify_waiters();
-
-                Ok(result?)
-            }
-        })
     }
 
     fn watch_for_config_changes(&self) {
@@ -148,7 +115,7 @@ impl AppState {
                 if config.api != previous_config.api || config.graphql != previous_config.graphql {
                     state.api_shutdown.notify_waiters();
                     state.api_shutdown_complete.notified().await;
-                    state.spawn_api();
+                    api::serve(state.clone());
                 }
             }
         });

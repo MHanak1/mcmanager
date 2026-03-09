@@ -11,21 +11,6 @@ pub mod user;
 pub mod version;
 pub mod world;
 
-seaography::register_entity_modules!([
-    group,
-    invite_link,
-    modification,
-    modification_version,
-    plugin,
-    plugin_version,
-    session,
-    user,
-    version,
-    world,
-]);
-
-//seaography::register_active_enums!([]);
-
 pub use data::ActiveModel as DataActiveModel;
 pub use data::Entity as Data;
 pub use data::Model as DataModel;
@@ -65,7 +50,10 @@ pub use plugin_version::Entity as PluginVersion;
 pub use plugin_version::Model as PluginVersionEntity;
 //pub use plugin_version::PartialPluginVersion;
 
+pub use session::ActiveModel as SessionActiveModel;
 pub use session::Entity as Session;
+pub use session::Model as SessionModel;
+pub use session::PartialSession;
 
 pub use user::ActiveModel as UserActiveModel;
 pub use user::Entity as User;

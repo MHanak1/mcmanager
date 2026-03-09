@@ -28,6 +28,9 @@ pub struct Model {
     #[sea_orm(has_many)]
     pub worlds: HasMany<super::world::Entity>,
 
+    #[sea_orm(has_many)]
+    pub sessions: HasMany<super::session::Entity>,
+
     #[sea_orm(default_value = 0)]
     pub total_memory_usage: i64,
 

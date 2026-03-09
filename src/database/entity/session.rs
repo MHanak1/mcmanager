@@ -1,5 +1,8 @@
+use chrono::{DateTime, Utc};
 use sea_orm::entity::prelude::*;
+use smart_default::SmartDefault;
 use uuid::Uuid;
+use validator::Validate;
 
 #[sea_orm::model]
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
@@ -17,7 +20,7 @@ pub struct Model {
     #[seaography(ignore)]
     pub token: Uuid,
 
-    pub created: DateTime,
+    pub created: DateTime<Utc>,
 
     #[sea_orm(default_value = true)]
     pub expires: bool,
@@ -31,4 +34,17 @@ impl ActiveModelBehavior for ActiveModel {
             ..ActiveModelTrait::default()
         }
     }
+}
+
+#[derive(DerivePartialModel, Validate, SmartDefault)]
+#[sea_orm(entity = "Entity", into_active_model)]
+pub struct PartialSession {
+    #[sea_orm(uniqie)]
+    pub user_id: Uuid,
+
+    #[default(Utc::now())]
+    pub created: DateTime<Utc>,
+
+    #[sea_orm(default_value = true)]
+    pub expires: bool,
 }

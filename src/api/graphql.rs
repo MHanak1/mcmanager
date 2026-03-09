@@ -4,10 +4,16 @@ use axum::response::{Html, IntoResponse};
 use axum::{extract::State, http::StatusCode};
 use seaography::{Builder, BuilderContext, lazy_static::lazy_static};
 
-use crate::{
-    app::state::AppState,
-    database::{register_active_enums, register_entity_modules},
-};
+use crate::api::graphql::enums::register_active_enums;
+pub use crate::database::enums::*;
+
+pub mod entities;
+pub mod enums;
+pub mod queries;
+pub mod types;
+
+use crate::api::graphql::entities::register_entity_modules;
+use crate::app::state::AppState;
 
 lazy_static! {
     static ref CONTEXT: BuilderContext = BuilderContext::default();
@@ -33,6 +39,10 @@ pub async fn graphql_handler(
     let mut builder = Builder::new(&CONTEXT, state.database());
     builder = register_entity_modules(builder);
     builder = register_active_enums(builder);
+
+    seaography::register_custom_queries!(builder, [queries::Operations]);
+    seaography::register_custom_outputs!(builder, [types::CreatedSession]);
+
     let builder = builder
         .set_depth_limit(state.config().get().graphql.depth)
         .set_complexity_limit(state.config().get().graphql.depth)
@@ -41,5 +51,5 @@ pub async fn graphql_handler(
 
     let schema = builder.finish().expect("Failed to build GraphQL schema");
 
-    Ok(schema.execute(req.into_inner()).await.into())
+    Ok(schema.execute(req.into_inner().data(state)).await.into())
 }

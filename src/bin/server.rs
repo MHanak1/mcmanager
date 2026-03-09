@@ -3,6 +3,8 @@ use color_eyre::eyre::{Ok, Result};
 use mcmanager::app::config::Config;
 use mcmanager::app::state::AppState;
 use mcmanager::app::{args::ARGS, paths::CONFIG};
+use mcmanager::database;
+use sea_orm::EntityTrait;
 use tracing::info;
 use tracing_subscriber::prelude::*;
 
@@ -33,6 +35,14 @@ async fn main() -> Result<()> {
     }
 
     let state = AppState::new().await?;
+
+    println!(
+        "{:#?}",
+        database::User::find()
+            .find_also_related(database::Group)
+            .one(&state.database())
+            .await?
+    );
 
     tokio::signal::ctrl_c().await?;
     state.graceful_shutdown(0).await?;

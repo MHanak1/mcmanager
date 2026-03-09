@@ -13,7 +13,7 @@ pub struct Model {
     #[sea_orm(primary_key)]
     pub id: Uuid,
 
-    #[sea_orm(uniqie)]
+    #[sea_orm(unique, indexed)]
     pub user_id: Uuid,
 
     #[sea_orm(belongs_to, from = "user_id", to = "id")]

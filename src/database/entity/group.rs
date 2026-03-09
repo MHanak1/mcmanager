@@ -42,9 +42,6 @@ pub struct Limits {
 
     #[serde(default)]
     pub active_world_limit: Option<i32>,
-
-    #[serde(default)]
-    pub storage_limit: Option<i32>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, FromJsonQueryResult, Default)]
@@ -54,8 +51,12 @@ pub struct Permissions {
 
     #[serde(default)]
     pub config_whitelist: StringVec,
+
     #[serde(default)]
     pub can_upload_mods: bool,
+
+    #[serde(default)]
+    pub can_create_invites: bool,
 
     #[serde(default)]
     pub is_privileged: bool,

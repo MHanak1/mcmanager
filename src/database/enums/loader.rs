@@ -29,16 +29,14 @@ impl Loader {
     }
 
     pub const fn can_load_mods(&self) -> bool {
-        match self {
-            Self::Fabric | Self::Forge | Self::NeoForge | Self::Quilt => true,
-            _ => false,
-        }
+        matches!(
+            self,
+            Self::Fabric | Self::Forge | Self::NeoForge | Self::Quilt
+        )
     }
 
     pub const fn can_load_plugins(&self) -> bool {
-        match self {
-            _ => false,
-        }
+        false
     }
 
     pub const fn modrinth_id(&self) -> &'static Option<&str> {

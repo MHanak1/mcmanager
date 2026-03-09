@@ -112,7 +112,7 @@ pub async fn first_launch(state: &AppState) -> Result<()> {
         requestty::Question::password("password_repeat")
             .message("Repeat password")
             .mask('*')
-            .validate_on_key(|ans, _| ans.len() > 0)
+            .validate_on_key(|ans, _| !ans.is_empty())
             .validate(|password_repeat, previous_answers| {
                 util::validate_password(password_repeat).map_err(|err| err.to_string())?;
                 let a = &previous_answers["password"];
@@ -160,6 +160,30 @@ pub async fn first_launch(state: &AppState) -> Result<()> {
     )?;
 
     password.into_active_model().insert(&transaction).await?;
+
+    let default_group = PartialGroup {
+        slug: util::sanitise_slug("Default"),
+        name: "Default".to_owned(),
+        limits: group::Limits {
+            per_world_memory_limit: Some(2048),
+            active_world_limit: Some(3),
+            world_limit: Some(20),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let default_group = default_group
+        .into_active_model()
+        .insert(&transaction)
+        .await?;
+
+    Data::insert(data::ActiveModel {
+        key: Set("default_group".to_owned()),
+        value: Set(json!(default_group.slug)),
+    })
+    .exec(&transaction)
+    .await?;
 
     Data::insert(data::ActiveModel {
         key: Set("completed_setup".to_owned()),

@@ -8,9 +8,10 @@ pub struct Model {
     #[sea_orm(primary_key)]
     pub id: Uuid,
 
+    #[seaography(ignore)]
+    #[sea_orm(unique, indexed)]
     pub token: uuid::Uuid,
 
-    #[sea_orm(uniqie)]
     pub creator_id: Uuid,
 
     #[sea_orm(belongs_to, from = "creator_id", to = "id")]
